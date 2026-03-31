@@ -627,6 +627,9 @@ func run() error {
 
 	// Register work event type unmarshalers before any store reads —
 	// Head() deserializes the latest event which may be a work type.
+	// Enable raw fallback so unknown event types (hive, agent, membrane)
+	// don't break deserialization when sharing a Postgres store.
+	event.SetFallbackUnmarshaler(event.RawFallback)
 	work.RegisterEventTypes()
 
 	// Bootstrap the event graph if it has no genesis event.
