@@ -164,15 +164,13 @@ func (sv *server) queryEvents(ctx context.Context, limit int) ([]telEvent, error
 // --- Handlers ---
 
 // telemetryStatus handles GET /telemetry/status — full snapshot.
+// Delegates to buildStatusSnapshot so the SSE endpoint shares the same logic.
 func (sv *server) telemetryStatus(w http.ResponseWriter, r *http.Request) {
 	if sv.pool == nil {
 		telemetryUnavailable(w)
 		return
 	}
-
-	ctx := r.Context()
-
-	agents, err := sv.queryAgentSnapshots(ctx)
+	snap, err := sv.buildStatusSnapshot(r.Context())
 	if err != nil {
 		if isMissingTable(err) {
 			telemetryUnavailable(w)
@@ -181,78 +179,7 @@ func (sv *server) telemetryStatus(w http.ResponseWriter, r *http.Request) {
 		telemetryDBErr(w, err)
 		return
 	}
-	if agents == nil {
-		agents = []telAgentSnapshot{}
-	}
-
-	const hiveQ = `
-		SELECT active_agents, total_actors, chain_length, chain_ok,
-		       event_rate::float8, daily_cost::float8, daily_cap::float8, severity
-		FROM telemetry_hive_snapshots
-		ORDER BY recorded_at DESC LIMIT 1`
-
-	hiveRows, err := sv.pool.Query(ctx, hiveQ)
-	if err != nil {
-		if isMissingTable(err) {
-			telemetryUnavailable(w)
-			return
-		}
-		telemetryDBErr(w, err)
-		return
-	}
-	defer hiveRows.Close()
-
-	var hive *telHiveSnapshot
-	if hiveRows.Next() {
-		var h telHiveSnapshot
-		if err := hiveRows.Scan(
-			&h.ActiveAgents, &h.TotalActors, &h.ChainLength, &h.ChainOK,
-			&h.EventRate, &h.DailyCost, &h.DailyCap, &h.Severity,
-		); err != nil {
-			telemetryDBErr(w, err)
-			return
-		}
-		hive = &h
-	}
-	if err := hiveRows.Err(); err != nil {
-		telemetryDBErr(w, err)
-		return
-	}
-	hiveRows.Close()
-
-	phases, err := sv.queryPhases(ctx)
-	if err != nil {
-		if isMissingTable(err) {
-			telemetryUnavailable(w)
-			return
-		}
-		telemetryDBErr(w, err)
-		return
-	}
-	if phases == nil {
-		phases = []telPhase{}
-	}
-
-	events, err := sv.queryEvents(ctx, 50)
-	if err != nil {
-		if isMissingTable(err) {
-			telemetryUnavailable(w)
-			return
-		}
-		telemetryDBErr(w, err)
-		return
-	}
-	if events == nil {
-		events = []telEvent{}
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"timestamp":     time.Now().UTC(),
-		"hive":          hive,
-		"agents":        agents,
-		"phases":        phases,
-		"recent_events": events,
-	})
+	writeJSON(w, http.StatusOK, snap)
 }
 
 // telemetryAgents handles GET /telemetry/agents — latest snapshot per agent.
@@ -492,8 +419,11 @@ func (sv *server) telemetrySSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	flusher.Flush()
 
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
+	dataTick := time.NewTicker(10 * time.Second)
+	defer dataTick.Stop()
+	// Keepalive comment prevents proxies from killing idle connections.
+	keepalive := time.NewTicker(30 * time.Second)
+	defer keepalive.Stop()
 
 	send := func() {
 		snap, err := sv.buildStatusSnapshot(r.Context())
@@ -514,8 +444,11 @@ func (sv *server) telemetrySSE(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-ticker.C:
+		case <-dataTick.C:
 			send()
+		case <-keepalive.C:
+			fmt.Fprint(w, ": keepalive\n\n")
+			flusher.Flush()
 		}
 	}
 }
@@ -579,7 +512,7 @@ func (sv *server) buildStatusSnapshot(ctx context.Context) (map[string]any, erro
 		"hive":          hive,
 		"phases":        phases,
 		"recent_events": events,
-		"timestamp":     time.Now(),
+		"timestamp":     time.Now().UTC(),
 	}, nil
 }
 
