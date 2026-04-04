@@ -674,6 +674,7 @@ func run() error {
 	mux.HandleFunc("GET /telemetry/agents/{role}", srv.auth(srv.telemetryAgentDetail))
 	mux.HandleFunc("GET /telemetry/stream", srv.auth(srv.telemetryStream))
 	mux.HandleFunc("GET /telemetry/phases", srv.auth(srv.telemetryPhases))
+	mux.HandleFunc("POST /telemetry/phases/{phase}", srv.auth(srv.updatePhase))
 	mux.HandleFunc("GET /telemetry/health", srv.auth(srv.telemetryHealth))
 
 	// Workspace-scoped routes — isolated namespace per team, auth via WORK_API_TOKEN.

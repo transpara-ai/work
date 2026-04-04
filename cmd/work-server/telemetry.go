@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -467,4 +468,81 @@ func (sv *server) telemetryHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"hive": hive})
+}
+
+// updatePhase handles POST /telemetry/phases/{phase} — graduation ceremony updates.
+//
+// Timestamp logic:
+//   - started_at is set to now() when status becomes "in_progress", but only if it is
+//     currently NULL (a manual timestamp set via a prior call is preserved).
+//   - completed_at is set to now() when status becomes "complete".
+//   - completed_at is cleared (NULL) when status becomes anything other than "complete".
+func (sv *server) updatePhase(w http.ResponseWriter, r *http.Request) {
+	if sv.pool == nil {
+		telemetryUnavailable(w)
+		return
+	}
+
+	phase, err := strconv.Atoi(r.PathValue("phase"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid phase number")
+		return
+	}
+
+	var body struct {
+		Status string `json:"status"`
+		Notes  string `json:"notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	validStatuses := map[string]bool{"blocked": true, "in_progress": true, "complete": true}
+	if !validStatuses[body.Status] {
+		writeErr(w, http.StatusBadRequest, "status must be: blocked, in_progress, complete")
+		return
+	}
+
+	// started_at: preserve existing value if set; set to now() only when
+	// transitioning to in_progress and the column is still NULL.
+	// completed_at: now() when complete, NULL otherwise.
+	// notes: update only when a non-empty value is provided.
+	const q = `
+		UPDATE telemetry_phases
+		SET
+			status       = $2,
+			started_at   = COALESCE(started_at, CASE WHEN $2 = 'in_progress' THEN now() ELSE NULL END),
+			completed_at = CASE WHEN $2 = 'complete' THEN now() ELSE NULL END,
+			notes        = CASE WHEN $3 <> '' THEN $3 ELSE notes END
+		WHERE phase = $1
+		RETURNING phase, label, status, started_at, completed_at, notes`
+
+	rows, err := sv.pool.Query(r.Context(), q, phase, body.Status, body.Notes)
+	if err != nil {
+		if isMissingTable(err) {
+			telemetryUnavailable(w)
+			return
+		}
+		telemetryDBErr(w, err)
+		return
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			telemetryDBErr(w, err)
+			return
+		}
+		writeErr(w, http.StatusNotFound, "phase not found")
+		return
+	}
+
+	var p telPhase
+	if err := rows.Scan(&p.Phase, &p.Label, &p.Status, &p.StartedAt, &p.CompletedAt, &p.Notes); err != nil {
+		telemetryDBErr(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"phase": p})
 }
