@@ -651,6 +651,7 @@ func run() error {
 		humanID:  humanID,
 		apiKey:   apiKey,
 		apiToken: apiToken,
+		pool:     pool,
 	}
 
 	mux := http.NewServeMux()
@@ -666,6 +667,29 @@ func run() error {
 	mux.HandleFunc("POST /tasks/{id}/complete", srv.auth(srv.completeTask))
 	mux.HandleFunc("POST /tasks/{id}/comment", srv.auth(srv.addComment))
 	mux.HandleFunc("GET /tasks/{id}/comments", srv.auth(srv.listComments))
+
+	// Telemetry routes — reads from hive-postgres via the shared pool.
+	mux.HandleFunc("GET /telemetry/status", srv.auth(srv.telemetryStatus))
+	mux.HandleFunc("GET /telemetry/agents", srv.auth(srv.telemetryAgents))
+	mux.HandleFunc("GET /telemetry/agents/{role}", srv.auth(srv.telemetryAgentDetail))
+	mux.HandleFunc("GET /telemetry/stream", srv.auth(srv.telemetryStream))
+	mux.HandleFunc("GET /telemetry/phases", srv.auth(srv.telemetryPhases))
+	mux.HandleFunc("POST /telemetry/phases/{phase}", srv.auth(srv.updatePhase))
+	mux.HandleFunc("GET /telemetry/health", srv.auth(srv.telemetryHealth))
+	mux.HandleFunc("GET /telemetry/sse", srv.auth(srv.telemetrySSE))
+	mux.HandleFunc("GET /telemetry/", func(w http.ResponseWriter, r *http.Request) {
+		// Set a session cookie so the dashboard can poll without an Authorization
+		// header, avoiding Chrome Private-Network-Access preflight blocks.
+		http.SetCookie(w, &http.Cookie{
+			Name:     "ws_key",
+			Value:    srv.apiKey,
+			Path:     "/",
+			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
+		})
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, telemetryDashboardHTML)
+	})
 
 	// Workspace-scoped routes — isolated namespace per team, auth via WORK_API_TOKEN.
 	mux.HandleFunc("GET /w/{workspace}", srv.workspaceDashboard)
@@ -695,13 +719,14 @@ type server struct {
 	humanID  types.ActorID
 	apiKey   string
 	apiToken string
+	pool     *pgxpool.Pool // nil when running in-memory; telemetry handlers check this
 }
 
 // dashboard handles GET / — serves the read-only HTML monitoring dashboard.
 // No auth required; the API key is injected into the page so the browser's
 // fetch() calls can authenticate against GET /tasks.
 func (sv *server) dashboard(w http.ResponseWriter, r *http.Request) {
-	html := strings.ReplaceAll(dashboardHTML, "{{API_KEY}}", sv.apiKey)
+	html := strings.ReplaceAll(dashboardHTML, "{{API_KEY}}", jsEscapeKey(sv.apiKey))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, html)
 }
@@ -714,8 +739,8 @@ func (sv *server) workspaceDashboard(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "workspace is required")
 		return
 	}
-	html := strings.ReplaceAll(workspaceDashboardHTML, "{{WORKSPACE}}", workspace)
-	html = strings.ReplaceAll(html, "{{API_TOKEN}}", sv.apiToken)
+	html := strings.ReplaceAll(workspaceDashboardHTML, "{{WORKSPACE}}", jsEscapeKey(workspace))
+	html = strings.ReplaceAll(html, "{{API_TOKEN}}", jsEscapeKey(sv.apiToken))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, html)
 }
@@ -725,13 +750,28 @@ func (sv *server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// corsMiddleware adds Access-Control-Allow-Origin headers so the REST API can be
-// called directly from web browsers. Handles preflight OPTIONS requests.
+// jsEscapeKey returns s with characters that are dangerous inside a <script>
+// JSON string literal escaped as Unicode escapes. This prevents the HTML parser
+// from interpreting characters like < as tag openers before the JS engine runs.
+func jsEscapeKey(s string) string {
+	b, _ := json.Marshal(s) // produces "\"…\"" with \u003c etc.
+	// Strip surrounding quotes — callers already embed in "{{API_KEY}}".
+	return string(b[1 : len(b)-1])
+}
+
+// corsMiddleware adds CORS and Private Network Access headers for browsers.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		} else {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Allow-Private-Network", "true")
+		w.Header().Set("Vary", "Origin")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -740,15 +780,21 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// auth is middleware that validates the Authorization: Bearer <key> header.
+// auth is middleware that validates the API key via Bearer header or session cookie.
 func (sv *server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !found || token != sv.apiKey {
-			writeErr(w, http.StatusUnauthorized, "invalid or missing API key")
+		// Try Authorization header first (external API callers).
+		if token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); found && token == sv.apiKey {
+			next(w, r)
 			return
 		}
-		next(w, r)
+		// Fall back to session cookie (inline dashboard avoids custom headers
+		// that trigger Chrome Private-Network-Access preflight blocks).
+		if c, err := r.Cookie("ws_key"); err == nil && c.Value == sv.apiKey {
+			next(w, r)
+			return
+		}
+		writeErr(w, http.StatusUnauthorized, "invalid or missing API key")
 	}
 }
 
