@@ -651,6 +651,7 @@ func run() error {
 		humanID:  humanID,
 		apiKey:   apiKey,
 		apiToken: apiToken,
+		pool:     pool,
 	}
 
 	mux := http.NewServeMux()
@@ -666,6 +667,14 @@ func run() error {
 	mux.HandleFunc("POST /tasks/{id}/complete", srv.auth(srv.completeTask))
 	mux.HandleFunc("POST /tasks/{id}/comment", srv.auth(srv.addComment))
 	mux.HandleFunc("GET /tasks/{id}/comments", srv.auth(srv.listComments))
+
+	// Telemetry routes — reads from hive-postgres via the shared pool.
+	mux.HandleFunc("GET /telemetry/status", srv.auth(srv.telemetryStatus))
+	mux.HandleFunc("GET /telemetry/agents", srv.auth(srv.telemetryAgents))
+	mux.HandleFunc("GET /telemetry/agents/{role}", srv.auth(srv.telemetryAgentDetail))
+	mux.HandleFunc("GET /telemetry/stream", srv.auth(srv.telemetryStream))
+	mux.HandleFunc("GET /telemetry/phases", srv.auth(srv.telemetryPhases))
+	mux.HandleFunc("GET /telemetry/health", srv.auth(srv.telemetryHealth))
 
 	// Workspace-scoped routes — isolated namespace per team, auth via WORK_API_TOKEN.
 	mux.HandleFunc("GET /w/{workspace}", srv.workspaceDashboard)
@@ -695,6 +704,7 @@ type server struct {
 	humanID  types.ActorID
 	apiKey   string
 	apiToken string
+	pool     *pgxpool.Pool // nil when running in-memory; telemetry handlers check this
 }
 
 // dashboard handles GET / — serves the read-only HTML monitoring dashboard.
