@@ -40,7 +40,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"sort"
@@ -678,10 +677,9 @@ func run() error {
 	mux.HandleFunc("POST /telemetry/phases/{phase}", srv.auth(srv.updatePhase))
 	mux.HandleFunc("GET /telemetry/health", srv.auth(srv.telemetryHealth))
 	mux.HandleFunc("GET /telemetry/", func(w http.ResponseWriter, r *http.Request) {
-		target := "https://transpara-ai.github.io/lovyou-ai-summary/dashboard.html" +
-			"?api=" + url.QueryEscape("http://nucbuntu:8080") +
-			"&key=" + url.QueryEscape(srv.apiKey)
-		http.Redirect(w, r, target, http.StatusFound)
+		html := strings.ReplaceAll(telemetryDashboardHTML, "{{API_KEY}}", srv.apiKey)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, html)
 	})
 
 	// Workspace-scoped routes — isolated namespace per team, auth via WORK_API_TOKEN.
