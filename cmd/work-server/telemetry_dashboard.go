@@ -43,94 +43,7 @@ body {
   line-height: 1.5;
 }
 
-/* ── CONFIG SCREEN ──────────────────────────────── */
-#config-screen {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 100vh;
-  padding: 2rem;
-}
 
-.config-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 2rem;
-  width: 100%;
-  max-width: 440px;
-}
-
-.config-card h1 {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-head);
-  margin-bottom: 0.25rem;
-}
-
-.config-subtitle {
-  font-size: 12px;
-  color: var(--text-sec);
-  margin-bottom: 1.5rem;
-}
-
-.config-field { margin-bottom: 1rem; }
-
-.config-field label {
-  display: block;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-sec);
-  margin-bottom: 0.375rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.config-field input {
-  width: 100%;
-  background: var(--bg);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-sm);
-  padding: 0.5rem 0.75rem;
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 13px;
-  outline: none;
-  transition: border-color 0.15s;
-}
-
-.config-field input:focus { border-color: var(--blue); }
-
-.btn-connect {
-  width: 100%;
-  margin-top: 0.5rem;
-  background: var(--blue);
-  color: #fff;
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: 0.625rem 1rem;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: opacity 0.15s;
-}
-
-.btn-connect:hover { opacity: 0.9; }
-
-.config-hint {
-  margin-top: 1rem;
-  font-size: 11px;
-  color: var(--text-dim);
-  line-height: 1.6;
-}
-
-.config-hint code {
-  font-family: var(--mono);
-  background: rgba(255,255,255,0.06);
-  padding: 1px 4px;
-  border-radius: 3px;
-}
 
 /* ── DASHBOARD ──────────────────────────────────── */
 #dashboard {
@@ -681,28 +594,6 @@ body {
 </head>
 <body>
 
-<!-- Config screen (shown when URL params are missing) -->
-<div id="config-screen" style="display:none">
-  <div class="config-card">
-    <h1>lovyou.ai Mission Control</h1>
-    <p class="config-subtitle">Enter the work-server URL and API key to connect</p>
-    <div class="config-field">
-      <label for="cfg-api">API URL</label>
-      <input id="cfg-api" type="url" placeholder="http://nucbuntu:8080" autocomplete="off" spellcheck="false">
-    </div>
-    <div class="config-field">
-      <label for="cfg-key">API Key</label>
-      <input id="cfg-key" type="password" placeholder="Bearer token" autocomplete="off" spellcheck="false">
-    </div>
-    <button class="btn-connect" id="cfg-btn">Connect</button>
-    <p class="config-hint">
-      Opens: <code>dashboard.html?api=URL&amp;key=KEY</code><br>
-      Find the API URL and key in the work-server config on nucbuntu.
-    </p>
-  </div>
-</div>
-
-<!-- Dashboard (shown when URL params are present) -->
 <div id="dashboard" style="display:none">
   <div id="topbar">
     <span class="topbar-title">lovyou.ai</span>
@@ -772,64 +663,47 @@ body {
   "use strict";
 
   // ── CONFIGURATION ──────────────────────────────────
-  var API_BASE = "";             // served from same origin — relative URLs
-  var API_KEY  = "{{API_KEY}}";  // injected by work-server at serve time
+  var isUserScrolled = false;
+  var lastSuccess    = null;
 
   document.getElementById("dashboard").style.display = "flex";
   document.getElementById("topbar-api").textContent = window.location.host;
-  init();
 
-  function connect() {
-    var api = document.getElementById("cfg-api").value.trim().replace(/\/$/, "");
-    var key = document.getElementById("cfg-key").value.trim();
-    if (!api || !key) { alert("Both API URL and API Key are required."); return; }
-    var url = new URL(window.location.href.split("?")[0]);
-    url.searchParams.set("api", api);
-    url.searchParams.set("key", key);
-    window.location.href = url.toString();
-  }
+  // ── SSE CONNECTION ─────────────────────────────────
+  // Uses EventSource (Server-Sent Events) instead of fetch(). This opens a
+  // single persistent GET connection using the session cookie for auth —
+  // no custom headers, no CORS preflight, works in all browsers.
+  function connectSSE() {
+    var es = new EventSource("/telemetry/sse");
+    setConnStatus("stale", "Connecting\u2026");
 
-  // ── POLLING STATE ──────────────────────────────────
-  var REFRESH_MS     = 10000;
-  var lastSuccess    = null;
-  var isUserScrolled = false;
-
-  function init() {
-    refresh();
-    setInterval(refresh, REFRESH_MS);
-    setInterval(tickClock, 1000);
-  }
-
-  // ── FETCH ──────────────────────────────────────────
-  function refresh() {
-    fetch(API_BASE + "/telemetry/status", {
-      headers: { Authorization: "Bearer " + API_KEY }
-    })
-    .then(function (res) {
-      if (res.status === 503) {
-        setConnStatus("stale", "Telemetry not initialized");
-        return null;
+    es.onmessage = function (evt) {
+      try {
+        var data = JSON.parse(evt.data);
+        lastSuccess = Date.now();
+        setConnStatus("connected", "Live");
+        renderPhases(data.phases || []);
+        renderAgents(data.agents || []);
+        renderHive(data.hive || null);
+        renderEvents(data.recent_events || []);
+      } catch (err) {
+        console.error("SSE parse error:", err);
       }
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      return res.json();
-    })
-    .then(function (data) {
-      if (!data) return;
-      lastSuccess = Date.now();
-      setConnStatus("connected", "Live");
-      renderPhases(data.phases || []);
-      renderAgents(data.agents || []);
-      renderHive(data.hive || null);
-      renderEvents(data.recent_events || []);
-    })
-    .catch(function (err) {
-      var msg = (err.message || "").indexOf("fetch") !== -1
-        ? "Cannot reach API — check URL and network"
-        : "Connection lost";
-      setConnStatus("error", msg);
-      console.error("Poll failed:", err);
-    });
+    };
+
+    es.onerror = function () {
+      // EventSource auto-reconnects; just update the status indicator.
+      if (lastSuccess) {
+        var ago = Math.floor((Date.now() - lastSuccess) / 1000);
+        setConnStatus("stale", "Reconnecting\u2026 (last update " + ago + "s ago)");
+      } else {
+        setConnStatus("error", "Cannot connect to telemetry stream");
+      }
+    };
   }
+
+  connectSSE();
+  setInterval(tickClock, 1000);
 
   // ── CLOCK ──────────────────────────────────────────
   function tickClock() {
@@ -840,7 +714,7 @@ body {
     var ago = Math.floor((Date.now() - lastSuccess) / 1000);
 
     if (ago < 15)       setConnStatus("connected", "Live");
-    else if (ago < 60)  setConnStatus("stale",     "Last update: " + ago + "s ago");
+    else if (ago < 30)  setConnStatus("stale",     "Last update: " + ago + "s ago");
     else                setConnStatus("error",      "Connection lost (" + ago + "s ago)");
   }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -468,6 +469,118 @@ func (sv *server) telemetryHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"hive": hive})
+}
+
+// telemetrySSE handles GET /telemetry/sse — Server-Sent Events stream.
+// Pushes a full telemetry snapshot every 10 seconds over a single persistent
+// connection. Uses no custom request headers, so it works with EventSource
+// and avoids Chrome Private-Network-Access preflight issues.
+func (sv *server) telemetrySSE(w http.ResponseWriter, r *http.Request) {
+	if sv.pool == nil {
+		telemetryUnavailable(w)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher.Flush()
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	send := func() {
+		snap, err := sv.buildStatusSnapshot(r.Context())
+		if err != nil {
+			fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+			flusher.Flush()
+			return
+		}
+		b, _ := json.Marshal(snap)
+		fmt.Fprintf(w, "data: %s\n\n", b)
+		flusher.Flush()
+	}
+
+	// Immediate first push.
+	send()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			send()
+		}
+	}
+}
+
+// buildStatusSnapshot assembles the full telemetry status JSON payload.
+func (sv *server) buildStatusSnapshot(ctx context.Context) (map[string]any, error) {
+	agents, err := sv.queryAgentSnapshots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if agents == nil {
+		agents = []telAgentSnapshot{}
+	}
+
+	const hiveQ = `
+		SELECT active_agents, total_actors, chain_length, chain_ok,
+		       event_rate::float8, daily_cost::float8, daily_cap::float8, severity
+		FROM telemetry_hive_snapshots
+		ORDER BY recorded_at DESC LIMIT 1`
+
+	hiveRows, err := sv.pool.Query(ctx, hiveQ)
+	if err != nil && !isMissingTable(err) {
+		return nil, err
+	}
+	var hive *telHiveSnapshot
+	if hiveRows != nil {
+		defer hiveRows.Close()
+		if hiveRows.Next() {
+			var h telHiveSnapshot
+			if err := hiveRows.Scan(
+				&h.ActiveAgents, &h.TotalActors, &h.ChainLength, &h.ChainOK,
+				&h.EventRate, &h.DailyCost, &h.DailyCap, &h.Severity,
+			); err != nil {
+				return nil, err
+			}
+			hive = &h
+		}
+		if err := hiveRows.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	phases, err := sv.queryPhases(ctx)
+	if err != nil && !isMissingTable(err) {
+		return nil, err
+	}
+	if phases == nil {
+		phases = []telPhase{}
+	}
+
+	events, err := sv.queryEvents(ctx, 50)
+	if err != nil && !isMissingTable(err) {
+		return nil, err
+	}
+	if events == nil {
+		events = []telEvent{}
+	}
+
+	return map[string]any{
+		"agents":        agents,
+		"hive":          hive,
+		"phases":        phases,
+		"recent_events": events,
+		"timestamp":     time.Now(),
+	}, nil
 }
 
 // updatePhase handles POST /telemetry/phases/{phase} — graduation ceremony updates.
