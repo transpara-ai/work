@@ -452,6 +452,67 @@ body {
 }
 
 /* ── HIVE HEALTH ────────────────────────────────── */
+/* ── TASKS ─────────────────────────────────────── */
+.task-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.task-row {
+  display: grid;
+  grid-template-columns: 2.5rem 1fr auto auto auto;
+  gap: 0.625rem;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: rgba(255,255,255,0.02);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+.task-row:hover { background: rgba(255,255,255,0.04); }
+.task-priority {
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.task-priority.critical { color: var(--red); }
+.task-priority.high     { color: var(--amber); }
+.task-priority.medium   { color: var(--text-sec); }
+.task-priority.low      { color: var(--text-dim); }
+.task-title {
+  color: var(--text-head);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-title.completed { color: var(--text-dim); text-decoration: line-through; }
+.task-status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.task-status.assigned  { background: var(--blue-dim); color: var(--blue); }
+.task-status.pending   { background: rgba(100,116,139,0.15); color: var(--text-sec); }
+.task-status.completed { background: var(--green-dim); color: var(--green); }
+.task-assignee {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.task-blocked {
+  font-size: 11px;
+  color: var(--amber);
+  font-weight: 600;
+}
+.task-desc {
+  grid-column: 2 / -1;
+  font-size: 12px;
+  color: var(--text-sec);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 0;
+}
+
 .hive-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -645,6 +706,19 @@ body {
       </div>
     </div>
 
+    <!-- Work Tasks -->
+    <div class="section">
+      <div class="section-head">
+        <span class="section-label">Work Tasks</span>
+        <span class="section-meta" id="task-count"></span>
+      </div>
+      <div class="section-body">
+        <div class="task-list" id="task-list">
+          <div class="data-empty">Awaiting task data...</div>
+        </div>
+      </div>
+    </div>
+
     <!-- Event Stream -->
     <div class="section">
       <div class="section-head">
@@ -686,6 +760,7 @@ body {
         renderAgents(data.agents || []);
         renderHive(data.hive || null);
         renderEvents(data.recent_events || []);
+        fetchTasks();
       } catch (err) {
         console.error("SSE parse error:", err);
       }
@@ -1031,6 +1106,79 @@ body {
     });
 
     if (!isUserScrolled) container.scrollTop = 0;
+  }
+
+  // ── TASKS ─────────────────────────────────────
+  function fetchTasks() {
+    fetch("/tasks")
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (data) { if (data && data.tasks) renderTasks(data.tasks); })
+      .catch(function () {});
+  }
+
+  function renderTasks(tasks) {
+    var container = clearEl("task-list");
+    var count     = document.getElementById("task-count");
+
+    if (!tasks || !tasks.length) {
+      container.appendChild(el("div", { cls: "data-empty", text: "No tasks yet" }));
+      count.textContent = "";
+      return;
+    }
+
+    // Sort: assigned first, then pending, then completed. Within each group, by priority.
+    var priOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+    var stOrder  = { assigned: 0, pending: 1, completed: 2 };
+    var sorted = tasks.slice().sort(function (a, b) {
+      var sa = stOrder[a.status] != null ? stOrder[a.status] : 9;
+      var sb = stOrder[b.status] != null ? stOrder[b.status] : 9;
+      if (sa !== sb) return sa - sb;
+      var pa = priOrder[a.priority] != null ? priOrder[a.priority] : 9;
+      var pb = priOrder[b.priority] != null ? priOrder[b.priority] : 9;
+      return pa - pb;
+    });
+
+    var openCount = 0;
+    sorted.forEach(function (t) {
+      if (t.status !== "completed") openCount++;
+      container.appendChild(buildTaskRow(t));
+    });
+
+    count.textContent = openCount + " open / " + tasks.length + " total";
+  }
+
+  function buildTaskRow(t) {
+    var row = el("div", { cls: "task-row" });
+
+    // Priority
+    var pri = (t.priority || "medium").toLowerCase();
+    row.appendChild(el("span", { cls: "task-priority " + pri, text: pri }));
+
+    // Title
+    var titleCls = "task-title" + (t.status === "completed" ? " completed" : "");
+    var titleEl = el("span", { cls: titleCls, text: t.title || "Untitled" });
+    if (t.description) titleEl.title = t.description;
+    row.appendChild(titleEl);
+
+    // Blocked indicator
+    if (t.blocked) {
+      row.appendChild(el("span", { cls: "task-blocked", text: "BLOCKED" }));
+    } else {
+      row.appendChild(el("span"));
+    }
+
+    // Status badge
+    var st = (t.status || "pending").toLowerCase();
+    row.appendChild(el("span", { cls: "task-status " + st, text: st }));
+
+    // Assignee
+    var assignee = "";
+    if (t.assignee) {
+      assignee = t.assignee.length > 12 ? t.assignee.slice(0, 12) + "\u2026" : t.assignee;
+    }
+    row.appendChild(el("span", { cls: "task-assignee", text: assignee }));
+
+    return row;
   }
 
   // ── FORMATTERS ─────────────────────────────────────
