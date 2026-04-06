@@ -79,10 +79,24 @@ func telemetryUnavailable(w http.ResponseWriter) {
 
 // telemetryDBErr writes the standard 503 when the database is unreachable.
 func telemetryDBErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		writeJSON(w, http.StatusGatewayTimeout, map[string]string{
+			"error":  "query timeout",
+			"detail": "telemetry queries did not complete in time; pool may be under pressure",
+		})
+		return
+	}
 	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 		"error":  "database unavailable",
 		"detail": err.Error(),
 	})
+}
+
+// telemetryQueryCtx returns a context with a deadline suitable for telemetry
+// read queries. This prevents indefinite hangs when the pool is exhausted by
+// event store writes holding advisory locks.
+func telemetryQueryCtx(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(r.Context(), 5*time.Second)
 }
 
 // --- Shared query helpers ---
@@ -189,7 +203,10 @@ func (sv *server) telemetryAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agents, err := sv.queryAgentSnapshots(r.Context())
+	ctx, cancel := telemetryQueryCtx(r)
+	defer cancel()
+
+	agents, err := sv.queryAgentSnapshots(ctx)
 	if err != nil {
 		if isMissingTable(err) {
 			telemetryUnavailable(w)
@@ -212,7 +229,8 @@ func (sv *server) telemetryAgentDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	role := r.PathValue("role")
-	ctx := r.Context()
+	ctx, cancel := telemetryQueryCtx(r)
+	defer cancel()
 
 	const latestQ = `
 		SELECT agent_role, actor_id, state, model, iteration, max_iterations,
@@ -317,7 +335,10 @@ func (sv *server) telemetryStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	events, err := sv.queryEvents(r.Context(), limit)
+	ctx, cancel := telemetryQueryCtx(r)
+	defer cancel()
+
+	events, err := sv.queryEvents(ctx, limit)
 	if err != nil {
 		if isMissingTable(err) {
 			telemetryUnavailable(w)
@@ -339,7 +360,10 @@ func (sv *server) telemetryPhases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	phases, err := sv.queryPhases(r.Context())
+	ctx, cancel := telemetryQueryCtx(r)
+	defer cancel()
+
+	phases, err := sv.queryPhases(ctx)
 	if err != nil {
 		if isMissingTable(err) {
 			telemetryUnavailable(w)
@@ -367,7 +391,10 @@ func (sv *server) telemetryHealth(w http.ResponseWriter, r *http.Request) {
 		FROM telemetry_hive_snapshots
 		ORDER BY recorded_at DESC LIMIT 1`
 
-	rows, err := sv.pool.Query(r.Context(), q)
+	ctx, cancel := telemetryQueryCtx(r)
+	defer cancel()
+
+	rows, err := sv.pool.Query(ctx, q)
 	if err != nil {
 		if isMissingTable(err) {
 			telemetryUnavailable(w)
@@ -457,8 +484,9 @@ func (sv *server) telemetrySSE(w http.ResponseWriter, r *http.Request) {
 func (sv *server) buildStatusSnapshot(ctx context.Context) (map[string]any, error) {
 	// Guard against pool exhaustion: if all connections are held by event
 	// store writes (advisory lock contention), we'd block forever without
-	// a deadline.
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// a deadline. Use 5s (half the SSE tick interval) so a slow snapshot
+	// doesn't overlap the next tick and cause a permanent error loop.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	agents, err := sv.queryAgentSnapshots(ctx)
@@ -570,7 +598,10 @@ func (sv *server) updatePhase(w http.ResponseWriter, r *http.Request) {
 		WHERE phase = $1
 		RETURNING phase, label, status, started_at, completed_at, notes`
 
-	rows, err := sv.pool.Query(r.Context(), q, phase, body.Status, body.Notes)
+	ctx, cancel := telemetryQueryCtx(r)
+	defer cancel()
+
+	rows, err := sv.pool.Query(ctx, q, phase, body.Status, body.Notes)
 	if err != nil {
 		if isMissingTable(err) {
 			telemetryUnavailable(w)
