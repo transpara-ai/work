@@ -620,7 +620,9 @@ func run() error {
 		if !strings.Contains(dsn, "pool_health_check_period") {
 			poolCfg.HealthCheckPeriod = 30 * time.Second
 		}
-		if poolCfg.ConnConfig.ConnectTimeout == 0 {
+		// connect_timeout is parsed by pgx (not pgxpool) into ConnConfig,
+		// so we check the DSN the same way as pool params for consistency.
+		if !strings.Contains(dsn, "connect_timeout") {
 			poolCfg.ConnConfig.ConnectTimeout = 5 * time.Second
 		}
 		pool, err = pgxpool.NewWithConfig(ctx, poolCfg)
