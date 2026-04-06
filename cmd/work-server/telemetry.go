@@ -92,9 +92,10 @@ func telemetryDBErr(w http.ResponseWriter, err error) {
 	})
 }
 
-// telemetryQueryCtx returns a context with a deadline suitable for telemetry
-// read queries. This prevents indefinite hangs when the pool is exhausted by
-// event store writes holding advisory locks.
+// telemetryQueryCtx returns a context with a 5s deadline for telemetry read
+// queries. This prevents indefinite hangs when the pool is exhausted by event
+// store writes holding advisory locks. Do not use for write operations — use
+// a longer, operation-specific timeout instead.
 func telemetryQueryCtx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
 }
@@ -484,8 +485,9 @@ func (sv *server) telemetrySSE(w http.ResponseWriter, r *http.Request) {
 func (sv *server) buildStatusSnapshot(ctx context.Context) (map[string]any, error) {
 	// Guard against pool exhaustion: if all connections are held by event
 	// store writes (advisory lock contention), we'd block forever without
-	// a deadline. Use 5s (half the SSE tick interval) so a slow snapshot
-	// doesn't overlap the next tick and cause a permanent error loop.
+	// a deadline. 5s is half the 10s SSE tick interval — a shorter value
+	// than the original 10s guard to avoid overlapping the next tick and
+	// causing a permanent error loop on the dashboard.
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -598,7 +600,10 @@ func (sv *server) updatePhase(w http.ResponseWriter, r *http.Request) {
 		WHERE phase = $1
 		RETURNING phase, label, status, started_at, completed_at, notes`
 
-	ctx, cancel := telemetryQueryCtx(r)
+	// Writes get a longer timeout than reads — a phase UPDATE under advisory
+	// lock contention may legitimately take longer, and a mid-write timeout
+	// leaves the caller uncertain whether the write committed.
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
 	rows, err := sv.pool.Query(ctx, q, phase, body.Status, body.Notes)
