@@ -602,12 +602,27 @@ func run() error {
 		// during advisory-locked writes) and telemetry read queries. Default
 		// MaxConns (≈4 in containers) is too small: just a few concurrent
 		// event writes exhaust the pool and starve telemetry reads.
-		poolCfg.MaxConns = 20
-		poolCfg.MinConns = 2
-		poolCfg.MaxConnLifetime = 30 * time.Minute
-		poolCfg.MaxConnIdleTime = 5 * time.Minute
-		poolCfg.HealthCheckPeriod = 30 * time.Second
-		poolCfg.ConnConfig.ConnectTimeout = 5 * time.Second
+		// Only override defaults — respect any values set via DSN parameters
+		// (e.g. pool_max_conns, pool_min_conns) so operators can tune for
+		// their Postgres/PgBouncer limits.
+		if !strings.Contains(dsn, "pool_max_conns") {
+			poolCfg.MaxConns = 20
+		}
+		if !strings.Contains(dsn, "pool_min_conns") {
+			poolCfg.MinConns = 2
+		}
+		if !strings.Contains(dsn, "pool_max_conn_lifetime") {
+			poolCfg.MaxConnLifetime = 30 * time.Minute
+		}
+		if !strings.Contains(dsn, "pool_max_conn_idle_time") {
+			poolCfg.MaxConnIdleTime = 5 * time.Minute
+		}
+		if !strings.Contains(dsn, "pool_health_check_period") {
+			poolCfg.HealthCheckPeriod = 30 * time.Second
+		}
+		if poolCfg.ConnConfig.ConnectTimeout == 0 {
+			poolCfg.ConnConfig.ConnectTimeout = 5 * time.Second
+		}
 		pool, err = pgxpool.NewWithConfig(ctx, poolCfg)
 		if err != nil {
 			return fmt.Errorf("postgres: %w", err)
