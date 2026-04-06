@@ -455,6 +455,12 @@ func (sv *server) telemetrySSE(w http.ResponseWriter, r *http.Request) {
 
 // buildStatusSnapshot assembles the full telemetry status JSON payload.
 func (sv *server) buildStatusSnapshot(ctx context.Context) (map[string]any, error) {
+	// Guard against pool exhaustion: if all connections are held by event
+	// store writes (advisory lock contention), we'd block forever without
+	// a deadline.
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
 	agents, err := sv.queryAgentSnapshots(ctx)
 	if err != nil {
 		return nil, err

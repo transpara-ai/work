@@ -46,6 +46,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -593,8 +594,21 @@ func run() error {
 	var pool *pgxpool.Pool
 	if dsn != "" {
 		fmt.Fprintf(os.Stderr, "Postgres: %s\n", dsn)
-		var err error
-		pool, err = pgxpool.New(ctx, dsn)
+		poolCfg, err := pgxpool.ParseConfig(dsn)
+		if err != nil {
+			return fmt.Errorf("postgres config: %w", err)
+		}
+		// The pool is shared between the event store (which holds connections
+		// during advisory-locked writes) and telemetry read queries. Default
+		// MaxConns (≈4 in containers) is too small: just a few concurrent
+		// event writes exhaust the pool and starve telemetry reads.
+		poolCfg.MaxConns = 20
+		poolCfg.MinConns = 2
+		poolCfg.MaxConnLifetime = 30 * time.Minute
+		poolCfg.MaxConnIdleTime = 5 * time.Minute
+		poolCfg.HealthCheckPeriod = 30 * time.Second
+		poolCfg.ConnConfig.ConnectTimeout = 5 * time.Second
+		pool, err = pgxpool.NewWithConfig(ctx, poolCfg)
 		if err != nil {
 			return fmt.Errorf("postgres: %w", err)
 		}
