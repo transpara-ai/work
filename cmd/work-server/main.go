@@ -3,11 +3,12 @@
 //
 // Environment variables:
 //
-//	WORK_HUMAN     — display name of the human operator (required)
-//	WORK_API_KEY   — API key for auth; callers pass Authorization: Bearer <key> (required)
-//	WORK_API_TOKEN — bearer token for workspace-scoped external API; falls back to WORK_API_KEY if unset
-//	DATABASE_URL   — Postgres DSN (optional; defaults to in-memory)
-//	PORT           — HTTP port to listen on (optional; defaults to 8080)
+//	WORK_HUMAN                — display name of the human operator (required)
+//	WORK_API_KEY              — API key for auth; callers pass Authorization: Bearer <key> (required)
+//	WORK_API_TOKEN            — bearer token for workspace-scoped external API; falls back to WORK_API_KEY if unset
+//	DATABASE_URL              — Postgres DSN (optional; defaults to in-memory)
+//	PORT                      — HTTP port to listen on (optional; defaults to 8080)
+//	TELEMETRY_DASHBOARD_PATH  — path to dashboard.html on disk (optional; read at request time for live reload)
 //
 // Endpoints:
 //
@@ -688,6 +689,12 @@ func run() error {
 			SameSite: http.SameSiteStrictMode,
 		})
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if path := os.Getenv("TELEMETRY_DASHBOARD_PATH"); path != "" {
+			if html, err := os.ReadFile(path); err == nil {
+				w.Write(html)
+				return
+			}
+		}
 		fmt.Fprint(w, telemetryDashboardHTML)
 	})
 
