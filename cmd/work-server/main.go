@@ -720,6 +720,7 @@ func run() error {
 			SameSite: http.SameSiteStrictMode,
 		})
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		if path := os.Getenv("TELEMETRY_DASHBOARD_PATH"); path != "" {
 			if html, err := os.ReadFile(path); err == nil {
 				w.Write(html)
