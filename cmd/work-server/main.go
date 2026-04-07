@@ -804,7 +804,10 @@ func (sv *server) telemetryDashboard(w http.ResponseWriter, r *http.Request) {
 
 	// Priority: TELEMETRY_DASHBOARD_PATH env var → cached GitHub page → embedded fallback.
 	if path := os.Getenv("TELEMETRY_DASHBOARD_PATH"); path != "" {
-		if html, err := os.ReadFile(path); err == nil {
+		html, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: TELEMETRY_DASHBOARD_PATH=%s: %v\n", path, err)
+		} else {
 			w.Write(html)
 			return
 		}
