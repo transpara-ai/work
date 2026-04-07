@@ -307,6 +307,9 @@ func (ts *TaskStore) AddDependency(
 	causes []types.EventID,
 	convID types.ConversationID,
 ) error {
+	if taskID == dependsOnID {
+		return fmt.Errorf("task %s cannot depend on itself", taskID.Value())
+	}
 	content := TaskDependencyContent{
 		TaskID:      taskID,
 		DependsOnID: dependsOnID,
