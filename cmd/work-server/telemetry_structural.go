@@ -11,21 +11,21 @@ import (
 // telRole is the JSON shape for a role definition from telemetry_role_definitions.
 type telRole struct {
 	Role          string    `json:"role"`
-	Name          string    `json:"name"`
-	Tier          string    `json:"tier"`
-	Purpose       string    `json:"purpose"`
-	Model         string    `json:"model"`
-	CanOperate    bool      `json:"can_operate"`
-	MaxIterations int       `json:"max_iterations"`
+	Name          *string   `json:"name"`
+	Tier          *string   `json:"tier"`
+	Purpose       *string   `json:"purpose"`
+	Model         *string   `json:"model"`
+	CanOperate    *bool     `json:"can_operate"`
+	MaxIterations *int      `json:"max_iterations"`
 	WatchPatterns []string  `json:"watch_patterns"`
-	Phase         int       `json:"phase"`
+	Phase         *int      `json:"phase"`
 	GraduatedAt   *string   `json:"graduated_at"`
-	Status        string    `json:"status"`
-	HasPrompt     bool      `json:"has_prompt"`
-	HasPersona    bool      `json:"has_persona"`
-	Category      string    `json:"category"`
+	Status        *string   `json:"status"`
+	HasPrompt     *bool     `json:"has_prompt"`
+	HasPersona    *bool     `json:"has_persona"`
+	Category      *string   `json:"category"`
 	DependsOn     []string  `json:"depends_on"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	UpdatedAt     *time.Time `json:"updated_at"`
 }
 
 // telActor is the JSON shape for an actor from the actors table.
@@ -38,11 +38,11 @@ type telActor struct {
 
 // telLayer is the JSON shape for a layer from telemetry_layers.
 type telLayer struct {
-	Layer       int    `json:"layer"`
-	Name        string `json:"name"`
-	Focus       string `json:"focus"`
-	Depth       int    `json:"depth"`
-	Description string `json:"description"`
+	Layer       int     `json:"layer"`
+	Name        *string `json:"name"`
+	Focus       *string `json:"focus"`
+	Depth       *string `json:"depth"`
+	Description *string `json:"description"`
 }
 
 // telPhaseEnriched is a phase with agent membership and per-agent status.
@@ -119,7 +119,7 @@ func (sv *server) queryActors(ctx context.Context) ([]telActor, error) {
 }
 
 func (sv *server) queryLayers(ctx context.Context) ([]telLayer, error) {
-	const q = `SELECT layer, name, focus, depth, description
+	const q = `SELECT layer::int, name, focus, depth, description
 		FROM telemetry_layers ORDER BY layer`
 
 	rows, err := sv.pool.Query(ctx, q)
@@ -184,7 +184,9 @@ func (sv *server) queryEnrichedPhases(ctx context.Context) ([]telPhaseEnriched, 
 func annotatePhaseAgents(phases []telPhaseEnriched, roles []telRole) {
 	statusByRole := make(map[string]string, len(roles))
 	for _, r := range roles {
-		statusByRole[r.Role] = r.Status
+		if r.Status != nil {
+			statusByRole[r.Role] = *r.Status
+		}
 	}
 	for i := range phases {
 		for j := range phases[i].Agents {
