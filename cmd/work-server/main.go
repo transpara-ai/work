@@ -709,6 +709,11 @@ func run() error {
 	mux.HandleFunc("POST /telemetry/phases/{phase}", srv.auth(srv.updatePhase))
 	mux.HandleFunc("GET /telemetry/health", srv.auth(srv.telemetryHealth))
 	mux.HandleFunc("GET /telemetry/sse", srv.auth(srv.telemetrySSE))
+	mux.HandleFunc("GET /telemetry/roles", srv.auth(srv.telemetryRoles))
+	mux.HandleFunc("GET /telemetry/roles/{name}", srv.auth(srv.telemetryRoleDetail))
+	mux.HandleFunc("GET /telemetry/actors", srv.auth(srv.telemetryActors))
+	mux.HandleFunc("GET /telemetry/layers", srv.auth(srv.telemetryLayers))
+	mux.HandleFunc("GET /telemetry/overview", srv.auth(srv.telemetryOverview))
 	mux.HandleFunc("GET /telemetry/", func(w http.ResponseWriter, r *http.Request) {
 		// Set a session cookie so the dashboard can poll without an Authorization
 		// header, avoiding Chrome Private-Network-Access preflight blocks.
