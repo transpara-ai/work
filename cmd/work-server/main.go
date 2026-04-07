@@ -8,7 +8,8 @@
 //	WORK_API_TOKEN            — bearer token for workspace-scoped external API; falls back to WORK_API_KEY if unset
 //	DATABASE_URL              — Postgres DSN (optional; defaults to in-memory)
 //	PORT                      — HTTP port to listen on (optional; defaults to 8080)
-//	TELEMETRY_DASHBOARD_PATH  — path to dashboard.html on disk (optional; highest priority, then cached GitHub page, then embedded fallback)
+//	TELEMETRY_DASHBOARD_URL   — URL to fetch dashboard HTML from (optional; default: transpara-ai/summary raw GitHub)
+//	TELEMETRY_DASHBOARD_PATH  — path to dashboard.html on disk (optional; highest priority, then cached URL page, then embedded fallback)
 //
 // Endpoints:
 //
@@ -588,6 +589,10 @@ func run() error {
 	if port == "" {
 		port = "8080"
 	}
+	dashboardURL := os.Getenv("TELEMETRY_DASHBOARD_URL")
+	if dashboardURL == "" {
+		dashboardURL = "https://raw.githubusercontent.com/transpara-ai/summary/main/dashboard.html"
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -680,12 +685,13 @@ func run() error {
 	ts := work.NewTaskStore(s, factory, signer)
 
 	srv := &server{
-		ts:       ts,
-		store:    s,
-		humanID:  humanID,
-		apiKey:   apiKey,
-		apiToken: apiToken,
-		pool:     pool,
+		ts:           ts,
+		store:        s,
+		humanID:      humanID,
+		apiKey:       apiKey,
+		apiToken:     apiToken,
+		pool:         pool,
+		dashboardURL: dashboardURL,
 	}
 
 	// Fetch telemetry dashboard from GitHub at startup. Non-fatal — falls
@@ -753,19 +759,18 @@ type server struct {
 	humanID  types.ActorID
 	apiKey   string
 	apiToken string
-	pool     *pgxpool.Pool // nil when running in-memory; telemetry handlers check this
+	pool         *pgxpool.Pool // nil when running in-memory; telemetry handlers check this
+	dashboardURL string        // URL to fetch telemetry dashboard HTML from
 
 	dashboardMu   sync.RWMutex
 	dashboardPage []byte // cached dashboard.html from GitHub
 }
 
-const telemetryPageURL = "https://raw.githubusercontent.com/transpara-ai/summary/main/dashboard.html"
-
-// fetchTelemetryDashboard fetches the telemetry dashboard HTML from GitHub and
-// caches it in memory. Safe for concurrent use.
+// fetchTelemetryDashboard fetches the telemetry dashboard HTML from the
+// configured URL and caches it in memory. Safe for concurrent use.
 func (sv *server) fetchTelemetryDashboard() error {
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(telemetryPageURL)
+	resp, err := client.Get(sv.dashboardURL)
 	if err != nil {
 		return err
 	}
