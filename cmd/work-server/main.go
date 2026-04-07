@@ -773,7 +773,7 @@ func (sv *server) fetchTelemetryDashboard() error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("github returned %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MB cap
 	if err != nil {
 		return err
 	}
@@ -795,6 +795,7 @@ func (sv *server) telemetryDashboard(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteStrictMode,
 	})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 
 	// Priority: TELEMETRY_DASHBOARD_PATH env var → cached GitHub page → embedded fallback.
 	if path := os.Getenv("TELEMETRY_DASHBOARD_PATH"); path != "" {
