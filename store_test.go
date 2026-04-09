@@ -49,6 +49,18 @@ func newTaskStore(t *testing.T, s *store.InMemoryStore) *work.TaskStore {
 	return work.NewTaskStore(s, factory, testSigner{})
 }
 
+// completeWithArtifact is a test helper that adds a default artifact and then
+// completes the task, satisfying the artifact gate.
+func completeWithArtifact(t *testing.T, ts *work.TaskStore, actor types.ActorID, taskID types.EventID, summary string, causes []types.EventID, convID types.ConversationID) {
+	t.Helper()
+	if err := ts.AddArtifact(actor, taskID, "result", "text/plain", "done", causes, convID); err != nil {
+		t.Fatalf("AddArtifact: %v", err)
+	}
+	if err := ts.Complete(actor, taskID, summary, causes, convID); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+}
+
 func TestTaskStore_Create(t *testing.T) {
 	s, causes := setupStore(t)
 	ts := newTaskStore(t, s)
@@ -157,9 +169,7 @@ func TestTaskStore_Complete(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := ts.Complete(testActor, task.ID, "shipped in PR #42", causes, testConv); err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
+	completeWithArtifact(t, ts, testActor, task.ID, "shipped in PR #42", causes, testConv)
 }
 
 func TestTaskStore_GetByAssignee_Empty(t *testing.T) {
@@ -258,9 +268,7 @@ func TestTaskStore_GetStatus_Completed(t *testing.T) {
 	if err := ts.Assign(testActor, task.ID, testAssignee, causes, testConv); err != nil {
 		t.Fatalf("Assign: %v", err)
 	}
-	if err := ts.Complete(testActor, task.ID, "done", causes, testConv); err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
+	completeWithArtifact(t, ts, testActor, task.ID, "done", causes, testConv)
 
 	status, err := ts.GetStatus(task.ID)
 	if err != nil {
@@ -303,12 +311,8 @@ func TestTaskStore_ListOpen_FiltersCompleted(t *testing.T) {
 	}
 
 	// Complete A and B; leave C open.
-	if err := ts.Complete(testActor, taskA.ID, "done A", causes, testConv); err != nil {
-		t.Fatalf("Complete A: %v", err)
-	}
-	if err := ts.Complete(testActor, taskB.ID, "done B", causes, testConv); err != nil {
-		t.Fatalf("Complete B: %v", err)
-	}
+	completeWithArtifact(t, ts, testActor, taskA.ID, "done A", causes, testConv)
+	completeWithArtifact(t, ts, testActor, taskB.ID, "done B", causes, testConv)
 
 	open, err := ts.ListOpen()
 	if err != nil {
@@ -443,9 +447,7 @@ func TestTaskStore_IsBlocked_UnblockedWhenDepCompleted(t *testing.T) {
 	}
 
 	// Complete A.
-	if err := ts.Complete(testActor, taskA.ID, "done", causes, testConv); err != nil {
-		t.Fatalf("Complete A: %v", err)
-	}
+	completeWithArtifact(t, ts, testActor, taskA.ID, "done", causes, testConv)
 
 	blocked, err := ts.IsBlocked(taskB.ID)
 	if err != nil {
@@ -507,9 +509,7 @@ func TestTaskStore_ListOpen_UnblocksAfterDepCompleted(t *testing.T) {
 	}
 
 	// Complete A — B should now be unblocked.
-	if err := ts.Complete(testActor, taskA.ID, "done", causes, testConv); err != nil {
-		t.Fatalf("Complete A: %v", err)
-	}
+	completeWithArtifact(t, ts, testActor, taskA.ID, "done", causes, testConv)
 
 	// ListOpen should return only B (A is completed, B is now unblocked).
 	open, err := ts.ListOpen()

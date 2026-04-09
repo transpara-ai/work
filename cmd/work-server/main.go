@@ -24,6 +24,9 @@
 //	POST /tasks/{id}/complete                   complete task (body: {"summary":"..."})
 //	POST /tasks/{id}/comment                    add a comment (body: {"body":"..."})
 //	GET  /tasks/{id}/comments                   list comments for a task
+//	POST /tasks/{id}/artifacts                  attach an artifact (body: {"label":"...", "media_type":"...", "body":"..."})
+//	GET  /tasks/{id}/artifacts                  list artifacts for a task
+//	POST /tasks/{id}/waive-artifact             waive the artifact requirement (body: {"reason":"..."})
 //
 // Workspace-scoped routes (authenticated via WORK_API_TOKEN):
 //
@@ -33,6 +36,9 @@
 //	POST /w/{workspace}/tasks/{id}/assign       assign a workspace task
 //	POST /w/{workspace}/tasks/{id}/complete     complete a workspace task
 //	POST /w/{workspace}/tasks/{id}/comment      add a comment to a workspace task
+//	POST /w/{workspace}/tasks/{id}/artifacts    attach an artifact to a workspace task
+//	GET  /w/{workspace}/tasks/{id}/artifacts    list artifacts for a workspace task
+//	POST /w/{workspace}/tasks/{id}/waive-artifact  waive artifact requirement for a workspace task
 package main
 
 import (
@@ -40,6 +46,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -287,6 +294,10 @@ tr:hover td { background: #1e293b; }
 .p-low    { background: #1e293b; color: #94a3b8; }
 .blocked-yes { color: #f87171; font-weight: 600; }
 .blocked-no  { color: #334155; }
+.art-badge { display: inline-block; padding: 0.2em 0.55em; border-radius: 4px; font-size: 0.72rem; font-weight: 600; }
+.art-has  { background: #052e16; color: #4ade80; }
+.art-waived { background: #1e293b; color: #94a3b8; font-style: italic; }
+.art-none   { color: #334155; }
 .assignee { font-family: monospace; font-size: 0.75rem; color: #7c3aed; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .btn { display: inline-block; padding: 0.25em 0.6em; border-radius: 4px; font-size: 0.72rem; font-weight: 600; cursor: pointer; border: none; letter-spacing: 0.02em; transition: opacity 0.15s; margin-right: 0.25rem; }
 .btn:hover { opacity: 0.8; }
@@ -328,6 +339,7 @@ tr:hover td { background: #1e293b; }
       <th>Priority</th>
       <th>Assignee</th>
       <th>Blocked</th>
+      <th>Artifacts</th>
       <th>Actions</th>
     </tr>
   </thead>
@@ -515,6 +527,16 @@ async function refresh() {
         const assigneeCell = t.assignee
           ? '<span class="assignee" title="' + esc(t.assignee) + '">' + esc(shortID(t.assignee)) + '</span>'
           : '<span class="blocked-no">\u2014</span>';
+        var artifactCell;
+        if (t.artifact_count > 0) {
+          artifactCell = '<span class="art-badge art-has">' + t.artifact_count + ' artifact' + (t.artifact_count === 1 ? '' : 's') + '</span>';
+        } else if (t.waived) {
+          artifactCell = '<span class="art-badge art-waived">waived</span>';
+        } else if (t.status === "completed") {
+          artifactCell = '<span class="art-none">\u2014</span>';
+        } else {
+          artifactCell = '<span class="art-none">\u2014</span>';
+        }
         const isCompleted = t.status === "completed";
         let actions = "";
         if (!isCompleted) {
@@ -530,6 +552,7 @@ async function refresh() {
           + '<td>' + priorityBadge(t.priority) + '</td>'
           + '<td>' + assigneeCell + '</td>'
           + '<td>' + blockedCell + '</td>'
+          + '<td>' + artifactCell + '</td>'
           + '<td>' + actions + '</td>'
           + '</tr>';
       }).join("");
@@ -713,6 +736,9 @@ func run() error {
 	mux.HandleFunc("POST /tasks/{id}/complete", srv.auth(srv.completeTask))
 	mux.HandleFunc("POST /tasks/{id}/comment", srv.auth(srv.addComment))
 	mux.HandleFunc("GET /tasks/{id}/comments", srv.auth(srv.listComments))
+	mux.HandleFunc("POST /tasks/{id}/artifacts", srv.auth(srv.addArtifact))
+	mux.HandleFunc("GET /tasks/{id}/artifacts", srv.auth(srv.listArtifacts))
+	mux.HandleFunc("POST /tasks/{id}/waive-artifact", srv.auth(srv.waiveArtifact))
 
 	// Telemetry routes — reads from hive-postgres via the shared pool.
 	mux.HandleFunc("GET /telemetry/status", srv.auth(srv.telemetryStatus))
@@ -738,6 +764,9 @@ func run() error {
 	mux.HandleFunc("POST /w/{workspace}/tasks/{id}/assign", srv.tokenAuth(srv.assignTask))
 	mux.HandleFunc("POST /w/{workspace}/tasks/{id}/complete", srv.tokenAuth(srv.completeTask))
 	mux.HandleFunc("POST /w/{workspace}/tasks/{id}/comment", srv.tokenAuth(srv.addComment))
+	mux.HandleFunc("POST /w/{workspace}/tasks/{id}/artifacts", srv.tokenAuth(srv.addArtifact))
+	mux.HandleFunc("GET /w/{workspace}/tasks/{id}/artifacts", srv.tokenAuth(srv.listArtifacts))
+	mux.HandleFunc("POST /w/{workspace}/tasks/{id}/waive-artifact", srv.tokenAuth(srv.waiveArtifact))
 
 	addr := ":" + port
 	fmt.Fprintf(os.Stderr, "work-server listening on %s\n", addr)
@@ -1012,14 +1041,16 @@ func (sv *server) listTasks(w http.ResponseWriter, r *http.Request) {
 	items := make([]map[string]any, 0, len(summaries))
 	for _, s := range summaries {
 		items = append(items, map[string]any{
-			"id":          s.Task.ID.Value(),
-			"title":       s.Task.Title,
-			"description": s.Task.Description,
-			"priority":    string(s.Task.Priority),
-			"created_by":  s.Task.CreatedBy.Value(),
-			"status":      string(s.Status),
-			"assignee":    s.Assignee.Value(),
-			"blocked":     s.Blocked,
+			"id":             s.Task.ID.Value(),
+			"title":          s.Task.Title,
+			"description":    s.Task.Description,
+			"priority":       string(s.Task.Priority),
+			"created_by":     s.Task.CreatedBy.Value(),
+			"status":         string(s.Status),
+			"assignee":       s.Assignee.Value(),
+			"blocked":        s.Blocked,
+			"artifact_count": s.ArtifactCount,
+			"waived":         s.Waived,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": items})
@@ -1150,6 +1181,10 @@ func (sv *server) completeTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := sv.ts.Complete(sv.humanID, taskID, body.Summary, causes, convID); err != nil {
+		if errors.Is(err, work.ErrArtifactRequired) {
+			writeErr(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "complete: "+err.Error())
 		return
 	}
@@ -1222,6 +1257,110 @@ func (sv *server) listComments(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"task_id": taskID.Value(), "comments": items})
 }
 
+// addArtifact handles POST /tasks/{id}/artifacts
+// Body: {"label":"...", "media_type":"text/markdown", "body":"..."}
+func (sv *server) addArtifact(w http.ResponseWriter, r *http.Request) {
+	taskID, ok := parseTaskID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Label     string `json:"label"`
+		MediaType string `json:"media_type"`
+		Body      string `json:"body"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if body.Label == "" {
+		writeErr(w, http.StatusBadRequest, "label is required")
+		return
+	}
+	causes, err := sv.currentCauses()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "get causes: "+err.Error())
+		return
+	}
+	convID, err := newConversationID()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "conversation id: "+err.Error())
+		return
+	}
+	if err := sv.ts.AddArtifact(sv.humanID, taskID, body.Label, body.MediaType, body.Body, causes, convID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "add artifact: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"task_id": taskID.Value(),
+		"label":   body.Label,
+		"status":  "attached",
+	})
+}
+
+// listArtifacts handles GET /tasks/{id}/artifacts
+func (sv *server) listArtifacts(w http.ResponseWriter, r *http.Request) {
+	taskID, ok := parseTaskID(w, r)
+	if !ok {
+		return
+	}
+	artifacts, err := sv.ts.ListArtifacts(taskID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "list artifacts: "+err.Error())
+		return
+	}
+	items := make([]map[string]any, 0, len(artifacts))
+	for _, a := range artifacts {
+		items = append(items, map[string]any{
+			"id":         a.ID.Value(),
+			"label":      a.Label,
+			"media_type": a.MediaType,
+			"body":       a.Body,
+			"created_by": a.CreatedBy.Value(),
+			"timestamp":  a.Timestamp.String(),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task_id": taskID.Value(), "artifacts": items})
+}
+
+// waiveArtifact handles POST /tasks/{id}/waive-artifact
+// Body: {"reason":"..."}
+func (sv *server) waiveArtifact(w http.ResponseWriter, r *http.Request) {
+	taskID, ok := parseTaskID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if body.Reason == "" {
+		writeErr(w, http.StatusBadRequest, "reason is required")
+		return
+	}
+	causes, err := sv.currentCauses()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "get causes: "+err.Error())
+		return
+	}
+	convID, err := newConversationID()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "conversation id: "+err.Error())
+		return
+	}
+	if err := sv.ts.WaiveArtifact(sv.humanID, taskID, body.Reason, causes, convID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "waive artifact: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"task_id": taskID.Value(),
+		"status":  "waived",
+	})
+}
+
 // getTask handles GET /tasks/{id}
 // Returns full task details: title, description, priority, status, assignee, blocked.
 func (sv *server) getTask(w http.ResponseWriter, r *http.Request) {
@@ -1271,15 +1410,28 @@ func (sv *server) getTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	artifacts, err := sv.ts.ListArtifacts(taskID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "list artifacts: "+err.Error())
+		return
+	}
+	hasWaiver, err := sv.ts.HasWaiver(taskID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "check waiver: "+err.Error())
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":          taskID.Value(),
-		"title":       c.Title,
-		"description": c.Description,
-		"priority":    string(priority),
-		"status":      string(status),
-		"created_by":  c.CreatedBy.Value(),
-		"assignee":    assignee,
-		"blocked":     blocked,
+		"id":             taskID.Value(),
+		"title":          c.Title,
+		"description":    c.Description,
+		"priority":       string(priority),
+		"status":         string(status),
+		"created_by":     c.CreatedBy.Value(),
+		"assignee":       assignee,
+		"blocked":        blocked,
+		"artifact_count": len(artifacts),
+		"waived":         hasWaiver,
 	})
 }
 
@@ -1308,6 +1460,8 @@ func (sv *server) getTaskEvents(w http.ResponseWriter, r *http.Request) {
 		work.EventTypeTaskPrioritySet,
 		work.EventTypeTaskComment,
 		work.EventTypeTaskUnblocked,
+		work.EventTypeTaskArtifact,
+		work.EventTypeTaskArtifactWaived,
 	} {
 		page, err := sv.store.ByType(et, 1000, types.None[types.Cursor]())
 		if err != nil {
@@ -1352,6 +1506,10 @@ func taskIDFromContent(content any) types.EventID {
 	case work.CommentContent:
 		return c.TaskID
 	case work.TaskUnblockedContent:
+		return c.TaskID
+	case work.TaskArtifactContent:
+		return c.TaskID
+	case work.TaskArtifactWaivedContent:
 		return c.TaskID
 	}
 	return types.EventID{}
@@ -1420,15 +1578,17 @@ func (sv *server) listWorkspaceTasks(w http.ResponseWriter, r *http.Request) {
 	items := make([]map[string]any, 0, len(summaries))
 	for _, s := range summaries {
 		items = append(items, map[string]any{
-			"id":          s.Task.ID.Value(),
-			"title":       s.Task.Title,
-			"description": s.Task.Description,
-			"priority":    string(s.Task.Priority),
-			"workspace":   s.Task.Workspace,
-			"created_by":  s.Task.CreatedBy.Value(),
-			"status":      string(s.Status),
-			"assignee":    s.Assignee.Value(),
-			"blocked":     s.Blocked,
+			"id":             s.Task.ID.Value(),
+			"title":          s.Task.Title,
+			"description":    s.Task.Description,
+			"priority":       string(s.Task.Priority),
+			"workspace":      s.Task.Workspace,
+			"created_by":     s.Task.CreatedBy.Value(),
+			"status":         string(s.Status),
+			"assignee":       s.Assignee.Value(),
+			"blocked":        s.Blocked,
+			"artifact_count": s.ArtifactCount,
+			"waived":         s.Waived,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"workspace": workspace, "tasks": items})

@@ -456,7 +456,7 @@ body {
 .task-list { display: flex; flex-direction: column; gap: 0.5rem; }
 .task-row {
   display: grid;
-  grid-template-columns: 2.5rem 1fr auto auto auto;
+  grid-template-columns: 2.5rem 1fr auto auto auto auto;
   gap: 0.625rem;
   align-items: center;
   padding: 0.5rem 0.75rem;
@@ -503,6 +503,16 @@ body {
   color: var(--amber);
   font-weight: 600;
 }
+.task-artifacts {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.task-artifacts.has-artifacts { background: var(--green-dim); color: var(--green); }
+.task-artifacts.waived { background: rgba(100,116,139,0.15); color: var(--text-sec); font-style: italic; }
+.task-artifacts.none   { color: var(--text-dim); }
 .task-desc {
   grid-column: 2 / -1;
   font-size: 12px;
@@ -1163,6 +1173,17 @@ body {
     // Blocked indicator
     if (t.blocked) {
       row.appendChild(el("span", { cls: "task-blocked", text: "BLOCKED" }));
+    } else {
+      row.appendChild(el("span"));
+    }
+
+    // Artifact indicator
+    if (t.artifact_count > 0) {
+      row.appendChild(el("span", { cls: "task-artifacts has-artifacts", text: t.artifact_count + " artifact" + (t.artifact_count === 1 ? "" : "s") }));
+    } else if (t.waived) {
+      row.appendChild(el("span", { cls: "task-artifacts waived", text: "waived" }));
+    } else if (t.status === "completed") {
+      row.appendChild(el("span", { cls: "task-artifacts none", text: "—" }));
     } else {
       row.appendChild(el("span"));
     }
