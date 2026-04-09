@@ -845,6 +845,23 @@ func (ts *TaskStore) ListArtifacts(taskID types.EventID) ([]ArtifactEvent, error
 	return artifacts, nil
 }
 
+// GetArtifactBody returns the body of a work.task.artifact event by its event ID.
+// Returns empty string if not found.
+func (ts *TaskStore) GetArtifactBody(artifactID types.EventID) string {
+	page, err := ts.store.ByType(EventTypeTaskArtifact, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return ""
+	}
+	for _, ev := range page.Items() {
+		if ev.ID() == artifactID {
+			if c, ok := ev.Content().(TaskArtifactContent); ok {
+				return c.Body
+			}
+		}
+	}
+	return ""
+}
+
 // HasWaiver returns true if a work.task.artifact.waived event exists for the task.
 func (ts *TaskStore) HasWaiver(taskID types.EventID) (bool, error) {
 	_, found, err := ts.findEventForTask(EventTypeTaskArtifactWaived, taskID)
