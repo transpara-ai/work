@@ -75,11 +75,14 @@ type TaskAssignedContent struct {
 func (c TaskAssignedContent) EventTypeName() string { return "work.task.assigned" }
 
 // TaskCompletedContent is emitted when a task is completed.
+// ArtifactRef points to the work.task.artifact or work.task.artifact.waived
+// event that satisfied the completion gate. Auto-populated by Complete().
 type TaskCompletedContent struct {
 	workContent
 	TaskID      types.EventID `json:"TaskID"`
 	CompletedBy types.ActorID `json:"CompletedBy"`
 	Summary     string        `json:"Summary,omitempty"`
+	ArtifactRef types.EventID `json:"ArtifactRef,omitempty"`
 }
 
 func (c TaskCompletedContent) EventTypeName() string { return "work.task.completed" }

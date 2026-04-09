@@ -275,25 +275,27 @@ func (ts *TaskStore) Complete(
 	causes []types.EventID,
 	convID types.ConversationID,
 ) error {
-	// --- Artifact gate ---
-	hasArtifact, err := ts.hasEventForTask(EventTypeTaskArtifact, taskID)
+	// --- Artifact gate (captures the event ID for ArtifactRef) ---
+	artifactRef, hasArtifact, err := ts.findEventForTask(EventTypeTaskArtifact, taskID)
 	if err != nil {
 		return fmt.Errorf("check artifacts: %w", err)
 	}
 	if !hasArtifact {
-		hasWaiver, err := ts.hasEventForTask(EventTypeTaskArtifactWaived, taskID)
+		waiverRef, hasWaiver, err := ts.findEventForTask(EventTypeTaskArtifactWaived, taskID)
 		if err != nil {
 			return fmt.Errorf("check waivers: %w", err)
 		}
 		if !hasWaiver {
 			return ErrArtifactRequired
 		}
+		artifactRef = waiverRef
 	}
 
 	content := TaskCompletedContent{
 		TaskID:      taskID,
 		CompletedBy: source,
 		Summary:     summary,
+		ArtifactRef: artifactRef,
 	}
 	ev, err := ts.factory.Create(EventTypeTaskCompleted, source, content, causes, convID, ts.store, ts.signer)
 	if err != nil {
@@ -845,27 +847,29 @@ func (ts *TaskStore) ListArtifacts(taskID types.EventID) ([]ArtifactEvent, error
 
 // HasWaiver returns true if a work.task.artifact.waived event exists for the task.
 func (ts *TaskStore) HasWaiver(taskID types.EventID) (bool, error) {
-	return ts.hasEventForTask(EventTypeTaskArtifactWaived, taskID)
+	_, found, err := ts.findEventForTask(EventTypeTaskArtifactWaived, taskID)
+	return found, err
 }
 
-// hasEventForTask returns true if at least one event of the given type
-// references the specified taskID.
-func (ts *TaskStore) hasEventForTask(eventType types.EventType, taskID types.EventID) (bool, error) {
+// findEventForTask returns the event ID and true if at least one event of
+// the given type references the specified taskID. Returns a zero EventID
+// and false if no matching event is found.
+func (ts *TaskStore) findEventForTask(eventType types.EventType, taskID types.EventID) (types.EventID, bool, error) {
 	page, err := ts.store.ByType(eventType, 1000, types.None[types.Cursor]())
 	if err != nil {
-		return false, fmt.Errorf("fetch %s events: %w", eventType.Value(), err)
+		return types.EventID{}, false, fmt.Errorf("fetch %s events: %w", eventType.Value(), err)
 	}
 	for _, ev := range page.Items() {
 		switch c := ev.Content().(type) {
 		case TaskArtifactContent:
 			if c.TaskID == taskID {
-				return true, nil
+				return ev.ID(), true, nil
 			}
 		case TaskArtifactWaivedContent:
 			if c.TaskID == taskID {
-				return true, nil
+				return ev.ID(), true, nil
 			}
 		}
 	}
-	return false, nil
+	return types.EventID{}, false, nil
 }

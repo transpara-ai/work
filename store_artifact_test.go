@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/lovyou-ai/eventgraph/go/pkg/types"
 	"github.com/lovyou-ai/work"
 )
 
@@ -238,6 +239,95 @@ func TestTaskStore_Complete_WithWaiver(t *testing.T) {
 	if status != work.StatusCompleted {
 		t.Errorf("status = %q; want %q", status, work.StatusCompleted)
 	}
+}
+
+// --- ArtifactRef verification ---
+
+func TestTaskStore_Complete_ArtifactRef_PointsToArtifact(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	task, err := ts.Create(testActor, "Task with artifact ref", "", causes, testConv)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := ts.AddArtifact(testActor, task.ID, "Output", "text/plain", "result", causes, testConv); err != nil {
+		t.Fatalf("AddArtifact: %v", err)
+	}
+
+	if err := ts.Complete(testActor, task.ID, "done", causes, testConv); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	// Find the completed event and check ArtifactRef.
+	completedPage, err := s.ByType(work.EventTypeTaskCompleted, 100, types.None[types.Cursor]())
+	if err != nil {
+		t.Fatalf("ByType: %v", err)
+	}
+	var found bool
+	for _, ev := range completedPage.Items() {
+		c, ok := ev.Content().(work.TaskCompletedContent)
+		if !ok || c.TaskID != task.ID {
+			continue
+		}
+		found = true
+		if c.ArtifactRef.IsZero() {
+			t.Fatal("ArtifactRef is zero; expected it to point to the artifact event")
+		}
+		// Verify the referenced event is actually a work.task.artifact.
+		artifactPage, err := s.ByType(work.EventTypeTaskArtifact, 100, types.None[types.Cursor]())
+		if err != nil {
+			t.Fatalf("ByType artifact: %v", err)
+		}
+		var refFound bool
+		for _, aev := range artifactPage.Items() {
+			if aev.ID() == c.ArtifactRef {
+				refFound = true
+				break
+			}
+		}
+		if !refFound {
+			t.Errorf("ArtifactRef %s does not match any work.task.artifact event", c.ArtifactRef.Value())
+		}
+	}
+	if !found {
+		t.Fatal("no completed event found for task")
+	}
+}
+
+func TestTaskStore_Complete_ArtifactRef_PointsToWaiver(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	task, err := ts.Create(testActor, "Waived task with ref", "", causes, testConv)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := ts.WaiveArtifact(testActor, task.ID, "operational", causes, testConv); err != nil {
+		t.Fatalf("WaiveArtifact: %v", err)
+	}
+
+	if err := ts.Complete(testActor, task.ID, "done", causes, testConv); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	completedPage, err := s.ByType(work.EventTypeTaskCompleted, 100, types.None[types.Cursor]())
+	if err != nil {
+		t.Fatalf("ByType: %v", err)
+	}
+	for _, ev := range completedPage.Items() {
+		c, ok := ev.Content().(work.TaskCompletedContent)
+		if !ok || c.TaskID != task.ID {
+			continue
+		}
+		if c.ArtifactRef.IsZero() {
+			t.Fatal("ArtifactRef is zero; expected it to point to the waiver event")
+		}
+		return
+	}
+	t.Fatal("no completed event found for task")
 }
 
 // --- batchStatus artifact/waiver fields ---
