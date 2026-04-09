@@ -31,6 +31,8 @@ var (
 	EventTypeTaskPrioritySet     = types.MustEventType("work.task.priority.set")
 	EventTypeTaskComment         = types.MustEventType("work.task.comment")
 	EventTypeTaskUnblocked       = types.MustEventType("work.task.unblocked")
+	EventTypeTaskArtifact        = types.MustEventType("work.task.artifact")
+	EventTypeTaskArtifactWaived  = types.MustEventType("work.task.artifact.waived")
 )
 
 // allWorkEventTypes returns all work event types for registration.
@@ -38,7 +40,7 @@ func allWorkEventTypes() []types.EventType {
 	return []types.EventType{
 		EventTypeTaskCreated, EventTypeTaskAssigned, EventTypeTaskCompleted,
 		EventTypeTaskDependencyAdded, EventTypeTaskPrioritySet, EventTypeTaskComment,
-		EventTypeTaskUnblocked,
+		EventTypeTaskUnblocked, EventTypeTaskArtifact, EventTypeTaskArtifactWaived,
 	}
 }
 
@@ -123,6 +125,30 @@ type TaskUnblockedContent struct {
 
 func (c TaskUnblockedContent) EventTypeName() string { return "work.task.unblocked" }
 
+// TaskArtifactContent is emitted when an agent attaches a deliverable to a task.
+// Multiple artifacts per task are expected. Must be appended before completion.
+type TaskArtifactContent struct {
+	workContent
+	TaskID    types.EventID `json:"TaskID"`
+	Label     string        `json:"Label"`
+	MediaType string        `json:"MediaType"`
+	Body      string        `json:"Body"`
+	CreatedBy types.ActorID `json:"CreatedBy"`
+}
+
+func (c TaskArtifactContent) EventTypeName() string { return "work.task.artifact" }
+
+// TaskArtifactWaivedContent is emitted to explicitly exempt a task from the
+// artifact requirement. The completion gate accepts either an artifact or a waiver.
+type TaskArtifactWaivedContent struct {
+	workContent
+	TaskID   types.EventID `json:"TaskID"`
+	Reason   string        `json:"Reason"`
+	WaivedBy types.ActorID `json:"WaivedBy"`
+}
+
+func (c TaskArtifactWaivedContent) EventTypeName() string { return "work.task.artifact.waived" }
+
 // RegisterEventTypes registers work content unmarshalers for Postgres
 // deserialization. Call this before querying work events from the store.
 func RegisterEventTypes() {
@@ -133,6 +159,8 @@ func RegisterEventTypes() {
 	event.RegisterContentUnmarshaler("work.task.priority.set", event.Unmarshal[TaskPrioritySetContent])
 	event.RegisterContentUnmarshaler("work.task.comment", event.Unmarshal[CommentContent])
 	event.RegisterContentUnmarshaler("work.task.unblocked", event.Unmarshal[TaskUnblockedContent])
+	event.RegisterContentUnmarshaler("work.task.artifact", event.Unmarshal[TaskArtifactContent])
+	event.RegisterContentUnmarshaler("work.task.artifact.waived", event.Unmarshal[TaskArtifactWaivedContent])
 }
 
 // RegisterWithRegistry registers all work event types with the given registry

@@ -1,6 +1,7 @@
 package work
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -8,6 +9,10 @@ import (
 	"github.com/lovyou-ai/eventgraph/go/pkg/store"
 	"github.com/lovyou-ai/eventgraph/go/pkg/types"
 )
+
+// ErrArtifactRequired is returned by Complete when the task has neither an
+// artifact nor an artifact waiver. Callers can check with errors.Is.
+var ErrArtifactRequired = errors.New("task has no artifacts; attach an artifact or waive the requirement")
 
 // TaskStatus represents the current lifecycle state of a task.
 type TaskStatus string
@@ -32,12 +37,26 @@ type Task struct {
 }
 
 // TaskSummary extends Task with computed state fields for efficient list views.
-// Status, Assignee, and Blocked are populated by ListSummaries using batch store scans.
+// Status, Assignee, Blocked, ArtifactCount, and Waived are populated by
+// ListSummaries using batch store scans.
 type TaskSummary struct {
 	Task
-	Status   TaskStatus
-	Assignee types.ActorID // zero value if unassigned
-	Blocked  bool
+	Status        TaskStatus
+	Assignee      types.ActorID // zero value if unassigned
+	Blocked       bool
+	ArtifactCount int
+	Waived        bool
+}
+
+// ArtifactEvent holds the data from a work.task.artifact event.
+type ArtifactEvent struct {
+	ID        types.EventID
+	TaskID    types.EventID
+	Label     string
+	MediaType string
+	Body      string
+	CreatedBy types.ActorID
+	Timestamp time.Time
 }
 
 // CommentEvent holds the data from a work.task.comment event.
@@ -245,6 +264,10 @@ func (ts *TaskStore) Assign(
 
 // Complete records a work.task.completed event on the graph.
 // source is the actor completing the task (typically the assignee).
+//
+// The artifact gate requires at least one work.task.artifact or
+// work.task.artifact.waived event for the task. If neither exists,
+// Complete returns ErrArtifactRequired.
 func (ts *TaskStore) Complete(
 	source types.ActorID,
 	taskID types.EventID,
@@ -252,6 +275,21 @@ func (ts *TaskStore) Complete(
 	causes []types.EventID,
 	convID types.ConversationID,
 ) error {
+	// --- Artifact gate ---
+	hasArtifact, err := ts.hasEventForTask(EventTypeTaskArtifact, taskID)
+	if err != nil {
+		return fmt.Errorf("check artifacts: %w", err)
+	}
+	if !hasArtifact {
+		hasWaiver, err := ts.hasEventForTask(EventTypeTaskArtifactWaived, taskID)
+		if err != nil {
+			return fmt.Errorf("check waivers: %w", err)
+		}
+		if !hasWaiver {
+			return ErrArtifactRequired
+		}
+	}
+
 	content := TaskCompletedContent{
 		TaskID:      taskID,
 		CompletedBy: source,
@@ -619,6 +657,30 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 		}
 	}
 
+	// Scan 5: artifact events → count per task.
+	artifactPage, err := ts.store.ByType(EventTypeTaskArtifact, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return nil, fmt.Errorf("fetch artifact events: %w", err)
+	}
+	artifactCount := make(map[types.EventID]int)
+	for _, ev := range artifactPage.Items() {
+		if c, ok := ev.Content().(TaskArtifactContent); ok {
+			artifactCount[c.TaskID]++
+		}
+	}
+
+	// Scan 6: waiver events → waived set.
+	waiverPage, err := ts.store.ByType(EventTypeTaskArtifactWaived, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return nil, fmt.Errorf("fetch waiver events: %w", err)
+	}
+	waivedMap := make(map[types.EventID]bool)
+	for _, ev := range waiverPage.Items() {
+		if c, ok := ev.Content().(TaskArtifactWaivedContent); ok {
+			waivedMap[c.TaskID] = true
+		}
+	}
+
 	summaries := make([]TaskSummary, 0, len(tasks))
 	for _, t := range tasks {
 		status := StatusPending
@@ -628,10 +690,12 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 			status = StatusAssigned
 		}
 		summaries = append(summaries, TaskSummary{
-			Task:     t,
-			Status:   status,
-			Assignee: assigneeMap[t.ID],
-			Blocked:  blockedMap[t.ID] && !unblockedMap[t.ID],
+			Task:          t,
+			Status:        status,
+			Assignee:      assigneeMap[t.ID],
+			Blocked:       blockedMap[t.ID] && !unblockedMap[t.ID],
+			ArtifactCount: artifactCount[t.ID],
+			Waived:        waivedMap[t.ID],
 		})
 	}
 	return summaries, nil
@@ -695,4 +759,113 @@ func (ts *TaskStore) ListComments(taskID types.EventID) ([]CommentEvent, error) 
 		})
 	}
 	return comments, nil
+}
+
+// AddArtifact records a work.task.artifact event on the graph.
+func (ts *TaskStore) AddArtifact(
+	source types.ActorID,
+	taskID types.EventID,
+	label, mediaType, body string,
+	causes []types.EventID,
+	convID types.ConversationID,
+) error {
+	if label == "" {
+		return fmt.Errorf("label is required")
+	}
+	if mediaType == "" {
+		mediaType = "text/markdown"
+	}
+	content := TaskArtifactContent{
+		TaskID:    taskID,
+		Label:     label,
+		MediaType: mediaType,
+		Body:      body,
+		CreatedBy: source,
+	}
+	ev, err := ts.factory.Create(EventTypeTaskArtifact, source, content, causes, convID, ts.store, ts.signer)
+	if err != nil {
+		return fmt.Errorf("create artifact event: %w", err)
+	}
+	if _, err := ts.store.Append(ev); err != nil {
+		return fmt.Errorf("append artifact event: %w", err)
+	}
+	return nil
+}
+
+// WaiveArtifact records a work.task.artifact.waived event on the graph.
+func (ts *TaskStore) WaiveArtifact(
+	source types.ActorID,
+	taskID types.EventID,
+	reason string,
+	causes []types.EventID,
+	convID types.ConversationID,
+) error {
+	if reason == "" {
+		return fmt.Errorf("reason is required")
+	}
+	content := TaskArtifactWaivedContent{
+		TaskID:   taskID,
+		Reason:   reason,
+		WaivedBy: source,
+	}
+	ev, err := ts.factory.Create(EventTypeTaskArtifactWaived, source, content, causes, convID, ts.store, ts.signer)
+	if err != nil {
+		return fmt.Errorf("create waiver event: %w", err)
+	}
+	if _, err := ts.store.Append(ev); err != nil {
+		return fmt.Errorf("append waiver event: %w", err)
+	}
+	return nil
+}
+
+// ListArtifacts returns all artifacts for the given task in chronological order.
+func (ts *TaskStore) ListArtifacts(taskID types.EventID) ([]ArtifactEvent, error) {
+	page, err := ts.store.ByType(EventTypeTaskArtifact, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return nil, fmt.Errorf("fetch artifact events: %w", err)
+	}
+	var artifacts []ArtifactEvent
+	for _, ev := range page.Items() {
+		c, ok := ev.Content().(TaskArtifactContent)
+		if !ok || c.TaskID != taskID {
+			continue
+		}
+		artifacts = append(artifacts, ArtifactEvent{
+			ID:        ev.ID(),
+			TaskID:    c.TaskID,
+			Label:     c.Label,
+			MediaType: c.MediaType,
+			Body:      c.Body,
+			CreatedBy: c.CreatedBy,
+			Timestamp: ev.Timestamp().Value(),
+		})
+	}
+	return artifacts, nil
+}
+
+// HasWaiver returns true if a work.task.artifact.waived event exists for the task.
+func (ts *TaskStore) HasWaiver(taskID types.EventID) (bool, error) {
+	return ts.hasEventForTask(EventTypeTaskArtifactWaived, taskID)
+}
+
+// hasEventForTask returns true if at least one event of the given type
+// references the specified taskID.
+func (ts *TaskStore) hasEventForTask(eventType types.EventType, taskID types.EventID) (bool, error) {
+	page, err := ts.store.ByType(eventType, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return false, fmt.Errorf("fetch %s events: %w", eventType.Value(), err)
+	}
+	for _, ev := range page.Items() {
+		switch c := ev.Content().(type) {
+		case TaskArtifactContent:
+			if c.TaskID == taskID {
+				return true, nil
+			}
+		case TaskArtifactWaivedContent:
+			if c.TaskID == taskID {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
