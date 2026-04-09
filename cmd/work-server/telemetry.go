@@ -70,6 +70,13 @@ func isMissingTable(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "42P01"
 }
 
+// isMissingColumn returns true when err is a PostgreSQL "undefined column" (42703) error.
+// Used to gracefully handle schema version skew during rolling deploys.
+func isMissingColumn(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "42703"
+}
+
 // telemetryUnavailable writes the standard 503 when tables are not yet initialised.
 func telemetryUnavailable(w http.ResponseWriter) {
 	writeJSON(w, http.StatusServiceUnavailable, map[string]string{

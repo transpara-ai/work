@@ -75,7 +75,25 @@ const rolesQuery = `
 	    CASE tier WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 WHEN 'D' THEN 4 END,
 	    role`
 
+// rolesQueryFallback omits origin for backward compat with pre-migration schemas.
+const rolesQueryFallback = `
+	SELECT role, name, tier, purpose, model, can_operate, max_iterations,
+	       watch_patterns, phase, graduated_at, status, has_prompt,
+	       has_persona, category, depends_on, updated_at
+	FROM telemetry_role_definitions
+	ORDER BY
+	    CASE tier WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 WHEN 'D' THEN 4 END,
+	    role`
+
 func (sv *server) queryRoles(ctx context.Context) ([]telRole, error) {
+	roles, err := sv.queryRolesWithOrigin(ctx)
+	if err != nil && isMissingColumn(err) {
+		return sv.queryRolesFallback(ctx)
+	}
+	return roles, err
+}
+
+func (sv *server) queryRolesWithOrigin(ctx context.Context) ([]telRole, error) {
 	rows, err := sv.pool.Query(ctx, rolesQuery)
 	if err != nil {
 		return nil, err
@@ -90,6 +108,29 @@ func (sv *server) queryRoles(ctx context.Context) ([]telRole, error) {
 			&r.CanOperate, &r.MaxIterations, &r.WatchPatterns,
 			&r.Phase, &r.GraduatedAt, &r.Status, &r.HasPrompt,
 			&r.HasPersona, &r.Category, &r.DependsOn, &r.Origin, &r.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		roles = append(roles, r)
+	}
+	return roles, rows.Err()
+}
+
+func (sv *server) queryRolesFallback(ctx context.Context) ([]telRole, error) {
+	rows, err := sv.pool.Query(ctx, rolesQueryFallback)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var roles []telRole
+	for rows.Next() {
+		var r telRole
+		if err := rows.Scan(
+			&r.Role, &r.Name, &r.Tier, &r.Purpose, &r.Model,
+			&r.CanOperate, &r.MaxIterations, &r.WatchPatterns,
+			&r.Phase, &r.GraduatedAt, &r.Status, &r.HasPrompt,
+			&r.HasPersona, &r.Category, &r.DependsOn, &r.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -248,17 +289,34 @@ func (sv *server) telemetryRoleDetail(w http.ResponseWriter, r *http.Request) {
 		FROM telemetry_role_definitions
 		WHERE role = $1`
 
-	rows, err := sv.pool.Query(ctx, singleQ, name)
+	const singleQFallback = `
+		SELECT role, name, tier, purpose, model, can_operate, max_iterations,
+		       watch_patterns, phase, graduated_at, status, has_prompt,
+		       has_persona, category, depends_on, updated_at
+		FROM telemetry_role_definitions
+		WHERE role = $1`
+
+	// Try with origin; fall back to without for pre-migration schemas.
+	q := singleQ
+	withOrigin := true
+	rows, err := sv.pool.Query(ctx, q, name)
 	if err != nil {
-		if isMissingTable(err) {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-				"error":  "role definitions not available",
-				"detail": "telemetry_role_definitions table not initialized",
-			})
+		if isMissingColumn(err) {
+			q = singleQFallback
+			withOrigin = false
+			rows, err = sv.pool.Query(ctx, q, name)
+		}
+		if err != nil {
+			if isMissingTable(err) {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+					"error":  "role definitions not available",
+					"detail": "telemetry_role_definitions table not initialized",
+				})
+				return
+			}
+			telemetryDBErr(w, err)
 			return
 		}
-		telemetryDBErr(w, err)
-		return
 	}
 	defer rows.Close()
 
@@ -272,13 +330,24 @@ func (sv *server) telemetryRoleDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var role telRole
-	if err := rows.Scan(
-		&role.Role, &role.Name, &role.Tier, &role.Purpose, &role.Model,
-		&role.CanOperate, &role.MaxIterations, &role.WatchPatterns,
-		&role.Phase, &role.GraduatedAt, &role.Status, &role.HasPrompt,
-		&role.HasPersona, &role.Category, &role.DependsOn, &role.Origin, &role.UpdatedAt,
-	); err != nil {
-		telemetryDBErr(w, err)
+	var scanErr error
+	if withOrigin {
+		scanErr = rows.Scan(
+			&role.Role, &role.Name, &role.Tier, &role.Purpose, &role.Model,
+			&role.CanOperate, &role.MaxIterations, &role.WatchPatterns,
+			&role.Phase, &role.GraduatedAt, &role.Status, &role.HasPrompt,
+			&role.HasPersona, &role.Category, &role.DependsOn, &role.Origin, &role.UpdatedAt,
+		)
+	} else {
+		scanErr = rows.Scan(
+			&role.Role, &role.Name, &role.Tier, &role.Purpose, &role.Model,
+			&role.CanOperate, &role.MaxIterations, &role.WatchPatterns,
+			&role.Phase, &role.GraduatedAt, &role.Status, &role.HasPrompt,
+			&role.HasPersona, &role.Category, &role.DependsOn, &role.UpdatedAt,
+		)
+	}
+	if scanErr != nil {
+		telemetryDBErr(w, scanErr)
 		return
 	}
 
