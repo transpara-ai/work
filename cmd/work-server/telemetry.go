@@ -45,12 +45,13 @@ type telHiveSnapshot struct {
 
 // telPhase is the JSON shape for an expansion phase.
 type telPhase struct {
-	Phase       int        `json:"phase"`
-	Label       string     `json:"label"`
-	Status      string     `json:"status"`
-	StartedAt   *time.Time `json:"started_at"`
-	CompletedAt *time.Time `json:"completed_at"`
-	Notes       *string    `json:"notes"`
+	Phase        int        `json:"phase"`
+	Label        string     `json:"label"`
+	Status       string     `json:"status"`
+	StartedAt    *time.Time `json:"started_at"`
+	CompletedAt  *time.Time `json:"completed_at"`
+	Notes        *string    `json:"notes"`
+	ExitCriteria *string    `json:"exit_criteria"`
 }
 
 // telEvent is the JSON shape for a single event stream entry.
@@ -135,7 +136,7 @@ func (sv *server) queryAgentSnapshots(ctx context.Context) ([]telAgentSnapshot, 
 }
 
 func (sv *server) queryPhases(ctx context.Context) ([]telPhase, error) {
-	const q = `SELECT phase, label, status, started_at, completed_at, notes
+	const q = `SELECT phase, label, status, started_at, completed_at, notes, exit_criteria
 		FROM telemetry_phases ORDER BY phase ASC`
 
 	rows, err := sv.pool.Query(ctx, q)
@@ -147,7 +148,7 @@ func (sv *server) queryPhases(ctx context.Context) ([]telPhase, error) {
 	var phases []telPhase
 	for rows.Next() {
 		var p telPhase
-		if err := rows.Scan(&p.Phase, &p.Label, &p.Status, &p.StartedAt, &p.CompletedAt, &p.Notes); err != nil {
+		if err := rows.Scan(&p.Phase, &p.Label, &p.Status, &p.StartedAt, &p.CompletedAt, &p.Notes, &p.ExitCriteria); err != nil {
 			return nil, err
 		}
 		phases = append(phases, p)
@@ -598,7 +599,7 @@ func (sv *server) updatePhase(w http.ResponseWriter, r *http.Request) {
 			completed_at = CASE WHEN $2 = 'complete' THEN now() ELSE NULL END,
 			notes        = CASE WHEN $3 <> '' THEN $3 ELSE notes END
 		WHERE phase = $1
-		RETURNING phase, label, status, started_at, completed_at, notes`
+		RETURNING phase, label, status, started_at, completed_at, notes, exit_criteria`
 
 	// Writes get a longer timeout than reads — a phase UPDATE under advisory
 	// lock contention may legitimately take longer, and a mid-write timeout
@@ -627,7 +628,7 @@ func (sv *server) updatePhase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var p telPhase
-	if err := rows.Scan(&p.Phase, &p.Label, &p.Status, &p.StartedAt, &p.CompletedAt, &p.Notes); err != nil {
+	if err := rows.Scan(&p.Phase, &p.Label, &p.Status, &p.StartedAt, &p.CompletedAt, &p.Notes, &p.ExitCriteria); err != nil {
 		telemetryDBErr(w, err)
 		return
 	}
