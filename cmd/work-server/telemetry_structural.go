@@ -25,6 +25,7 @@ type telRole struct {
 	HasPersona    *bool     `json:"has_persona"`
 	Category      *string   `json:"category"`
 	DependsOn     []string  `json:"depends_on"`
+	Origin        *string   `json:"origin"`
 	UpdatedAt     *time.Time `json:"updated_at"`
 }
 
@@ -68,7 +69,7 @@ type telPhaseAgent struct {
 const rolesQuery = `
 	SELECT role, name, tier, purpose, model, can_operate, max_iterations,
 	       watch_patterns, phase, graduated_at, status, has_prompt,
-	       has_persona, category, depends_on, updated_at
+	       has_persona, category, depends_on, origin, updated_at
 	FROM telemetry_role_definitions
 	ORDER BY
 	    CASE tier WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 WHEN 'D' THEN 4 END,
@@ -88,7 +89,7 @@ func (sv *server) queryRoles(ctx context.Context) ([]telRole, error) {
 			&r.Role, &r.Name, &r.Tier, &r.Purpose, &r.Model,
 			&r.CanOperate, &r.MaxIterations, &r.WatchPatterns,
 			&r.Phase, &r.GraduatedAt, &r.Status, &r.HasPrompt,
-			&r.HasPersona, &r.Category, &r.DependsOn, &r.UpdatedAt,
+			&r.HasPersona, &r.Category, &r.DependsOn, &r.Origin, &r.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -243,7 +244,7 @@ func (sv *server) telemetryRoleDetail(w http.ResponseWriter, r *http.Request) {
 	const singleQ = `
 		SELECT role, name, tier, purpose, model, can_operate, max_iterations,
 		       watch_patterns, phase, graduated_at, status, has_prompt,
-		       has_persona, category, depends_on, updated_at
+		       has_persona, category, depends_on, origin, updated_at
 		FROM telemetry_role_definitions
 		WHERE role = $1`
 
@@ -275,7 +276,7 @@ func (sv *server) telemetryRoleDetail(w http.ResponseWriter, r *http.Request) {
 		&role.Role, &role.Name, &role.Tier, &role.Purpose, &role.Model,
 		&role.CanOperate, &role.MaxIterations, &role.WatchPatterns,
 		&role.Phase, &role.GraduatedAt, &role.Status, &role.HasPrompt,
-		&role.HasPersona, &role.Category, &role.DependsOn, &role.UpdatedAt,
+		&role.HasPersona, &role.Category, &role.DependsOn, &role.Origin, &role.UpdatedAt,
 	); err != nil {
 		telemetryDBErr(w, err)
 		return
