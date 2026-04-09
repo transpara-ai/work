@@ -290,10 +290,56 @@ func TestTaskStore_Complete_ArtifactRef_PointsToArtifact(t *testing.T) {
 		if !refFound {
 			t.Errorf("ArtifactRef %s does not match any work.task.artifact event", c.ArtifactRef.Value())
 		}
+
+		// Verify GetArtifactBody returns the artifact body via the ref.
+		body, ok := ts.GetArtifactBody(c.ArtifactRef)
+		if !ok {
+			t.Fatal("GetArtifactBody returned false for valid artifact ref")
+		}
+		if body != "result" {
+			t.Errorf("GetArtifactBody = %q, want %q", body, "result")
+		}
 	}
 	if !found {
 		t.Fatal("no completed event found for task")
 	}
+}
+
+func TestTaskStore_GetArtifactBody_WaiverReturnsFalse(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	task, err := ts.Create(testActor, "Waived task", "", causes, testConv)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := ts.WaiveArtifact(testActor, task.ID, "operational", causes, testConv); err != nil {
+		t.Fatalf("WaiveArtifact: %v", err)
+	}
+
+	if err := ts.Complete(testActor, task.ID, "done", causes, testConv); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	// ArtifactRef should point to the waiver.
+	completedPage, err := s.ByType(work.EventTypeTaskCompleted, 100, types.None[types.Cursor]())
+	if err != nil {
+		t.Fatalf("ByType: %v", err)
+	}
+	for _, ev := range completedPage.Items() {
+		c, ok := ev.Content().(work.TaskCompletedContent)
+		if !ok || c.TaskID != task.ID {
+			continue
+		}
+		// GetArtifactBody should return false for a waiver event.
+		_, ok = ts.GetArtifactBody(c.ArtifactRef)
+		if ok {
+			t.Fatal("GetArtifactBody returned true for a waiver ref; expected false")
+		}
+		return
+	}
+	t.Fatal("no completed event found")
 }
 
 func TestTaskStore_Complete_ArtifactRef_PointsToWaiver(t *testing.T) {

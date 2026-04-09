@@ -846,20 +846,18 @@ func (ts *TaskStore) ListArtifacts(taskID types.EventID) ([]ArtifactEvent, error
 }
 
 // GetArtifactBody returns the body of a work.task.artifact event by its event ID.
-// Returns empty string if not found.
-func (ts *TaskStore) GetArtifactBody(artifactID types.EventID) string {
-	page, err := ts.store.ByType(EventTypeTaskArtifact, 1000, types.None[types.Cursor]())
+// Returns the body and true if found, or empty string and false if not found or
+// the event is not a TaskArtifactContent (e.g., it's a waiver).
+func (ts *TaskStore) GetArtifactBody(artifactID types.EventID) (string, bool) {
+	ev, err := ts.store.Get(artifactID)
 	if err != nil {
-		return ""
+		return "", false
 	}
-	for _, ev := range page.Items() {
-		if ev.ID() == artifactID {
-			if c, ok := ev.Content().(TaskArtifactContent); ok {
-				return c.Body
-			}
-		}
+	c, ok := ev.Content().(TaskArtifactContent)
+	if !ok {
+		return "", false
 	}
-	return ""
+	return c.Body, true
 }
 
 // HasWaiver returns true if a work.task.artifact.waived event exists for the task.
@@ -870,7 +868,11 @@ func (ts *TaskStore) HasWaiver(taskID types.EventID) (bool, error) {
 
 // findEventForTask returns the event ID and true if at least one event of
 // the given type references the specified taskID. Returns a zero EventID
-// and false if no matching event is found.
+// and false if no matching event is found. When multiple events match
+// (e.g., multiple artifacts per task), returns the first found — iteration
+// order depends on the store implementation. This is intentional: any
+// artifact satisfies the gate, and ArtifactRef is a convenience pointer
+// not a completeness guarantee.
 func (ts *TaskStore) findEventForTask(eventType types.EventType, taskID types.EventID) (types.EventID, bool, error) {
 	page, err := ts.store.ByType(eventType, 1000, types.None[types.Cursor]())
 	if err != nil {
