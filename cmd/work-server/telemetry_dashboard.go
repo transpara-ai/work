@@ -851,6 +851,9 @@ body {
   // ── CONFIGURATION ──────────────────────────────────
   var isUserScrolled = false;
   var lastSuccess    = null;
+  var currentWindow  = "now";   // "now" | "1h" | "24h"
+  var pausedAt       = null;    // timestamp when historical view was activated
+  var lastAgents     = [];      // cached for window switching
 
   document.getElementById("dashboard").style.display = "flex";
   document.getElementById("topbar-api").textContent = window.location.host;
@@ -869,7 +872,11 @@ body {
         lastSuccess = Date.now();
         setConnStatus("connected", "Live");
         renderPhases(data.phases || []);
-        renderAgents(data.agents || []);
+        // Only update agents in "now" mode — historical views are frozen
+        if (currentWindow === "now") {
+          lastAgents = data.agents || [];
+          renderAgents(lastAgents);
+        }
         renderHive(data.hive || null);
         renderEvents(data.recent_events || []);
         fetchTasks();
@@ -891,6 +898,44 @@ body {
 
   connectSSE();
   setInterval(tickClock, 1000);
+
+  // ── TIME WINDOW ────────────────────────────────────
+  function setTimeWindow(win) {
+    currentWindow = win;
+
+    var btns = document.querySelectorAll(".time-window-btn");
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.toggle("active", btns[i].getAttribute("data-window") === win);
+    }
+
+    var banner = document.getElementById("paused-banner");
+    var bannerText = document.getElementById("paused-text");
+
+    if (win === "now") {
+      pausedAt = null;
+      banner.classList.remove("visible");
+      if (lastAgents.length) renderAgents(lastAgents);
+      return;
+    }
+
+    pausedAt = new Date();
+    var label = win === "1h" ? "last hour" : "last 24 hours";
+    bannerText.textContent = "Viewing " + label + " \u2014 paused at " + pausedAt.toLocaleTimeString();
+    banner.classList.add("visible");
+
+    fetch("/telemetry/agents/history?window=" + win)
+      .then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (data) {
+        renderHistoricalAgents(data.agents || []);
+      })
+      .catch(function (err) {
+        console.error("History fetch failed:", err);
+      });
+  }
+  window.setTimeWindow = setTimeWindow;
 
   // ── CLOCK ──────────────────────────────────────────
   function tickClock() {
