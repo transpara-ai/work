@@ -1022,7 +1022,7 @@ body {
     var count = document.getElementById("agent-count");
 
     if (!agents.length) {
-      grid.appendChild(el("div", { cls: "data-empty", text: "No agent data — hive may be offline" }));
+      grid.appendChild(el("div", { cls: "data-empty", text: "No agent data \u2014 hive may be offline" }));
       count.textContent = "";
       return;
     }
@@ -1036,11 +1036,24 @@ body {
     });
 
     sorted.forEach(function (a) {
-      grid.appendChild(buildAgentCard(a));
+      grid.appendChild(buildAgentCard(a, classifyAgent(a)));
     });
   }
 
-  function buildAgentCard(a) {
+  // Classify an agent's condition for "now" mode based on last_event_at.
+  function classifyAgent(a) {
+    var state = (a.state || "").toLowerCase();
+    var terminal = { retired: 1, suspended: 1, idle: 1 };
+    if (terminal[state]) return "terminated";
+
+    if (!a.last_event_at) return "active";
+    var ageSec = (Date.now() - new Date(a.last_event_at).getTime()) / 1000;
+    if (ageSec > 120) return "stuck";
+    if (ageSec > 30)  return "stale";
+    return "active";
+  }
+
+  function buildAgentCard(a, condition) {
     var state      = (a.state || "unknown").toLowerCase();
     var model      = shortModel(a.model || "");
     var iter       = a.iteration || 0;
@@ -1048,29 +1061,47 @@ body {
     var pct        = Math.min(100, Math.round((iter / maxIter) * 100));
     var fillCls    = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "";
     var cost       = fmtCost(a.cost_usd);
-    var trust      = a.trust_score != null ? Math.round(a.trust_score * 100) + "%" : "—";
+    var trust      = a.trust_score != null ? Math.round(a.trust_score * 100) + "%" : "\u2014";
     var errors     = a.errors || 0;
     var hasErrors  = errors > 0;
     var lastEvType = a.last_event_type || "";
     var lastEvAt   = a.last_event_at ? relTime(a.last_event_at) : "";
 
-    var card = el("div", { cls: "agent-card" + (hasErrors ? " has-errors" : "") });
+    var condCls = condition ? condition + "-agent" : "";
+    var card = el("div", { cls: "agent-card " + condCls + (hasErrors ? " has-errors" : "") });
     card.addEventListener("click", function () { card.classList.toggle("expanded"); });
 
     // Head
     var head = el("div", { cls: "agent-card-head" });
     head.appendChild(el("span", { cls: "agent-role", text: a.role || "unknown" }));
     head.appendChild(el("span", { cls: "badge badge-" + state, text: a.state || "Unknown" }));
-    if (model) {
-      var mb = el("span", { cls: "badge badge-model", text: model });
-      head.appendChild(mb);
+    if (model) head.appendChild(el("span", { cls: "badge badge-model", text: model }));
+
+    // Duration indicator in head
+    if (condition === "stuck" && a.last_event_at) {
+      var stuckSec = Math.floor((Date.now() - new Date(a.last_event_at).getTime()) / 1000);
+      head.appendChild(el("span", { cls: "agent-duration", text: "stuck " + fmtDuration(stuckSec) }));
+    } else if (condition === "stale" && a.last_event_at) {
+      var staleSec = Math.floor((Date.now() - new Date(a.last_event_at).getTime()) / 1000);
+      head.appendChild(el("span", { cls: "agent-duration", text: "stale " + staleSec + "s" }));
+    } else if (condition === "active" && a.last_event_at) {
+      head.appendChild(el("span", { cls: "agent-duration", text: "running" }));
     }
     card.appendChild(head);
+
+    // State timeline bar (now mode: single segment for current state)
+    if (a.last_event_at) {
+      var timeline = el("div", { cls: "state-timeline" });
+      var seg = el("div", { cls: "seg seg-" + state });
+      seg.style.flex = "1";
+      timeline.appendChild(seg);
+      card.appendChild(timeline);
+    }
 
     // Body
     var body = el("div", { cls: "agent-card-body" });
 
-    // Iter row with progress bar
+    // Iter row
     var iterRow = el("div", { cls: "agent-row" });
     iterRow.appendChild(el("span", { cls: "agent-label", text: "Iter" }));
     var bar  = el("div", { cls: "progress-bar" });
@@ -1081,7 +1112,7 @@ body {
     iterRow.appendChild(el("span", { cls: "agent-val", text: iter + "/" + maxIter }));
     body.appendChild(iterRow);
 
-    // Cost / Trust row
+    // Cost / Trust
     var costRow = el("div", { cls: "agent-row" });
     costRow.appendChild(el("span", { cls: "agent-label", text: "Cost" }));
     costRow.appendChild(el("span", { cls: "agent-val", text: cost }));
@@ -1091,16 +1122,12 @@ body {
     costRow.appendChild(el("span", { cls: "agent-val", text: trust }));
     body.appendChild(costRow);
 
-    // Last event row
+    // Last event
     if (lastEvType || lastEvAt) {
       var evRow = el("div", { cls: "agent-event" });
-      if (lastEvType) {
-        var pill = el("span", { cls: "event-type-pill " + evtClass(lastEvType), text: lastEvType });
-        evRow.appendChild(pill);
-      }
+      if (lastEvType) evRow.appendChild(el("span", { cls: "event-type-pill " + evtClass(lastEvType), text: lastEvType }));
       if (lastEvAt) {
-        var dim = el("span", { text: lastEvAt });
-        dim.style.color = "var(--text-dim)";
+        var dim = el("span", { text: lastEvAt }); dim.style.color = "var(--text-dim)";
         evRow.appendChild(dim);
       }
       if (hasErrors) {
@@ -1115,18 +1142,13 @@ body {
 
     // Expand section
     var expand = el("div", { cls: "agent-expand" });
-
-    var msgLabel = el("div", { cls: "expand-label", text: "Last Message" });
-    var msgPre   = el("pre", { cls: "last-message", text: a.last_message || "(no message recorded)" });
-    expand.appendChild(msgLabel);
-    expand.appendChild(msgPre);
+    expand.appendChild(el("div", { cls: "expand-label", text: "Last Message" }));
+    expand.appendChild(el("pre", { cls: "last-message", text: a.last_message || "(no message recorded)" }));
 
     var meta = el("div", { cls: "expand-meta" });
-
     var tokItem = el("div", { cls: "expand-meta-item" });
     tokItem.appendChild(document.createTextNode("Tokens "));
-    var tokStrong = el("strong", { text: (a.tokens_used || 0).toLocaleString() });
-    tokItem.appendChild(tokStrong);
+    tokItem.appendChild(el("strong", { text: (a.tokens_used || 0).toLocaleString() }));
     meta.appendChild(tokItem);
 
     var errItem = el("div", { cls: "expand-meta-item" });
@@ -1138,7 +1160,7 @@ body {
 
     if (a.actor_id) {
       var idItem = el("div", { cls: "expand-meta-item",
-        text: a.actor_id.slice(0, 20) + (a.actor_id.length > 20 ? "…" : "") });
+        text: a.actor_id.slice(0, 20) + (a.actor_id.length > 20 ? "\u2026" : "") });
       idItem.style.cssText = "font-family:var(--mono);font-size:10px;color:var(--text-dim)";
       meta.appendChild(idItem);
     }
@@ -1146,6 +1168,16 @@ body {
     expand.appendChild(meta);
     card.appendChild(expand);
     return card;
+  }
+
+  function fmtDuration(totalSec) {
+    if (totalSec < 60) return totalSec + "s";
+    var m = Math.floor(totalSec / 60);
+    var s = totalSec % 60;
+    if (m < 60) return m + "m " + s + "s";
+    var h = Math.floor(m / 60);
+    m = m % 60;
+    return h + "h " + m + "m";
   }
 
   // ── HIVE HEALTH ────────────────────────────────────
