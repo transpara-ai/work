@@ -102,7 +102,7 @@ func buildAgentHistories(rows []snapshotRow) []telAgentHistory {
 
 		gap := r.RecordedAt.Sub(acc.prevAt)
 
-		if gap > stuckThreshold && !terminalStates[acc.curState] {
+		if gap > stuckThreshold && !terminalStates[acc.curState] && !terminalStates[r.State] {
 			acc.spans = append(acc.spans, telStateSpan{
 				State:     acc.curState,
 				EnteredAt: acc.curStart,
@@ -181,7 +181,7 @@ func (sv *server) queryAgentHistory(ctx context.Context, window time.Duration) (
 		WHERE recorded_at > now() - $1::interval
 		ORDER BY actor_id, recorded_at ASC`
 
-	rows, err := sv.pool.Query(ctx, q, window.String())
+	rows, err := sv.pool.Query(ctx, q, window)
 	if err != nil {
 		return nil, err
 	}

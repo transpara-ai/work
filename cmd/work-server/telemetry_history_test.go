@@ -153,6 +153,29 @@ func TestBuildAgentHistories(t *testing.T) {
 			},
 		},
 		{
+			name: "gap before terminal transition is not stuck",
+			rows: []snapshotRow{
+				mkRow("a1", "builder", "processing", 0),
+				mkRow("a1", "builder", "processing", 10),
+				// 150s gap (> 2min) but next state is retired — legitimate shutdown
+				mkRow("a1", "builder", "retired", 160),
+			},
+			wantAgents: 1,
+			check: func(t *testing.T, result []telAgentHistory) {
+				h := result[0]
+				// Should be processing + retired, NO stuck span
+				if len(h.States) != 2 {
+					t.Fatalf("states len = %d, want 2", len(h.States))
+				}
+				if h.States[0].State != "processing" {
+					t.Errorf("states[0] = %q, want processing", h.States[0].State)
+				}
+				if h.States[1].State != "retired" {
+					t.Errorf("states[1] = %q, want retired", h.States[1].State)
+				}
+			},
+		},
+		{
 			name: "single snapshot - just spawned",
 			rows: []snapshotRow{
 				mkRow("a1", "scout", "idle", 0),
