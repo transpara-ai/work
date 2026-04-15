@@ -56,11 +56,12 @@ type snapshotRow struct {
 const stuckThreshold = 2 * time.Minute
 
 // terminalStates lists FSM states where a snapshot gap does NOT indicate
-// the agent is stuck — it simply finished.
+// the agent is stuck — it simply finished. Note: idle is intentionally
+// excluded — agents start in idle and should transition quickly. An agent
+// stuck in idle for >2min likely failed to initialize.
 var terminalStates = map[string]bool{
 	"retired":   true,
 	"suspended": true,
-	"idle":      true,
 }
 
 // buildAgentHistories converts a time-ordered slice of snapshot rows into
@@ -229,7 +230,10 @@ func (sv *server) telemetryAgentHistory(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	ctx, cancel := telemetryQueryCtx(r)
+	// History queries scan the full window (up to 24h of snapshots) rather
+	// than a single latest-per-actor row, so they need a longer deadline than
+	// the 5s telemetryQueryCtx used for point-in-time reads.
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
 	agents, err := sv.queryAgentHistory(ctx, window)

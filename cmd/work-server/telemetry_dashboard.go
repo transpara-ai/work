@@ -933,6 +933,8 @@ body {
       })
       .catch(function (err) {
         console.error("History fetch failed:", err);
+        var grid = clearEl("agent-grid");
+        grid.appendChild(el("div", { cls: "data-empty", text: "Failed to load history \u2014 " + err.message }));
       });
   }
   window.setTimeWindow = setTimeWindow;
@@ -1043,7 +1045,7 @@ body {
   // Classify an agent's condition for "now" mode based on last_event_at.
   function classifyAgent(a) {
     var state = (a.state || "").toLowerCase();
-    var terminal = { retired: 1, suspended: 1, idle: 1 };
+    var terminal = { retired: 1, suspended: 1 };
     if (terminal[state]) return "terminated";
 
     if (!a.last_event_at) return "active";
@@ -1224,7 +1226,7 @@ body {
       if (states[i].state === "stuck") { hadStuck = true; break; }
     }
 
-    var terminal = { retired: 1, suspended: 1, idle: 1 };
+    var terminal = { retired: 1, suspended: 1 };
     var condition = terminal[state] ? "terminated" : "active";
     if (hadStuck && !terminal[state]) condition = "stuck";
 
