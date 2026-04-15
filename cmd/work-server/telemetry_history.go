@@ -1,6 +1,10 @@
 package main
 
-import "time"
+import (
+	"context"
+	"net/http"
+	"time"
+)
 
 // telStateSpan represents a contiguous period an agent spent in one FSM state.
 type telStateSpan struct {
@@ -153,4 +157,94 @@ func buildAgentHistories(rows []snapshotRow) []telAgentHistory {
 	}
 
 	return result
+}
+
+// queryAgentHistory fetches all snapshots within the given window and
+// computes per-actor state timelines using buildAgentHistories.
+//
+// The query fetches raw rows ordered by (actor_id, recorded_at) — the
+// precondition for buildAgentHistories. State transition detection and
+// stuck flagging happen in Go, not SQL, keeping the query simple and the
+// logic testable without a database.
+//
+// Future: for windows longer than 24h (e.g. "week"), the current table's
+// retention is insufficient. Options:
+//   - Extend telemetry_agent_snapshots retention (simple, more storage)
+//   - Add a materialized telemetry_agent_state_changes table in the hive
+//     repo's telemetry writer (compact, recommended long-term)
+func (sv *server) queryAgentHistory(ctx context.Context, window time.Duration) ([]telAgentHistory, error) {
+	const q = `
+		SELECT agent_role, actor_id, state, model, iteration, max_iterations,
+		       tokens_used, cost_usd::float8, trust_score::float8,
+		       errors, recorded_at
+		FROM telemetry_agent_snapshots
+		WHERE recorded_at > now() - $1::interval
+		ORDER BY actor_id, recorded_at ASC`
+
+	rows, err := sv.pool.Query(ctx, q, window.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var snapshots []snapshotRow
+	for rows.Next() {
+		var r snapshotRow
+		if err := rows.Scan(
+			&r.Role, &r.ActorID, &r.State, &r.Model,
+			&r.Iteration, &r.MaxIter,
+			&r.TokensUsed, &r.CostUSD, &r.TrustScore,
+			&r.Errors, &r.RecordedAt,
+		); err != nil {
+			return nil, err
+		}
+		snapshots = append(snapshots, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return buildAgentHistories(snapshots), nil
+}
+
+// validWindows maps accepted ?window= values to durations.
+// Intentionally restrictive — add new values here when longer retention
+// is available (see Future comment on queryAgentHistory).
+var validWindows = map[string]time.Duration{
+	"1h":  1 * time.Hour,
+	"24h": 24 * time.Hour,
+}
+
+// telemetryAgentHistory handles GET /telemetry/agents/history?window=1h|24h.
+func (sv *server) telemetryAgentHistory(w http.ResponseWriter, r *http.Request) {
+	if sv.pool == nil {
+		telemetryUnavailable(w)
+		return
+	}
+
+	windowStr := r.URL.Query().Get("window")
+	window, ok := validWindows[windowStr]
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "window must be one of: 1h, 24h")
+		return
+	}
+
+	ctx, cancel := telemetryQueryCtx(r)
+	defer cancel()
+
+	agents, err := sv.queryAgentHistory(ctx, window)
+	if err != nil {
+		if isMissingTable(err) {
+			telemetryUnavailable(w)
+			return
+		}
+		telemetryDBErr(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agents":      agents,
+		"window":      windowStr,
+		"computed_at": time.Now().UTC(),
+	})
 }
