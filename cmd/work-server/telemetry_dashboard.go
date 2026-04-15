@@ -1226,7 +1226,7 @@ body {
 
     var terminal = { retired: 1, suspended: 1, idle: 1 };
     var condition = terminal[state] ? "terminated" : "active";
-    if (hadStuck) condition = "stuck";
+    if (hadStuck && !terminal[state]) condition = "stuck";
 
     var condCls = condition + "-agent";
     var card = el("div", { cls: "agent-card " + condCls + (hasErrors ? " has-errors" : "") });
