@@ -125,6 +125,54 @@ The "Week" button is not included in this implementation. The `telemetry_agent_s
 
 Both options require changes to the hive repo's telemetry writer, which is out of scope for this work.
 
+## Testing Plan
+
+The `cmd/work-server` package currently has no tests. This feature introduces the first server-side test file.
+
+### Unit Tests (`cmd/work-server/telemetry_history_test.go`)
+
+**State transition computation logic.** The `LAG()`-based query is SQL, but the Go code that parses rows into the response shape is testable. Extract the row-to-`agentHistory` mapping into a pure function and test:
+
+| Test case | Input | Expected |
+|---|---|---|
+| Single agent, single state | 1 actor, all snapshots in "processing" | One state entry, duration = last - first |
+| Single agent, multiple transitions | idle → processing → waiting → retired | Four state entries with correct durations |
+| Multiple agents, overlapping | 2 actors with same role, different timelines | Each actor gets independent state arrays |
+| Agent with gap (stuck detection) | Snapshots at t=0, t=10, t=130 (>2min gap), state unchanged | Stuck period flagged in states |
+| Agent with terminal state after gap | Snapshot gap but next state is "retired" | Not flagged as stuck — legitimate shutdown |
+| Empty window | No snapshots in range | Empty agents array |
+| Single snapshot (just spawned) | One row for an actor | One state entry, duration = 0 |
+
+### Integration Tests (require Postgres, skipped without `DATABASE_URL`)
+
+**End-to-end handler tests** using `httptest.NewServer` against a real Postgres-backed server. These tests:
+
+1. Insert synthetic rows into `telemetry_agent_snapshots` with known timestamps and states
+2. Call `GET /telemetry/agents/history?window=1h`
+3. Assert the response contains the expected agents, state arrays, and durations
+4. Clean up inserted rows
+
+Test cases:
+- **Window filtering:** Insert agents at t-30min and t-2h. `?window=1h` returns only the recent one.
+- **Stuck detection in history:** Insert snapshots with a 3-minute gap mid-processing. Verify the stuck period appears in the states array.
+- **Validation:** `?window=week` returns 400. `?window=` (empty) returns 400.
+
+Guard: `if os.Getenv("DATABASE_URL") == "" { t.Skip("no DATABASE_URL") }`
+
+### Client-Side Testing (manual, documented in PR test plan)
+
+The dashboard is an embedded HTML const with inline JS — no build system, no test framework. Client-side behavior is verified manually:
+
+- [ ] "Now" button shows live-updating agent cards with time-in-state ticking
+- [ ] "1h" button freezes display, shows paused banner with timestamp
+- [ ] "24h" button shows agents from full retention window
+- [ ] Switching back to "Now" resumes SSE rendering immediately
+- [ ] Active agents have green left border, terminated have gray + 0.7 opacity
+- [ ] Stuck agents (simulated by stopping telemetry writer) show red pulse
+- [ ] State timeline bar renders proportional segments with correct colors
+- [ ] Historical view shows start → end timestamps on terminated agents
+- [ ] Paused banner disappears when "Now" is clicked
+
 ## Files Modified
 
 - `cmd/work-server/telemetry.go` — new `queryAgentHistory()` function and `/telemetry/agents/history` handler
