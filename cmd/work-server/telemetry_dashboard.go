@@ -789,7 +789,15 @@ body {
     <div class="section">
       <div class="section-head">
         <span class="section-label">Agent Status</span>
+        <div class="time-window-bar">
+          <button class="time-window-btn active" data-window="now" onclick="setTimeWindow('now')">Now</button>
+          <button class="time-window-btn" data-window="1h" onclick="setTimeWindow('1h')">1h</button>
+          <button class="time-window-btn" data-window="24h" onclick="setTimeWindow('24h')">24h</button>
+        </div>
         <span class="section-meta" id="agent-count"></span>
+      </div>
+      <div class="paused-banner" id="paused-banner">
+        <span id="paused-text">Viewing last hour — paused</span>
       </div>
       <div class="section-body">
         <div class="agent-grid" id="agent-grid">
