@@ -1180,6 +1180,161 @@ body {
     return h + "h " + m + "m";
   }
 
+  // ── HISTORICAL RENDERING ────────────────────────────
+  // Renders agents from the /telemetry/agents/history endpoint.
+  // Each agent has a .states array with state spans and durations.
+  function renderHistoricalAgents(agents) {
+    var grid  = clearEl("agent-grid");
+    var count = document.getElementById("agent-count");
+
+    if (!agents.length) {
+      grid.appendChild(el("div", { cls: "data-empty", text: "No agents in this time window" }));
+      count.textContent = "";
+      return;
+    }
+
+    count.textContent = agents.length + " agent" + (agents.length !== 1 ? "s" : "");
+
+    var sorted = agents.slice().sort(function (a, b) {
+      var ae = a.errors || 0, be = b.errors || 0;
+      if (ae !== be) return be - ae;
+      return (a.role || "").localeCompare(b.role || "");
+    });
+
+    sorted.forEach(function (a) {
+      grid.appendChild(buildHistoricalCard(a));
+    });
+  }
+
+  function buildHistoricalCard(a) {
+    var state      = (a.current_state || "unknown").toLowerCase();
+    var model      = shortModel(a.model || "");
+    var iter       = a.iteration || 0;
+    var maxIter    = a.max_iterations || 1;
+    var pct        = Math.min(100, Math.round((iter / maxIter) * 100));
+    var fillCls    = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "";
+    var cost       = fmtCost(a.cost_usd);
+    var trust      = a.trust_score != null ? Math.round(a.trust_score * 100) + "%" : "\u2014";
+    var errors     = a.errors || 0;
+    var hasErrors  = errors > 0;
+    var hadStuck   = false;
+    var states     = a.states || [];
+
+    for (var i = 0; i < states.length; i++) {
+      if (states[i].state === "stuck") { hadStuck = true; break; }
+    }
+
+    var terminal = { retired: 1, suspended: 1, idle: 1 };
+    var condition = terminal[state] ? "terminated" : "active";
+    if (hadStuck) condition = "stuck";
+
+    var condCls = condition + "-agent";
+    var card = el("div", { cls: "agent-card " + condCls + (hasErrors ? " has-errors" : "") });
+    card.addEventListener("click", function () { card.classList.toggle("expanded"); });
+
+    // Head
+    var head = el("div", { cls: "agent-card-head" });
+    head.appendChild(el("span", { cls: "agent-role", text: a.role || "unknown" }));
+    head.appendChild(el("span", { cls: "badge badge-" + state, text: a.current_state || "Unknown" }));
+    if (model) head.appendChild(el("span", { cls: "badge badge-model", text: model }));
+    card.appendChild(head);
+
+    // State timeline bar — proportional segments
+    if (states.length > 0) {
+      var totalDur = 0;
+      for (var j = 0; j < states.length; j++) totalDur += states[j].duration_seconds || 0;
+
+      if (totalDur === 0) totalDur = 1;
+
+      var timeline = el("div", { cls: "state-timeline" });
+      for (var k = 0; k < states.length; k++) {
+        var sp = states[k];
+        var seg = el("div", { cls: "seg seg-" + (sp.state || "unknown").toLowerCase() });
+        var pctW = Math.max(1, (sp.duration_seconds || 0) / totalDur * 100);
+        seg.style.flex = String(pctW);
+        seg.title = sp.state + ": " + fmtDuration(Math.round(sp.duration_seconds || 0));
+        timeline.appendChild(seg);
+      }
+      card.appendChild(timeline);
+    }
+
+    // Lifespan row (start -> end)
+    var lifespan = el("div", { cls: "agent-lifespan" });
+    var startStr = a.first_seen ? new Date(a.first_seen).toLocaleTimeString() : "\u2014";
+    var endStr   = terminal[state]
+      ? (a.last_seen ? new Date(a.last_seen).toLocaleTimeString() : "\u2014")
+      : "running";
+    lifespan.appendChild(el("span", { text: startStr }));
+    lifespan.appendChild(el("span", { text: "\u2192" }));
+    lifespan.appendChild(el("span", { text: endStr }));
+    card.appendChild(lifespan);
+
+    // Body
+    var body = el("div", { cls: "agent-card-body" });
+
+    var iterRow = el("div", { cls: "agent-row" });
+    iterRow.appendChild(el("span", { cls: "agent-label", text: "Iter" }));
+    var bar  = el("div", { cls: "progress-bar" });
+    var fill = el("div", { cls: "progress-fill " + fillCls });
+    fill.style.width = pct + "%";
+    bar.appendChild(fill);
+    iterRow.appendChild(bar);
+    iterRow.appendChild(el("span", { cls: "agent-val", text: iter + "/" + maxIter }));
+    body.appendChild(iterRow);
+
+    var costRow = el("div", { cls: "agent-row" });
+    costRow.appendChild(el("span", { cls: "agent-label", text: "Cost" }));
+    costRow.appendChild(el("span", { cls: "agent-val", text: cost }));
+    var spacer = el("span"); spacer.style.flex = "1";
+    costRow.appendChild(spacer);
+    costRow.appendChild(el("span", { cls: "agent-label", text: "Trust" }));
+    costRow.appendChild(el("span", { cls: "agent-val", text: trust }));
+    body.appendChild(costRow);
+
+    if (hasErrors) {
+      var errRow = el("div", { cls: "agent-row" });
+      errRow.appendChild(el("span", { cls: "agent-label", text: "Errors" }));
+      var errVal = el("span", { cls: "agent-val", text: String(errors) });
+      errVal.style.color = "var(--red)";
+      errRow.appendChild(errVal);
+      body.appendChild(errRow);
+    }
+
+    card.appendChild(body);
+
+    // Expand section — state breakdown
+    var expand = el("div", { cls: "agent-expand" });
+    expand.appendChild(el("div", { cls: "expand-label", text: "State Breakdown" }));
+
+    var stateTable = el("div");
+    stateTable.style.cssText = "display:flex;flex-direction:column;gap:2px;font-size:11px;font-family:var(--mono)";
+    for (var m = 0; m < states.length; m++) {
+      var sp2 = states[m];
+      var row = el("div");
+      row.style.cssText = "display:flex;gap:0.5rem;align-items:center";
+      var dot = el("span", { cls: "seg seg-" + (sp2.state || "unknown").toLowerCase() });
+      dot.style.cssText = "width:8px;height:8px;border-radius:2px;flex-shrink:0";
+      row.appendChild(dot);
+      row.appendChild(el("span", { text: sp2.state || "unknown", style: { color: "var(--text-sec)", minWidth: "80px" } }));
+      row.appendChild(el("span", { text: fmtDuration(Math.round(sp2.duration_seconds || 0)), style: { color: "var(--text)" } }));
+      if (sp2.entered_at) {
+        row.appendChild(el("span", { text: "at " + new Date(sp2.entered_at).toLocaleTimeString(), style: { color: "var(--text-dim)", marginLeft: "auto" } }));
+      }
+      stateTable.appendChild(row);
+    }
+    expand.appendChild(stateTable);
+
+    if (a.actor_id) {
+      var idItem = el("div", { cls: "expand-meta-item",
+        text: a.actor_id.slice(0, 20) + (a.actor_id.length > 20 ? "\u2026" : "") });
+      idItem.style.cssText = "font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:0.5rem";
+      expand.appendChild(idItem);
+    }
+
+    card.appendChild(expand);
+    return card;
+  }
+
   // ── HIVE HEALTH ────────────────────────────────────
   function renderHive(hive) {
     var grid = clearEl("hive-grid");
