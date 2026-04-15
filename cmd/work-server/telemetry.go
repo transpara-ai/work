@@ -110,15 +110,17 @@ func telemetryQueryCtx(r *http.Request) (context.Context, context.CancelFunc) {
 
 // --- Shared query helpers ---
 
-// queryAgentSnapshots returns the latest snapshot per agent role.
+// queryAgentSnapshots returns the latest snapshot per agent instance.
+// Deduplicates by actor_id (not agent_role) so that pipeline mode —
+// which spawns multiple agents with the same role — shows every agent.
 func (sv *server) queryAgentSnapshots(ctx context.Context) ([]telAgentSnapshot, error) {
 	const q = `
-		SELECT DISTINCT ON (agent_role)
+		SELECT DISTINCT ON (actor_id)
 			agent_role, actor_id, state, model, iteration, max_iterations,
 			tokens_used, cost_usd::float8, trust_score::float8,
 			last_event_type, last_message, errors, recorded_at
 		FROM telemetry_agent_snapshots
-		ORDER BY agent_role, recorded_at DESC`
+		ORDER BY actor_id, recorded_at DESC`
 
 	rows, err := sv.pool.Query(ctx, q)
 	if err != nil {

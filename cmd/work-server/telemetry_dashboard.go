@@ -294,6 +294,100 @@ body {
 .agent-card:hover { border-color: var(--border-light); }
 .agent-card.has-errors { border-color: rgba(239,68,68,0.3); }
 
+/* ── TIME WINDOW CONTROLS ──────────────────────── */
+.time-window-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.time-window-btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-sec);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.time-window-btn:hover { border-color: var(--border-light); color: var(--text); }
+.time-window-btn.active {
+  background: rgba(59,130,246,0.15);
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.paused-banner {
+  display: none;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  background: rgba(245,158,11,0.08);
+  border: 1px solid rgba(245,158,11,0.2);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--amber);
+  margin-bottom: 0.5rem;
+}
+
+.paused-banner.visible { display: flex; }
+
+/* ── AGENT CARD BORDER STATES ─────────────────── */
+.agent-card.active-agent  { border-left: 3px solid var(--green); }
+.agent-card.stale-agent   { border-left: 3px solid var(--amber); box-shadow: 0 0 6px rgba(245,158,11,0.2); }
+.agent-card.stuck-agent   { border-left: 3px solid var(--red); animation: pulse-stuck 1.5s ease-in-out infinite; }
+.agent-card.terminated-agent { border-left: 3px solid var(--gray); opacity: 0.7; }
+
+@keyframes pulse-stuck {
+  0%, 100% { box-shadow: 0 0 4px rgba(239,68,68,0.2); }
+  50%      { box-shadow: 0 0 12px rgba(239,68,68,0.4); }
+}
+
+/* ── STATE TIMELINE BAR ───────────────────────── */
+.state-timeline {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 0.375rem 0 0.125rem;
+  background: var(--border);
+}
+
+.state-timeline .seg {
+  height: 100%;
+  min-width: 2px;
+  transition: flex 0.3s;
+}
+
+.seg-idle       { background: var(--green); }
+.seg-processing { background: var(--blue); }
+.seg-waiting    { background: var(--amber); }
+.seg-escalating,
+.seg-refusing   { background: var(--red); }
+.seg-suspended  { background: var(--gray); }
+.seg-retiring,
+.seg-retired    { background: rgba(100,116,139,0.5); }
+.seg-stuck      { background: var(--red); animation: pulse-stuck 1.5s ease-in-out infinite; }
+.seg-unknown    { background: var(--border-light); }
+
+.agent-duration {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.agent-lifespan {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  display: flex;
+  justify-content: space-between;
+}
+
 .agent-card-head {
   padding: 0.625rem 0.75rem;
   display: flex;
@@ -695,7 +789,15 @@ body {
     <div class="section">
       <div class="section-head">
         <span class="section-label">Agent Status</span>
+        <div class="time-window-bar">
+          <button class="time-window-btn active" data-window="now" onclick="setTimeWindow('now')">Now</button>
+          <button class="time-window-btn" data-window="1h" onclick="setTimeWindow('1h')">1h</button>
+          <button class="time-window-btn" data-window="24h" onclick="setTimeWindow('24h')">24h</button>
+        </div>
         <span class="section-meta" id="agent-count"></span>
+      </div>
+      <div class="paused-banner" id="paused-banner">
+        <span id="paused-text">Viewing last hour — paused</span>
       </div>
       <div class="section-body">
         <div class="agent-grid" id="agent-grid">
@@ -749,6 +851,9 @@ body {
   // ── CONFIGURATION ──────────────────────────────────
   var isUserScrolled = false;
   var lastSuccess    = null;
+  var currentWindow  = "now";   // "now" | "1h" | "24h"
+  var pausedAt       = null;    // timestamp when historical view was activated
+  var lastAgents     = [];      // cached for window switching
 
   document.getElementById("dashboard").style.display = "flex";
   document.getElementById("topbar-api").textContent = window.location.host;
@@ -767,7 +872,11 @@ body {
         lastSuccess = Date.now();
         setConnStatus("connected", "Live");
         renderPhases(data.phases || []);
-        renderAgents(data.agents || []);
+        // Only update agents in "now" mode — historical views are frozen
+        if (currentWindow === "now") {
+          lastAgents = data.agents || [];
+          renderAgents(lastAgents);
+        }
         renderHive(data.hive || null);
         renderEvents(data.recent_events || []);
         fetchTasks();
@@ -789,6 +898,46 @@ body {
 
   connectSSE();
   setInterval(tickClock, 1000);
+
+  // ── TIME WINDOW ────────────────────────────────────
+  function setTimeWindow(win) {
+    currentWindow = win;
+
+    var btns = document.querySelectorAll(".time-window-btn");
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.toggle("active", btns[i].getAttribute("data-window") === win);
+    }
+
+    var banner = document.getElementById("paused-banner");
+    var bannerText = document.getElementById("paused-text");
+
+    if (win === "now") {
+      pausedAt = null;
+      banner.classList.remove("visible");
+      if (lastAgents.length) renderAgents(lastAgents);
+      return;
+    }
+
+    pausedAt = new Date();
+    var label = win === "1h" ? "last hour" : "last 24 hours";
+    bannerText.textContent = "Viewing " + label + " \u2014 paused at " + pausedAt.toLocaleTimeString();
+    banner.classList.add("visible");
+
+    fetch("/telemetry/agents/history?window=" + win)
+      .then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (data) {
+        renderHistoricalAgents(data.agents || []);
+      })
+      .catch(function (err) {
+        console.error("History fetch failed:", err);
+        var grid = clearEl("agent-grid");
+        grid.appendChild(el("div", { cls: "data-empty", text: "Failed to load history \u2014 " + err.message }));
+      });
+  }
+  window.setTimeWindow = setTimeWindow;
 
   // ── CLOCK ──────────────────────────────────────────
   function tickClock() {
@@ -875,7 +1024,7 @@ body {
     var count = document.getElementById("agent-count");
 
     if (!agents.length) {
-      grid.appendChild(el("div", { cls: "data-empty", text: "No agent data — hive may be offline" }));
+      grid.appendChild(el("div", { cls: "data-empty", text: "No agent data \u2014 hive may be offline" }));
       count.textContent = "";
       return;
     }
@@ -889,11 +1038,24 @@ body {
     });
 
     sorted.forEach(function (a) {
-      grid.appendChild(buildAgentCard(a));
+      grid.appendChild(buildAgentCard(a, classifyAgent(a)));
     });
   }
 
-  function buildAgentCard(a) {
+  // Classify an agent's condition for "now" mode based on last_event_at.
+  function classifyAgent(a) {
+    var state = (a.state || "").toLowerCase();
+    var terminal = { retired: 1, suspended: 1 };
+    if (terminal[state]) return "terminated";
+
+    if (!a.last_event_at) return "active";
+    var ageSec = (Date.now() - new Date(a.last_event_at).getTime()) / 1000;
+    if (ageSec > 120) return "stuck";
+    if (ageSec > 30)  return "stale";
+    return "active";
+  }
+
+  function buildAgentCard(a, condition) {
     var state      = (a.state || "unknown").toLowerCase();
     var model      = shortModel(a.model || "");
     var iter       = a.iteration || 0;
@@ -901,29 +1063,47 @@ body {
     var pct        = Math.min(100, Math.round((iter / maxIter) * 100));
     var fillCls    = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "";
     var cost       = fmtCost(a.cost_usd);
-    var trust      = a.trust_score != null ? Math.round(a.trust_score * 100) + "%" : "—";
+    var trust      = a.trust_score != null ? Math.round(a.trust_score * 100) + "%" : "\u2014";
     var errors     = a.errors || 0;
     var hasErrors  = errors > 0;
     var lastEvType = a.last_event_type || "";
     var lastEvAt   = a.last_event_at ? relTime(a.last_event_at) : "";
 
-    var card = el("div", { cls: "agent-card" + (hasErrors ? " has-errors" : "") });
+    var condCls = condition ? condition + "-agent" : "";
+    var card = el("div", { cls: "agent-card " + condCls + (hasErrors ? " has-errors" : "") });
     card.addEventListener("click", function () { card.classList.toggle("expanded"); });
 
     // Head
     var head = el("div", { cls: "agent-card-head" });
     head.appendChild(el("span", { cls: "agent-role", text: a.role || "unknown" }));
     head.appendChild(el("span", { cls: "badge badge-" + state, text: a.state || "Unknown" }));
-    if (model) {
-      var mb = el("span", { cls: "badge badge-model", text: model });
-      head.appendChild(mb);
+    if (model) head.appendChild(el("span", { cls: "badge badge-model", text: model }));
+
+    // Duration indicator in head
+    if (condition === "stuck" && a.last_event_at) {
+      var stuckSec = Math.floor((Date.now() - new Date(a.last_event_at).getTime()) / 1000);
+      head.appendChild(el("span", { cls: "agent-duration", text: "stuck " + fmtDuration(stuckSec) }));
+    } else if (condition === "stale" && a.last_event_at) {
+      var staleSec = Math.floor((Date.now() - new Date(a.last_event_at).getTime()) / 1000);
+      head.appendChild(el("span", { cls: "agent-duration", text: "stale " + staleSec + "s" }));
+    } else if (condition === "active" && a.last_event_at) {
+      head.appendChild(el("span", { cls: "agent-duration", text: "running" }));
     }
     card.appendChild(head);
+
+    // State timeline bar (now mode: single segment for current state)
+    if (a.last_event_at) {
+      var timeline = el("div", { cls: "state-timeline" });
+      var seg = el("div", { cls: "seg seg-" + state });
+      seg.style.flex = "1";
+      timeline.appendChild(seg);
+      card.appendChild(timeline);
+    }
 
     // Body
     var body = el("div", { cls: "agent-card-body" });
 
-    // Iter row with progress bar
+    // Iter row
     var iterRow = el("div", { cls: "agent-row" });
     iterRow.appendChild(el("span", { cls: "agent-label", text: "Iter" }));
     var bar  = el("div", { cls: "progress-bar" });
@@ -934,7 +1114,7 @@ body {
     iterRow.appendChild(el("span", { cls: "agent-val", text: iter + "/" + maxIter }));
     body.appendChild(iterRow);
 
-    // Cost / Trust row
+    // Cost / Trust
     var costRow = el("div", { cls: "agent-row" });
     costRow.appendChild(el("span", { cls: "agent-label", text: "Cost" }));
     costRow.appendChild(el("span", { cls: "agent-val", text: cost }));
@@ -944,16 +1124,12 @@ body {
     costRow.appendChild(el("span", { cls: "agent-val", text: trust }));
     body.appendChild(costRow);
 
-    // Last event row
+    // Last event
     if (lastEvType || lastEvAt) {
       var evRow = el("div", { cls: "agent-event" });
-      if (lastEvType) {
-        var pill = el("span", { cls: "event-type-pill " + evtClass(lastEvType), text: lastEvType });
-        evRow.appendChild(pill);
-      }
+      if (lastEvType) evRow.appendChild(el("span", { cls: "event-type-pill " + evtClass(lastEvType), text: lastEvType }));
       if (lastEvAt) {
-        var dim = el("span", { text: lastEvAt });
-        dim.style.color = "var(--text-dim)";
+        var dim = el("span", { text: lastEvAt }); dim.style.color = "var(--text-dim)";
         evRow.appendChild(dim);
       }
       if (hasErrors) {
@@ -968,18 +1144,13 @@ body {
 
     // Expand section
     var expand = el("div", { cls: "agent-expand" });
-
-    var msgLabel = el("div", { cls: "expand-label", text: "Last Message" });
-    var msgPre   = el("pre", { cls: "last-message", text: a.last_message || "(no message recorded)" });
-    expand.appendChild(msgLabel);
-    expand.appendChild(msgPre);
+    expand.appendChild(el("div", { cls: "expand-label", text: "Last Message" }));
+    expand.appendChild(el("pre", { cls: "last-message", text: a.last_message || "(no message recorded)" }));
 
     var meta = el("div", { cls: "expand-meta" });
-
     var tokItem = el("div", { cls: "expand-meta-item" });
     tokItem.appendChild(document.createTextNode("Tokens "));
-    var tokStrong = el("strong", { text: (a.tokens_used || 0).toLocaleString() });
-    tokItem.appendChild(tokStrong);
+    tokItem.appendChild(el("strong", { text: (a.tokens_used || 0).toLocaleString() }));
     meta.appendChild(tokItem);
 
     var errItem = el("div", { cls: "expand-meta-item" });
@@ -991,12 +1162,177 @@ body {
 
     if (a.actor_id) {
       var idItem = el("div", { cls: "expand-meta-item",
-        text: a.actor_id.slice(0, 20) + (a.actor_id.length > 20 ? "…" : "") });
+        text: a.actor_id.slice(0, 20) + (a.actor_id.length > 20 ? "\u2026" : "") });
       idItem.style.cssText = "font-family:var(--mono);font-size:10px;color:var(--text-dim)";
       meta.appendChild(idItem);
     }
 
     expand.appendChild(meta);
+    card.appendChild(expand);
+    return card;
+  }
+
+  function fmtDuration(totalSec) {
+    if (totalSec < 60) return totalSec + "s";
+    var m = Math.floor(totalSec / 60);
+    var s = totalSec % 60;
+    if (m < 60) return m + "m " + s + "s";
+    var h = Math.floor(m / 60);
+    m = m % 60;
+    return h + "h " + m + "m";
+  }
+
+  // ── HISTORICAL RENDERING ────────────────────────────
+  // Renders agents from the /telemetry/agents/history endpoint.
+  // Each agent has a .states array with state spans and durations.
+  function renderHistoricalAgents(agents) {
+    var grid  = clearEl("agent-grid");
+    var count = document.getElementById("agent-count");
+
+    if (!agents.length) {
+      grid.appendChild(el("div", { cls: "data-empty", text: "No agents in this time window" }));
+      count.textContent = "";
+      return;
+    }
+
+    count.textContent = agents.length + " agent" + (agents.length !== 1 ? "s" : "");
+
+    var sorted = agents.slice().sort(function (a, b) {
+      var ae = a.errors || 0, be = b.errors || 0;
+      if (ae !== be) return be - ae;
+      return (a.role || "").localeCompare(b.role || "");
+    });
+
+    sorted.forEach(function (a) {
+      grid.appendChild(buildHistoricalCard(a));
+    });
+  }
+
+  function buildHistoricalCard(a) {
+    var state      = (a.current_state || "unknown").toLowerCase();
+    var model      = shortModel(a.model || "");
+    var iter       = a.iteration || 0;
+    var maxIter    = a.max_iterations || 1;
+    var pct        = Math.min(100, Math.round((iter / maxIter) * 100));
+    var fillCls    = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "";
+    var cost       = fmtCost(a.cost_usd);
+    var trust      = a.trust_score != null ? Math.round(a.trust_score * 100) + "%" : "\u2014";
+    var errors     = a.errors || 0;
+    var hasErrors  = errors > 0;
+    var hadStuck   = false;
+    var states     = a.states || [];
+
+    for (var i = 0; i < states.length; i++) {
+      if (states[i].state === "stuck") { hadStuck = true; break; }
+    }
+
+    var terminal = { retired: 1, suspended: 1 };
+    var condition = terminal[state] ? "terminated" : "active";
+    if (hadStuck && !terminal[state]) condition = "stuck";
+
+    var condCls = condition + "-agent";
+    var card = el("div", { cls: "agent-card " + condCls + (hasErrors ? " has-errors" : "") });
+    card.addEventListener("click", function () { card.classList.toggle("expanded"); });
+
+    // Head
+    var head = el("div", { cls: "agent-card-head" });
+    head.appendChild(el("span", { cls: "agent-role", text: a.role || "unknown" }));
+    head.appendChild(el("span", { cls: "badge badge-" + state, text: a.current_state || "Unknown" }));
+    if (model) head.appendChild(el("span", { cls: "badge badge-model", text: model }));
+    card.appendChild(head);
+
+    // State timeline bar — proportional segments
+    if (states.length > 0) {
+      var totalDur = 0;
+      for (var j = 0; j < states.length; j++) totalDur += states[j].duration_seconds || 0;
+
+      if (totalDur === 0) totalDur = 1;
+
+      var timeline = el("div", { cls: "state-timeline" });
+      for (var k = 0; k < states.length; k++) {
+        var sp = states[k];
+        var seg = el("div", { cls: "seg seg-" + (sp.state || "unknown").toLowerCase() });
+        var pctW = Math.max(1, (sp.duration_seconds || 0) / totalDur * 100);
+        seg.style.flex = String(pctW);
+        seg.title = sp.state + ": " + fmtDuration(Math.round(sp.duration_seconds || 0));
+        timeline.appendChild(seg);
+      }
+      card.appendChild(timeline);
+    }
+
+    // Lifespan row (start -> end)
+    var lifespan = el("div", { cls: "agent-lifespan" });
+    var startStr = a.first_seen ? new Date(a.first_seen).toLocaleTimeString() : "\u2014";
+    var endStr   = terminal[state]
+      ? (a.last_seen ? new Date(a.last_seen).toLocaleTimeString() : "\u2014")
+      : "running";
+    lifespan.appendChild(el("span", { text: startStr }));
+    lifespan.appendChild(el("span", { text: "\u2192" }));
+    lifespan.appendChild(el("span", { text: endStr }));
+    card.appendChild(lifespan);
+
+    // Body
+    var body = el("div", { cls: "agent-card-body" });
+
+    var iterRow = el("div", { cls: "agent-row" });
+    iterRow.appendChild(el("span", { cls: "agent-label", text: "Iter" }));
+    var bar  = el("div", { cls: "progress-bar" });
+    var fill = el("div", { cls: "progress-fill " + fillCls });
+    fill.style.width = pct + "%";
+    bar.appendChild(fill);
+    iterRow.appendChild(bar);
+    iterRow.appendChild(el("span", { cls: "agent-val", text: iter + "/" + maxIter }));
+    body.appendChild(iterRow);
+
+    var costRow = el("div", { cls: "agent-row" });
+    costRow.appendChild(el("span", { cls: "agent-label", text: "Cost" }));
+    costRow.appendChild(el("span", { cls: "agent-val", text: cost }));
+    var spacer = el("span"); spacer.style.flex = "1";
+    costRow.appendChild(spacer);
+    costRow.appendChild(el("span", { cls: "agent-label", text: "Trust" }));
+    costRow.appendChild(el("span", { cls: "agent-val", text: trust }));
+    body.appendChild(costRow);
+
+    if (hasErrors) {
+      var errRow = el("div", { cls: "agent-row" });
+      errRow.appendChild(el("span", { cls: "agent-label", text: "Errors" }));
+      var errVal = el("span", { cls: "agent-val", text: String(errors) });
+      errVal.style.color = "var(--red)";
+      errRow.appendChild(errVal);
+      body.appendChild(errRow);
+    }
+
+    card.appendChild(body);
+
+    // Expand section — state breakdown
+    var expand = el("div", { cls: "agent-expand" });
+    expand.appendChild(el("div", { cls: "expand-label", text: "State Breakdown" }));
+
+    var stateTable = el("div");
+    stateTable.style.cssText = "display:flex;flex-direction:column;gap:2px;font-size:11px;font-family:var(--mono)";
+    for (var m = 0; m < states.length; m++) {
+      var sp2 = states[m];
+      var row = el("div");
+      row.style.cssText = "display:flex;gap:0.5rem;align-items:center";
+      var dot = el("span", { cls: "seg seg-" + (sp2.state || "unknown").toLowerCase() });
+      dot.style.cssText = "width:8px;height:8px;border-radius:2px;flex-shrink:0";
+      row.appendChild(dot);
+      row.appendChild(el("span", { text: sp2.state || "unknown", style: { color: "var(--text-sec)", minWidth: "80px" } }));
+      row.appendChild(el("span", { text: fmtDuration(Math.round(sp2.duration_seconds || 0)), style: { color: "var(--text)" } }));
+      if (sp2.entered_at) {
+        row.appendChild(el("span", { text: "at " + new Date(sp2.entered_at).toLocaleTimeString(), style: { color: "var(--text-dim)", marginLeft: "auto" } }));
+      }
+      stateTable.appendChild(row);
+    }
+    expand.appendChild(stateTable);
+
+    if (a.actor_id) {
+      var idItem = el("div", { cls: "expand-meta-item",
+        text: a.actor_id.slice(0, 20) + (a.actor_id.length > 20 ? "\u2026" : "") });
+      idItem.style.cssText = "font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:0.5rem";
+      expand.appendChild(idItem);
+    }
+
     card.appendChild(expand);
     return card;
   }

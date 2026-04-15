@@ -743,6 +743,7 @@ func run() error {
 	// Telemetry routes — reads from hive-postgres via the shared pool.
 	mux.HandleFunc("GET /telemetry/status", srv.auth(srv.telemetryStatus))
 	mux.HandleFunc("GET /telemetry/agents", srv.auth(srv.telemetryAgents))
+	mux.HandleFunc("GET /telemetry/agents/history", srv.auth(srv.telemetryAgentHistory))
 	mux.HandleFunc("GET /telemetry/agents/{role}", srv.auth(srv.telemetryAgentDetail))
 	mux.HandleFunc("GET /telemetry/stream", srv.auth(srv.telemetryStream))
 	mux.HandleFunc("GET /telemetry/phases", srv.auth(srv.telemetryPhases))

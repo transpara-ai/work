@@ -1,3 +1,6 @@
 # Compiled binaries
 /work
 /work-server
+
+# Brainstorm sessions
+.superpowers/
