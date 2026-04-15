@@ -294,6 +294,100 @@ body {
 .agent-card:hover { border-color: var(--border-light); }
 .agent-card.has-errors { border-color: rgba(239,68,68,0.3); }
 
+/* ── TIME WINDOW CONTROLS ──────────────────────── */
+.time-window-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.time-window-btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-sec);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.time-window-btn:hover { border-color: var(--border-light); color: var(--text); }
+.time-window-btn.active {
+  background: rgba(59,130,246,0.15);
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.paused-banner {
+  display: none;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  background: rgba(245,158,11,0.08);
+  border: 1px solid rgba(245,158,11,0.2);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--amber);
+  margin-bottom: 0.5rem;
+}
+
+.paused-banner.visible { display: flex; }
+
+/* ── AGENT CARD BORDER STATES ─────────────────── */
+.agent-card.active-agent  { border-left: 3px solid var(--green); }
+.agent-card.stale-agent   { border-left: 3px solid var(--amber); box-shadow: 0 0 6px rgba(245,158,11,0.2); }
+.agent-card.stuck-agent   { border-left: 3px solid var(--red); animation: pulse-stuck 1.5s ease-in-out infinite; }
+.agent-card.terminated-agent { border-left: 3px solid var(--gray); opacity: 0.7; }
+
+@keyframes pulse-stuck {
+  0%, 100% { box-shadow: 0 0 4px rgba(239,68,68,0.2); }
+  50%      { box-shadow: 0 0 12px rgba(239,68,68,0.4); }
+}
+
+/* ── STATE TIMELINE BAR ───────────────────────── */
+.state-timeline {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 0.375rem 0 0.125rem;
+  background: var(--border);
+}
+
+.state-timeline .seg {
+  height: 100%;
+  min-width: 2px;
+  transition: flex 0.3s;
+}
+
+.seg-idle       { background: var(--green); }
+.seg-processing { background: var(--blue); }
+.seg-waiting    { background: var(--amber); }
+.seg-escalating,
+.seg-refusing   { background: var(--red); }
+.seg-suspended  { background: var(--gray); }
+.seg-retiring,
+.seg-retired    { background: rgba(100,116,139,0.5); }
+.seg-stuck      { background: var(--red); animation: pulse-stuck 1.5s ease-in-out infinite; }
+.seg-unknown    { background: var(--border-light); }
+
+.agent-duration {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.agent-lifespan {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  display: flex;
+  justify-content: space-between;
+}
+
 .agent-card-head {
   padding: 0.625rem 0.75rem;
   display: flex;
