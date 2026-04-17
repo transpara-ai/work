@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -437,11 +438,19 @@ func (sv *server) telemetryHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // telemetrySSE handles GET /telemetry/sse — Server-Sent Events stream.
-// Pushes a full telemetry snapshot every 10 seconds over a single persistent
-// connection. Uses no custom request headers, so it works with EventSource
-// and avoids Chrome Private-Network-Access preflight issues.
+//
+// Delivery is bus-subscription-driven: each event persisted by the hive's
+// Writer.SubscribeToBus is forwarded to the client as a single `data:` frame.
+// A 500ms leading-edge throttle keyed on (source, event-type-family) prevents
+// the dashboard's DOM from thrashing when a single agent emits a burst — the
+// initial event fires immediately, subsequent events inside the window are
+// dropped so the handler never blocks. /events/subscribe is the un-throttled
+// equivalent for raw consumers.
+//
+// Initial page state still comes from GET /telemetry/status; this endpoint
+// only pushes deltas.
 func (sv *server) telemetrySSE(w http.ResponseWriter, r *http.Request) {
-	if sv.pool == nil {
+	if sv.fanout == nil {
 		telemetryUnavailable(w)
 		return
 	}
@@ -457,38 +466,55 @@ func (sv *server) telemetrySSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	flusher.Flush()
 
-	dataTick := time.NewTicker(10 * time.Second)
-	defer dataTick.Stop()
+	events, unsubscribe := sv.fanout.Subscribe(256)
+	defer unsubscribe()
+
 	// Keepalive comment prevents proxies from killing idle connections.
 	keepalive := time.NewTicker(30 * time.Second)
 	defer keepalive.Stop()
 
-	send := func() {
-		snap, err := sv.buildStatusSnapshot(r.Context())
-		if err != nil {
-			fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
-			flusher.Flush()
-			return
-		}
-		b, _ := json.Marshal(snap)
-		fmt.Fprintf(w, "data: %s\n\n", b)
-		flusher.Flush()
-	}
-
-	// Immediate first push.
-	send()
+	const debounceDelay = 500 * time.Millisecond
+	lastEmit := make(map[string]time.Time)
 
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-dataTick.C:
-			send()
 		case <-keepalive.C:
-			fmt.Fprint(w, ": keepalive\n\n")
+			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+				return
+			}
 			flusher.Flush()
+		case ev, ok := <-events:
+			if !ok {
+				return
+			}
+			key := debounceKey(ev)
+			if last, seen := lastEmit[key]; seen && time.Since(last) < debounceDelay {
+				continue
+			}
+			lastEmit[key] = time.Now()
+			if !writeEventFrame(w, flusher, ev) {
+				return
+			}
 		}
 	}
+}
+
+// debounceKey derives the (source, event-type-prefix) throttle key. The
+// prefix is everything up to the second dot so that, e.g.,
+// `agent.state.changed` and `agent.state.transition` collapse but
+// `agent.budget.exhausted` stays distinct.
+func debounceKey(ev EventFrame) string {
+	prefix := ev.Type
+	first := strings.IndexByte(prefix, '.')
+	if first >= 0 {
+		second := strings.IndexByte(prefix[first+1:], '.')
+		if second >= 0 {
+			prefix = prefix[:first+1+second]
+		}
+	}
+	return ev.Source + "|" + prefix
 }
 
 // buildStatusSnapshot assembles the full telemetry status JSON payload.

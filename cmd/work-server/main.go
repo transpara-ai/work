@@ -715,6 +715,7 @@ func run() error {
 		apiToken:     apiToken,
 		pool:         pool,
 		dashboardURL: dashboardURL,
+		fanout:       newEventFanout(),
 	}
 
 	// Fetch telemetry dashboard from GitHub at startup. Non-fatal — falls
@@ -722,6 +723,11 @@ func run() error {
 	if err := srv.fetchTelemetryDashboard(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to fetch telemetry dashboard: %v\n", err)
 	}
+
+	// Tail hive's telemetry_event_stream and republish to SSE subscribers.
+	// MVP polling bridge — hive and work-server are separate binaries so they
+	// cannot share an in-process bus. See events.go:runEventPoller.
+	go srv.runEventPoller(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", srv.dashboard)
@@ -749,7 +755,11 @@ func run() error {
 	mux.HandleFunc("GET /telemetry/phases", srv.auth(srv.telemetryPhases))
 	mux.HandleFunc("POST /telemetry/phases/{phase}", srv.auth(srv.updatePhase))
 	mux.HandleFunc("GET /telemetry/health", srv.auth(srv.telemetryHealth))
-	mux.HandleFunc("GET /telemetry/sse", srv.auth(srv.telemetrySSE))
+	// SSE endpoints accept Authorization header, ws_key cookie, OR ?key= query
+	// param — the last is an EventSource fallback for browsers that cannot set
+	// custom headers. See authSSE in events.go.
+	mux.HandleFunc("GET /telemetry/sse", srv.authSSE(srv.telemetrySSE))
+	mux.HandleFunc("GET /events/subscribe", srv.authSSE(srv.eventsSubscribe))
 	mux.HandleFunc("GET /telemetry/roles", srv.auth(srv.telemetryRoles))
 	mux.HandleFunc("GET /telemetry/roles/{name}", srv.auth(srv.telemetryRoleDetail))
 	mux.HandleFunc("GET /telemetry/actors", srv.auth(srv.telemetryActors))
@@ -791,6 +801,11 @@ type server struct {
 	apiToken string
 	pool         *pgxpool.Pool // nil when running in-memory; telemetry handlers check this
 	dashboardURL string        // URL to fetch telemetry dashboard HTML from
+
+	// fanout broadcasts bus-sourced events to SSE subscribers. A background
+	// goroutine (runEventPoller) tails hive's telemetry_event_stream at 500ms
+	// and republishes each new row on this fanout.
+	fanout *eventFanout
 
 	dashboardMu   sync.RWMutex
 	dashboardPage []byte // cached dashboard.html from GitHub
