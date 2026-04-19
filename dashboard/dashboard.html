@@ -1,0 +1,3453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Transpara-AI — Telemetry</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0f1117;
+  --bg-card: #1a1f2e;
+  --bg-card-alt: #111827;
+  --border: #1e293b;
+  --border-light: #2d3748;
+  --text: #e2e8f0;
+  --text-head: #f8fafc;
+  --text-sec: #64748b;
+  --text-dim: #475569;
+  --green: #22c55e;
+  --green-dim: #166534;
+  --amber: #f59e0b;
+  --amber-dim: #78350f;
+  --red: #ef4444;
+  --red-dim: #7f1d1d;
+  --blue: #3b82f6;
+  --blue-dim: #1e3a5f;
+  --gray: #64748b;
+  --purple: #a855f7;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: ui-monospace, "Cascadia Code", "Fira Code", Consolas, monospace;
+  --mono: ui-monospace, "Cascadia Code", "Fira Code", Consolas, monospace;
+  --radius: 8px;
+  --radius-sm: 4px;
+  --radius-lg: 12px;
+  --panel-width: 400px;
+  --transition: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-x: hidden;
+}
+
+/* ── CONFIG SCREEN ──────────────────────────────── */
+#config-screen {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 100vh; padding: 2rem;
+  background: radial-gradient(ellipse at 50% 30%, rgba(59,130,246,0.06) 0%, transparent 70%);
+}
+.config-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 2.5rem; width: 100%; max-width: 440px; box-shadow: 0 24px 48px rgba(0,0,0,0.4);
+}
+.config-card h1 {
+  font-family: var(--font-display); font-size: 18px; font-weight: 700;
+  color: var(--text-head); margin-bottom: 0.25rem; letter-spacing: -0.02em;
+}
+.config-subtitle { font-size: 12px; color: var(--text-sec); margin-bottom: 1.5rem; }
+.config-field { margin-bottom: 1rem; }
+.config-field label {
+  display: block; font-size: 11px; font-weight: 600; color: var(--text-sec);
+  margin-bottom: 0.375rem; text-transform: uppercase; letter-spacing: 0.06em;
+}
+.config-field input {
+  width: 100%; background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 0.5rem 0.75rem; color: var(--text);
+  font-family: var(--mono); font-size: 13px; outline: none; transition: border-color 0.15s;
+}
+.config-field input:focus { border-color: var(--blue); }
+.btn-connect {
+  width: 100%; margin-top: 0.5rem; background: var(--blue); color: #fff; border: none;
+  border-radius: var(--radius-sm); padding: 0.625rem 1rem; font-size: 14px; font-weight: 600;
+  cursor: pointer; transition: opacity 0.15s; font-family: var(--font);
+}
+.btn-connect:hover { opacity: 0.9; }
+.config-hint { margin-top: 1rem; font-size: 11px; color: var(--text-dim); line-height: 1.6; }
+.config-hint code {
+  font-family: var(--mono); background: rgba(255,255,255,0.06); padding: 1px 4px; border-radius: 3px;
+}
+
+/* ── APP LAYOUT ─────────────────────────────────── */
+#app { display: flex; flex-direction: column; min-height: 100vh; }
+
+/* ── TOP BAR ────────────────────────────────────── */
+#topbar {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(15,17,23,0.92); backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  padding: 0.625rem 1.25rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+}
+.topbar-brand {
+  font-family: var(--font-display); font-size: 14px; font-weight: 700;
+  color: var(--text-head); letter-spacing: -0.02em;
+}
+.topbar-sep { color: var(--border-light); }
+.topbar-milestone {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 2px 8px; border-radius: 99px;
+  background: rgba(34,197,94,0.12); color: var(--green);
+  white-space: nowrap;
+}
+.topbar-milestone.idle { background: rgba(245,158,11,0.12); color: var(--amber); }
+.topbar-milestone.blocked { background: rgba(239,68,68,0.12); color: var(--red); }
+.topbar-milestone.in-progress { background: rgba(59,130,246,0.12); color: var(--blue); }
+
+/* ── VIEW SWITCHER ──────────────────────────────── */
+.view-switcher {
+  display: flex; gap: 0; background: rgba(255,255,255,0.05);
+  border-radius: var(--radius-sm); padding: 2px;
+}
+.view-btn {
+  background: none; border: none; padding: 4px 14px; font-size: 12px; font-weight: 600;
+  color: var(--text-sec); cursor: pointer; border-radius: 3px; font-family: var(--font);
+  transition: all 0.15s; white-space: nowrap;
+}
+.view-btn:hover { color: var(--text); }
+.view-btn.active { background: rgba(255,255,255,0.1); color: var(--text-head); }
+
+.conn-status {
+  font-size: 12px; color: var(--text-sec); display: flex; align-items: center;
+  gap: 0.4rem; white-space: nowrap;
+}
+.conn-status.error { color: var(--red); }
+.conn-status.stale { color: var(--amber); }
+.conn-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--gray);
+}
+.conn-dot.connected { background: var(--green); animation: pulse-green 2s ease-in-out infinite; }
+.conn-dot.stale { background: var(--amber); }
+.conn-dot.error { background: var(--red); }
+@keyframes pulse-green {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.5); }
+  50%      { box-shadow: 0 0 0 5px rgba(34,197,94,0); }
+}
+.topbar-api { font-family: var(--mono); font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+.topbar-time { font-family: var(--mono); font-size: 11px; color: var(--text-dim); margin-left: auto; white-space: nowrap; }
+
+/* ── VIEWS ──────────────────────────────────────── */
+.view { display: none; flex-direction: column; flex: 1; }
+.view.active { display: flex; }
+
+/* ═══════════════════════════════════════════════════
+   OPS VIEW — Mission Control
+   ═══════════════════════════════════════════════════ */
+.ops-main {
+  padding: 1.25rem; display: flex; flex-direction: column; gap: 1.25rem;
+  max-width: 1600px; margin: 0 auto; width: 100%;
+  transition: padding-right 0.2s ease;
+}
+.ops-main.pane-open { padding-right: 390px; }
+
+.chain-alert {
+  background: var(--red-dim); border: 1px solid var(--red); border-radius: var(--radius);
+  padding: 0.75rem 1rem; color: var(--red); font-weight: 600; font-size: 13px; display: none;
+}
+.chain-alert.chain-alert-unknown { background: var(--amber-dim); border-color: var(--amber); color: var(--amber); }
+
+.section {
+  background: var(--bg-card-alt); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+}
+.section-head {
+  padding: 0.625rem 1rem; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 0.5rem;
+}
+.ops-section-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--text-sec);
+}
+.section-meta { font-size: 11px; color: var(--text-dim); margin-left: auto; }
+.section-body { padding: 1rem; }
+
+/* Phase timeline (ops) */
+.ops-phase-timeline {
+  display: flex; align-items: flex-start; gap: 0; overflow-x: auto; padding: 0.5rem 0 0.75rem;
+}
+.ops-phase-item {
+  display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 100px; position: relative;
+}
+.ops-phase-item:not(:last-child)::after {
+  content: ''; position: absolute; top: 8px; left: calc(50% + 10px); right: calc(-50% + 10px);
+  height: 2px; background: var(--border-light); z-index: 0;
+}
+.ops-phase-item.complete:not(:last-child)::after { background: var(--green-dim); }
+.ops-phase-item.in_progress:not(:last-child)::after { background: var(--blue-dim); }
+.ops-phase-dot {
+  width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--border-light);
+  background: var(--bg); z-index: 1; position: relative; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.ops-phase-item.complete .ops-phase-dot { background: var(--green); border-color: var(--green); }
+.ops-phase-item.in_progress .ops-phase-dot {
+  background: var(--blue); border-color: var(--blue); animation: pulse-blue 2s ease-in-out infinite;
+}
+.ops-phase-item.blocked .ops-phase-dot { opacity: 0.4; }
+.ops-phase-item.selected .ops-phase-dot { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(59,130,246,0.3); }
+@keyframes pulse-blue {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0.5); }
+  50%      { box-shadow: 0 0 0 5px rgba(59,130,246,0); }
+}
+.ops-phase-num { font-size: 10px; font-weight: 700; color: #fff; line-height: 1; }
+.ops-phase-info { text-align: center; margin-top: 0.5rem; display: flex; flex-direction: column; align-items: center; }
+.ops-phase-row { display: flex; align-items: center; justify-content: center; width: 100%; }
+.ops-phase-row-name { height: 30px; }
+.ops-phase-row-tier { height: 16px; }
+.ops-phase-row-date { height: 16px; }
+.ops-phase-row-status { height: 20px; }
+.ops-phase-row-dots { height: 14px; }
+.ops-phase-name {
+  font-size: 11px; font-weight: 500; color: var(--text);
+  text-align: center; line-height: 1.3; overflow: hidden; max-width: 120px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.ops-phase-item.blocked .ops-phase-name { color: var(--text-sec); }
+.ops-phase-tier {
+  font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+.ops-phase-ts { font-family: var(--mono); font-size: 10px; color: var(--text-dim); }
+.phase-status-badge {
+  display: inline-block; font-size: 9px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; padding: 1px 5px; border-radius: 3px;
+}
+.phase-status-badge.complete    { background: rgba(34,197,94,0.15);  color: var(--green); }
+.phase-status-badge.in_progress { background: rgba(59,130,246,0.15); color: var(--blue); }
+.phase-status-badge.blocked     { background: rgba(100,116,139,0.15); color: var(--gray); }
+.phase-agent-dots { display: flex; gap: 3px; justify-content: center; }
+.phase-agent-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--gray); cursor: pointer; transition: transform 0.15s; }
+.phase-agent-dot:hover { transform: scale(1.8); }
+.phase-agent-dot.alive { background: var(--green); }
+.phase-agent-dot.defined { background: var(--gray); }
+.phase-agent-dot.designed { background: var(--amber); }
+.phase-agent-dot.missing { background: var(--red); }
+
+/* Agent grid (ops) */
+.agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.75rem; }
+.agent-card {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden; cursor: pointer; transition: border-color 0.15s;
+}
+.agent-card:hover { border-color: var(--border-light); }
+.agent-card.has-errors { border-color: rgba(239,68,68,0.3); }
+.agent-card.selected { border-color: var(--blue); }
+.agent-card-head {
+  padding: 0.625rem 0.75rem; display: flex; align-items: center; gap: 0.5rem; cursor: pointer;
+}
+.agent-role {
+  font-weight: 600; font-size: 13px; color: var(--text-head); flex: 1;
+  text-transform: capitalize; cursor: default;
+}
+.badge {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 2px 7px; border-radius: 99px; white-space: nowrap;
+}
+.badge-idle        { background: rgba(34,197,94,0.15);  color: var(--green); }
+.badge-processing  { background: rgba(59,130,246,0.15); color: var(--blue); }
+.badge-waiting     { background: rgba(245,158,11,0.15); color: var(--amber); }
+.badge-escalating, .badge-refusing, .badge-suspended { background: rgba(239,68,68,0.15); color: var(--red); }
+.badge-retiring, .badge-retired { background: rgba(100,116,139,0.15); color: var(--gray); }
+.badge-unknown { background: rgba(100,116,139,0.15); color: var(--gray); }
+.badge-model {
+  background: rgba(168,85,247,0.12); color: var(--purple);
+  font-family: var(--mono); font-size: 9px; padding: 2px 6px;
+}
+.agent-card-body {
+  padding: 0 0.75rem 0.625rem; display: flex; flex-direction: column; gap: 0.375rem;
+}
+.agent-row { display: flex; align-items: center; gap: 0.4rem; }
+.agent-label { font-size: 11px; color: var(--text-sec); flex-shrink: 0; }
+.agent-val { font-family: var(--mono); font-size: 11px; color: var(--text); }
+.agent-val.bold { font-weight: 700; color: var(--text-head); }
+.agent-val.cost-hot { color: var(--amber); }
+.progress-bar { flex: 1; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--blue); border-radius: 2px; transition: width 0.3s; }
+.progress-fill.warn { background: var(--amber); }
+.progress-fill.danger { background: var(--red); }
+.trust-bar-wrap {
+  width: 40px; height: 4px; background: var(--border); border-radius: 2px;
+  overflow: hidden; display: inline-block; vertical-align: middle;
+}
+.trust-bar-fill { height: 100%; border-radius: 2px; }
+.trust-bar-fill.trust-low  { background: var(--red); }
+.trust-bar-fill.trust-mid  { background: var(--amber); }
+.trust-bar-fill.trust-high { background: var(--green); }
+.burn-rate { font-family: var(--mono); font-size: 10px; margin-left: 4px; }
+.burn-rate.burn-ok     { color: var(--green); }
+.burn-rate.burn-warn   { color: var(--amber); }
+.burn-rate.burn-danger { color: var(--red); }
+.agent-event {
+  font-size: 11px; color: var(--text-sec); padding-top: 0.25rem;
+  border-top: 1px solid var(--border); display: flex; align-items: center; gap: 0.375rem; flex-wrap: wrap;
+}
+.agent-activity {
+  font-size: 11px; color: var(--text-sec); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; line-height: 1.4;
+}
+.event-type-pill {
+  font-size: 10px; font-weight: 500; padding: 1px 6px; border-radius: 3px; font-family: var(--mono);
+}
+.agent-expand {
+  display: none; border-top: 1px solid var(--border); padding: 0.625rem 0.75rem;
+  flex-direction: column; gap: 0.5rem;
+}
+.agent-card.expanded .agent-expand { display: flex; }
+.expand-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-dim); margin-bottom: 0.25rem;
+}
+.last-message {
+  background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 0.5rem; font-family: var(--mono); font-size: 11px; color: var(--text-sec);
+  white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto; line-height: 1.5;
+}
+.expand-meta { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+.expand-meta-item { font-size: 11px; color: var(--text-sec); }
+.data-empty {
+  color: var(--text-sec); font-size: 13px; padding: 1.5rem; text-align: center;
+}
+
+/* Hive health (ops) */
+.hive-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; }
+.hive-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem; }
+.hive-card-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-dim); margin-bottom: 0.375rem;
+}
+.hive-card-val { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--text-head); line-height: 1.2; }
+.hive-card-val-sub { font-family: var(--mono); font-size: 13px; font-weight: 400; color: var(--text-sec); }
+.hive-card-sub { font-size: 11px; color: var(--text-sec); margin-top: 0.25rem; }
+.severity-badge {
+  display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; padding: 3px 10px; border-radius: 99px; margin-top: 0.375rem;
+}
+.severity-ok       { background: rgba(34,197,94,0.15);  color: var(--green); }
+.severity-warning  { background: rgba(245,158,11,0.15); color: var(--amber); }
+.severity-critical { background: rgba(239,68,68,0.15);  color: var(--red); }
+
+/* Event stream (ops) */
+.event-filter-bar {
+  display: flex; gap: 0; padding: 0 1rem; border-bottom: 1px solid var(--border);
+}
+.event-filter-btn {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  padding: 0.5rem 0.75rem; font-size: 11px; font-weight: 600; color: var(--text-sec);
+  cursor: pointer; text-transform: uppercase; letter-spacing: 0.04em;
+}
+.event-filter-btn:hover { color: var(--text); }
+.event-filter-btn.active { color: var(--blue); border-bottom-color: var(--blue); }
+.event-stream { max-height: 380px; overflow-y: auto; }
+.event-row {
+  display: flex; align-items: baseline; gap: 0.625rem; padding: 0.375rem 1rem;
+  border-bottom: 1px solid rgba(30,41,59,0.5); font-size: 12px; overflow: hidden;
+}
+.event-row:last-child { border-bottom: none; }
+.event-ts { font-family: var(--mono); font-size: 10px; color: var(--text-dim); white-space: nowrap; flex-shrink: 0; min-width: 52px; }
+.event-actor {
+  font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 3px;
+  background: rgba(100,116,139,0.15); color: var(--text-sec); white-space: nowrap;
+  flex-shrink: 0; text-transform: capitalize;
+}
+.event-type {
+  font-family: var(--mono); font-size: 10px; font-weight: 600; padding: 1px 6px;
+  border-radius: 3px; white-space: nowrap; flex-shrink: 0;
+}
+.evt-health  { background: rgba(59,130,246,0.15);  color: var(--blue); }
+.evt-budget  { background: rgba(245,158,11,0.15);  color: var(--amber); }
+.evt-work    { background: rgba(34,197,94,0.15);   color: var(--green); }
+.evt-state   { background: rgba(100,116,139,0.15); color: var(--gray); }
+.evt-hive    { background: rgba(168,85,247,0.12);  color: var(--purple); }
+.evt-default { background: rgba(100,116,139,0.1);  color: var(--text-sec); }
+.event-summary {
+  color: var(--text-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}
+
+/* Task pane (ops) */
+#task-pane {
+  position: fixed; right: 0; top: 0; bottom: 0; width: 380px;
+  background: var(--bg); border-left: 1px solid var(--border); z-index: 10;
+  overflow-y: auto; transform: translateX(100%); transition: transform 0.2s ease;
+  display: flex; flex-direction: column;
+}
+#task-pane.open { transform: translateX(0); }
+.task-pane-head {
+  padding: 0.75rem 1rem; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;
+}
+.task-pane-title { font-weight: 600; font-size: 14px; color: var(--text-head); text-transform: capitalize; flex: 1; }
+.task-pane-close {
+  background: none; border: none; color: var(--text-sec); font-size: 18px;
+  cursor: pointer; padding: 2px 6px; line-height: 1;
+}
+.task-pane-close:hover { color: var(--text); }
+.task-pane-body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; flex: 1; }
+.task-item {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 0.625rem 0.75rem; cursor: pointer;
+}
+.task-item:hover { border-color: var(--border-light); }
+.task-title { font-weight: 600; font-size: 12px; color: var(--text-head); margin-bottom: 0.25rem; }
+.task-meta { display: flex; gap: 0.375rem; margin-bottom: 0.25rem; }
+.task-badge {
+  font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 1px 6px; border-radius: 99px;
+}
+.task-badge-assigned  { background: rgba(59,130,246,0.15);  color: var(--blue); }
+.task-badge-pending   { background: rgba(100,116,139,0.15); color: var(--text-dim); }
+.task-badge-completed { background: rgba(34,197,94,0.15);   color: var(--green); }
+.task-badge-high   { color: var(--red); }
+.task-badge-medium { color: var(--amber); }
+.task-badge-low    { color: var(--text-dim); }
+.task-desc { font-size: 11px; color: var(--text-sec); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-item.expanded .task-desc { white-space: pre-wrap; overflow: visible; text-overflow: unset; }
+.task-pane-empty { color: var(--text-dim); font-size: 12px; text-align: center; padding: 2rem 1rem; }
+.task-pane-retry { color: var(--blue); cursor: pointer; text-decoration: underline; background: none; border: none; font-size: 12px; }
+.task-pane-activity {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 0.625rem 0.75rem; margin-bottom: 0.25rem;
+}
+.task-pane-activity-label {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-dim); margin-bottom: 0.375rem;
+}
+.task-pane-activity-text {
+  font-size: 11px; color: var(--text-sec); line-height: 1.5; white-space: pre-wrap;
+  word-break: break-word; max-height: 200px; overflow-y: auto;
+}
+
+/* ═══════════════════════════════════════════════════
+   ARCH VIEW — Architecture
+   ═══════════════════════════════════════════════════ */
+.arch-tab-bar {
+  display: flex; gap: 0; border-bottom: 1px solid var(--border);
+  padding: 0 1.5rem; background: rgba(15,17,23,0.6); overflow-x: auto;
+}
+.arch-tab-btn {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  padding: 0.75rem 1rem; font-size: 12px; font-weight: 600; color: var(--text-sec);
+  cursor: pointer; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap;
+  font-family: var(--font); transition: color 0.15s, border-color 0.15s;
+}
+.arch-tab-btn:hover { color: var(--text); }
+.arch-tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); }
+.arch-main { padding: 1.5rem; max-width: 1100px; margin: 0 auto; width: 100%; }
+.arch-panel { display: none; }
+.arch-panel.active { display: block; }
+.arch-section-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--text-dim); margin-bottom: 1rem;
+}
+
+/* Concept stack */
+.concept-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.75rem; margin-bottom: 1.25rem; }
+.concept-box {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 1.25rem 1rem; cursor: pointer; transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+  position: relative; overflow: hidden;
+}
+.concept-box::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+.concept-box:hover { border-color: var(--border-light); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.3); }
+.concept-box.active { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
+.concept-box .c-num { font-family: var(--font-display); font-size: 28px; font-weight: 700; color: var(--text-head); line-height: 1; margin-bottom: 0.375rem; }
+.concept-box .c-label { font-size: 13px; font-weight: 600; color: var(--text-head); margin-bottom: 0.125rem; }
+.concept-box .c-question { font-size: 11px; color: var(--text-sec); font-style: italic; }
+.concept-box.box-layer::before   { background: var(--gray); }
+.concept-box.box-actor::before   { background: var(--red); }
+.concept-box.box-agent::before   { background: var(--green); }
+.concept-box.box-role::before    { background: var(--amber); }
+.concept-box.box-persona::before { background: var(--blue); }
+.concept-desc { font-size: 12px; color: var(--text-sec); line-height: 1.6; padding: 0.75rem 0; border-top: 1px solid var(--border); }
+
+/* Repo strata */
+.repo-stack { display: flex; flex-direction: column; gap: 0; }
+.repo-tier { display: flex; gap: 0.75rem; align-items: stretch; }
+.repo-tier-label {
+  width: 90px; flex-shrink: 0; display: flex; align-items: center; font-size: 11px;
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim);
+}
+.repo-tier-cards { flex: 1; display: flex; gap: 0.75rem; }
+.repo-card { flex: 1; padding: 1rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); min-width: 0; }
+.repo-card .r-name { font-weight: 600; font-size: 13px; color: var(--text-head); margin-bottom: 0.125rem; }
+.repo-card .r-loc { font-family: var(--mono); font-size: 11px; color: var(--text-sec); margin-bottom: 0.25rem; }
+.repo-card .r-desc { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+.repo-arrow { text-align: center; color: var(--text-dim); font-size: 11px; padding: 0.375rem 0; padding-left: 90px; }
+.repo-total { margin-top: 1rem; font-size: 12px; color: var(--text-sec); line-height: 1.6; }
+
+/* Role tiers */
+.arch-tier-section { margin-bottom: 1.5rem; }
+.arch-tier-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+.tier-badge {
+  display: inline-block; padding: 3px 10px; border-radius: 99px; font-size: 11px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+}
+.tier-badge-A { background: rgba(239,68,68,0.12);  color: var(--red); }
+.tier-badge-B { background: rgba(245,158,11,0.12); color: var(--amber); }
+.tier-badge-C { background: rgba(34,197,94,0.12);  color: var(--green); }
+.tier-badge-D { background: rgba(59,130,246,0.12); color: var(--blue); }
+.arch-tier-desc { font-size: 12px; color: var(--text-sec); }
+.role-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 0.5rem; }
+.role-chip {
+  display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer; transition: border-color 0.15s, background 0.15s;
+}
+.role-chip:hover { border-color: var(--border-light); background: rgba(31,37,56,1); }
+.role-chip.active { border-color: var(--blue); }
+.role-chip .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.dot-running  { background: var(--green); }
+.dot-defined  { background: var(--gray); }
+.dot-designed { background: var(--amber); }
+.dot-missing  { background: var(--red); }
+.role-chip .rc-name {
+  font-size: 12px; font-weight: 500; color: var(--text); flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.role-chip .rc-model {
+  font-family: var(--mono); font-size: 9px; padding: 1px 5px; border-radius: 3px;
+  background: rgba(168,85,247,0.12); color: var(--purple); white-space: nowrap;
+}
+.rc-origin {
+  font-size: 9px; font-weight: 600; padding: 1px 5px; border-radius: 3px;
+  text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap;
+  background: rgba(100,116,139,0.12); color: var(--gray);
+}
+.rc-origin-spawned { background: rgba(34,197,94,0.12); color: var(--green); }
+.legend { display: flex; gap: 1rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
+.legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-sec); }
+.legend-item .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+
+/* Phase timeline (arch) */
+.arch-phase-bar {
+  display: flex; align-items: flex-start; gap: 0; overflow-x: auto; padding: 0.75rem 0 1rem; margin-bottom: 1.5rem;
+}
+.arch-phase-node {
+  display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 80px;
+  position: relative; cursor: pointer;
+}
+.arch-phase-node:not(:last-child)::after {
+  content: ''; position: absolute; top: 9px; left: calc(50% + 12px); right: calc(-50% + 12px);
+  height: 2px; background: var(--border); z-index: 0;
+}
+.arch-phase-node.complete:not(:last-child)::after { background: rgba(34,197,94,0.3); }
+.arch-phase-node.in_progress:not(:last-child)::after { background: rgba(59,130,246,0.3); }
+.arch-phase-dot {
+  width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--border);
+  background: var(--bg); z-index: 1; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.arch-phase-node.complete .arch-phase-dot { background: var(--green); border-color: var(--green); }
+.arch-phase-node.in_progress .arch-phase-dot { background: var(--blue); border-color: var(--blue); animation: pulse-blue 2s ease-in-out infinite; }
+.arch-phase-node.blocked .arch-phase-dot { opacity: 0.4; }
+.arch-phase-dot-num { font-size: 9px; font-weight: 700; color: #fff; line-height: 1; }
+.arch-phase-node .ap-label {
+  font-size: 11px; font-weight: 500; color: var(--text); text-align: center; margin-top: 0.5rem;
+  max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.arch-phase-node.blocked .ap-label { color: var(--text-sec); }
+.arch-phase-node .ap-date { font-family: var(--mono); font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+
+/* Phase cards (arch) */
+.phase-cards { display: flex; flex-direction: column; gap: 0.75rem; }
+.phase-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 1.25rem; cursor: pointer; transition: border-color 0.15s;
+}
+.phase-card:hover { border-color: var(--border-light); }
+.phase-card.active { border-color: var(--blue); }
+.phase-card-head { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; }
+.phase-card-title { font-size: 14px; font-weight: 600; color: var(--text-head); flex: 1; }
+.status-badge {
+  display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; padding: 2px 8px; border-radius: 99px;
+}
+.status-complete    { background: rgba(34,197,94,0.15);  color: var(--green); }
+.status-in_progress { background: rgba(59,130,246,0.15); color: var(--blue); }
+.status-blocked     { background: rgba(100,116,139,0.15); color: var(--gray); }
+.status-running     { background: rgba(34,197,94,0.15);  color: var(--green); }
+.status-defined     { background: rgba(100,116,139,0.15); color: var(--gray); }
+.status-designed    { background: rgba(245,158,11,0.15); color: var(--amber); }
+.status-missing     { background: rgba(239,68,68,0.15);  color: var(--red); }
+.phase-card-desc { font-size: 12px; color: var(--text-sec); margin-bottom: 0.75rem; line-height: 1.5; }
+.phase-card-agents { display: flex; flex-wrap: wrap; gap: 0.375rem; margin-bottom: 0.5rem; }
+.phase-agent-tag {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 8px;
+  border-radius: 99px; background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+  cursor: pointer; transition: border-color 0.15s;
+}
+.phase-agent-tag:hover { border-color: var(--border-light); }
+.phase-agent-tag .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.phase-gaps {
+  margin-top: 0.5rem; padding: 0.5rem 0.75rem; background: rgba(239,68,68,0.06);
+  border: 1px solid rgba(239,68,68,0.15); border-radius: var(--radius-sm); font-size: 11px; color: var(--red);
+}
+.phase-gaps-title { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem; }
+.phase-deps { font-size: 11px; color: var(--text-dim); margin-top: 0.375rem; }
+.phase-dates { font-family: var(--mono); font-size: 11px; color: var(--text-dim); margin-top: 0.25rem; }
+
+/* Governance */
+.gov-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 1.5rem; }
+.gov-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.25rem;
+  cursor: pointer; transition: border-color 0.15s, transform 0.15s;
+}
+.gov-card:hover { border-color: var(--border-light); transform: translateY(-1px); }
+.gov-card h4 { font-size: 13px; font-weight: 600; color: var(--text-head); margin-bottom: 0.375rem; }
+.gov-card p { font-size: 12px; color: var(--text-sec); line-height: 1.6; }
+.trust-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.trust-table th {
+  text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-dim); padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border);
+}
+.trust-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid rgba(45,55,72,0.5); color: var(--text); }
+.trust-table tr:last-child td { border-bottom: none; }
+.authority-required     { color: var(--red); }
+.authority-recommended  { color: var(--amber); }
+.authority-notification { color: var(--green); }
+
+/* Detail panel (arch) */
+#detail-panel {
+  position: fixed; top: 0; right: 0; width: var(--panel-width); height: 100vh;
+  background: var(--bg-card); border-left: 1px solid var(--border); z-index: 200;
+  display: flex; flex-direction: column; transform: translateX(100%);
+  transition: transform var(--transition); box-shadow: -8px 0 32px rgba(0,0,0,0.4);
+}
+body.panel-open #detail-panel { transform: translateX(0); }
+body.panel-open #app { margin-right: var(--panel-width); transition: margin-right var(--transition); }
+.panel-header {
+  display: flex; align-items: center; padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border); gap: 0.75rem; flex-shrink: 0;
+}
+.panel-title {
+  font-size: 15px; font-weight: 600; color: var(--text-head); flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.panel-close {
+  background: none; border: none; color: var(--text-sec); font-size: 20px; cursor: pointer;
+  padding: 0.25rem; line-height: 1; transition: color 0.15s; flex-shrink: 0;
+}
+.panel-close:hover { color: var(--text); }
+.panel-body { flex: 1; overflow-y: auto; padding: 1.25rem; }
+.panel-body .p-section { margin-bottom: 1.25rem; }
+.panel-body .p-section-title {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--text-dim); margin-bottom: 0.5rem;
+}
+.panel-body .p-row { display: flex; align-items: baseline; gap: 0.5rem; padding: 0.25rem 0; font-size: 12px; }
+.panel-body .p-label { color: var(--text-sec); flex-shrink: 0; min-width: 90px; }
+.panel-body .p-val { color: var(--text); word-break: break-word; }
+.panel-body .cross-link { color: var(--blue); cursor: pointer; text-decoration: none; transition: opacity 0.15s; }
+.panel-body .cross-link:hover { opacity: 0.8; }
+.panel-body table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.panel-body th {
+  text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-dim); padding: 0.375rem 0.5rem; border-bottom: 1px solid var(--border);
+}
+.panel-body td { padding: 0.375rem 0.5rem; border-bottom: 1px solid rgba(45,55,72,0.4); color: var(--text); vertical-align: top; }
+.panel-body tr:last-child td { border-bottom: none; }
+.panel-body .clickable-row { cursor: pointer; transition: background 0.15s; }
+.panel-body .clickable-row:hover { background: rgba(255,255,255,0.03); }
+.panel-body .watch-list { list-style: none; padding: 0; }
+.panel-body .watch-list li { font-family: var(--mono); font-size: 11px; color: var(--text-sec); padding: 0.125rem 0; }
+.panel-body .watch-list li::before { content: '\2022'; color: var(--text-dim); margin-right: 0.5rem; }
+
+/* Panel dots (need explicit size outside .role-chip/.legend-item context) */
+.panel-body .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; display: inline-block; vertical-align: middle; }
+
+/* Agent definition (collapsible markdown sections) */
+.md-section { border-top: 1px solid var(--border); }
+.md-section:first-child { border-top: none; }
+.md-section-header {
+  display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0;
+  cursor: pointer; user-select: none;
+}
+.md-section-header:hover { opacity: 0.8; }
+.md-chevron {
+  font-size: 10px; color: var(--text-dim); transition: transform 0.15s;
+  display: inline-block; width: 12px; text-align: center;
+}
+.md-section.open .md-chevron { transform: rotate(90deg); }
+.md-section-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-sec);
+}
+.md-section-body {
+  display: none; padding: 0 0 0.75rem 0;
+  font-size: 12px; line-height: 1.6; color: var(--text-sec);
+}
+.md-section.open .md-section-body { display: block; }
+.md-section-body p { margin: 0 0 0.5rem 0; }
+.md-section-body p:last-child { margin-bottom: 0; }
+.md-section-body ul { margin: 0 0 0.5rem 0; padding-left: 1.25rem; }
+.md-section-body li { margin-bottom: 0.25rem; }
+.md-section-body code {
+  font-family: var(--mono); font-size: 11px;
+  background: rgba(255,255,255,0.06); padding: 1px 4px; border-radius: 3px;
+}
+.md-section-body pre {
+  background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: var(--radius-sm);
+  overflow-x: auto; margin: 0.5rem 0;
+}
+.md-section-body pre code { background: none; padding: 0; }
+.md-section-body blockquote {
+  border-left: 3px solid var(--border-light); padding-left: 0.75rem;
+  color: var(--text-dim); font-style: italic; margin: 0.5rem 0;
+}
+.md-loading {
+  font-size: 11px; color: var(--text-dim); font-style: italic;
+  padding: 0.75rem 0;
+}
+
+/* Panel legend (reusable inside detail panels) */
+.panel-legend {
+  display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem;
+  font-size: 11px; color: var(--text-sec);
+}
+.panel-legend span { display: flex; align-items: center; gap: 4px; }
+
+/* Panel back link */
+.panel-back {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px;
+  color: var(--blue); cursor: pointer; margin-bottom: 0.75rem;
+  transition: opacity 0.15s; background: none; border: none; font-family: var(--font); padding: 0;
+}
+.panel-back:hover { opacity: 0.8; }
+
+/* Persona grid */
+.persona-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.375rem; margin-bottom: 0.75rem;
+}
+.persona-chip {
+  padding: 0.375rem 0.625rem; background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+  border-left: 3px solid var(--gray); border-radius: var(--radius-sm); font-size: 11px;
+  color: var(--text); cursor: pointer; transition: border-color 0.15s, background 0.15s; text-align: left;
+}
+.persona-chip:hover { border-color: var(--border-light); background: rgba(255,255,255,0.06); }
+.persona-chip.inactive { opacity: 0.5; }
+
+/* ── SCROLLBAR ──────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* ── RESPONSIVE ─────────────────────────────────── */
+@media (max-width: 900px) {
+  .concept-grid { grid-template-columns: repeat(3, 1fr); }
+  .agent-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  .hive-grid  { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .gov-grid   { grid-template-columns: 1fr; }
+}
+@media (max-width: 768px) {
+  :root { --panel-width: 100vw; }
+  body.panel-open #app { margin-right: 0; }
+  #detail-panel { width: 100vw; }
+  .ops-main { padding: 0.75rem; gap: 0.75rem; }
+  .ops-main.pane-open { padding-right: 0; }
+  #task-pane { box-shadow: -4px 0 20px rgba(0,0,0,0.5); }
+  .topbar-time { display: none; }
+  .concept-grid { grid-template-columns: repeat(2, 1fr); }
+  .repo-tier { flex-direction: column; }
+  .repo-tier-label { width: auto; }
+  .repo-tier-cards { flex-direction: column; }
+  .repo-arrow { padding-left: 0; }
+  .role-grid { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+
+<!-- CONFIG SCREEN -->
+<div id="config-screen" style="display:none">
+  <div class="config-card">
+    <h1>Transpara-AI &mdash; Telemetry</h1>
+    <p class="config-subtitle">Enter the work-server URL and API key to connect</p>
+    <div class="config-field">
+      <label for="cfg-api">API URL</label>
+      <input id="cfg-api" type="url" placeholder="http://nucbuntu:8080" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="config-field">
+      <label for="cfg-key">API Key</label>
+      <input id="cfg-key" type="password" placeholder="Bearer token" autocomplete="off" spellcheck="false">
+    </div>
+    <button class="btn-connect" id="cfg-btn">Connect</button>
+    <p class="config-hint">
+      Opens: <code>dashboard.html?api=URL&amp;key=KEY</code><br>
+      Find the API URL and key in the work-server config on nucbuntu.
+    </p>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════
+     MAIN APP
+     ═══════════════════════════════════════════════ -->
+<div id="app" style="display:none">
+
+  <!-- TOPBAR -->
+  <div id="topbar">
+    <span class="topbar-brand">Transpara-AI</span>
+    <span class="topbar-milestone idle" id="topbar-milestone">Awaiting data&hellip;</span>
+    <span class="topbar-sep">&middot;</span>
+    <div class="view-switcher">
+      <button class="view-btn active" data-view="ops">Mission Control</button>
+      <button class="view-btn" data-view="arch">Architecture</button>
+    </div>
+    <div class="conn-status" id="conn-status">
+      <div class="conn-dot" id="conn-dot"></div>
+      <span id="conn-text">Connecting&hellip;</span>
+    </div>
+    <span class="topbar-api" id="topbar-api"></span>
+    <span class="topbar-time" id="topbar-time"></span>
+  </div>
+
+  <!-- ── VIEW: MISSION CONTROL ───────────────────── -->
+  <div id="view-ops" class="view active">
+    <div class="ops-main" id="ops-main">
+      <div class="chain-alert" id="chain-alert"></div>
+
+      <div class="section">
+        <div class="section-head">
+          <span class="ops-section-label">Expansion Phases</span>
+        </div>
+        <div class="section-body">
+          <div class="ops-phase-timeline" id="ops-phase-timeline">
+            <div class="data-empty">Awaiting telemetry data&hellip;</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head">
+          <span class="ops-section-label">Agent Status</span>
+          <span class="section-meta" id="agent-count"></span>
+        </div>
+        <div class="section-body">
+          <div class="agent-grid" id="agent-grid">
+            <div class="data-empty">Awaiting telemetry data&hellip;</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head">
+          <span class="ops-section-label">Hive Health</span>
+        </div>
+        <div class="section-body">
+          <div class="hive-grid" id="hive-grid">
+            <div class="data-empty">Awaiting telemetry data&hellip;</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head">
+          <span class="ops-section-label">Event Stream</span>
+          <span class="section-meta" id="event-count"></span>
+        </div>
+        <div class="event-filter-bar">
+          <button class="event-filter-btn" id="filter-all">All Events</button>
+          <button class="event-filter-btn active" id="filter-exceptions">Exceptions Only</button>
+        </div>
+        <div class="event-stream" id="event-stream">
+          <div class="data-empty">No recent events</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── VIEW: ARCHITECTURE ──────────────────────── -->
+  <div id="view-arch" class="view">
+    <div class="arch-tab-bar">
+      <button class="arch-tab-btn active" data-tab="concept">Concept Stack</button>
+      <button class="arch-tab-btn" data-tab="repo">Repository Strata</button>
+      <button class="arch-tab-btn" data-tab="tiers">Role Tiers</button>
+      <button class="arch-tab-btn" data-tab="phases">Expansion Phases</button>
+      <button class="arch-tab-btn" data-tab="governance">Governance</button>
+    </div>
+    <div class="arch-main">
+      <div id="arch-concept" class="arch-panel active">
+        <p class="arch-section-label">Five orthogonal concepts &mdash; one stack per civilization member</p>
+        <div class="concept-grid" id="concept-grid"></div>
+        <div class="concept-desc">
+          No concept is reducible to another. Layer is the domain. Actor is the identity. Agent is the runtime. Role is the job. Persona is the voice. A single civilization member is all five simultaneously.
+        </div>
+      </div>
+      <div id="arch-repo" class="arch-panel">
+        <p class="arch-section-label">Repository dependency strata &mdash; nothing flows upward</p>
+        <div id="repo-content"></div>
+      </div>
+      <div id="arch-tiers" class="arch-panel">
+        <p class="arch-section-label">Role tiers &mdash; civilization growth order</p>
+        <div class="legend">
+          <div class="legend-item"><span class="dot dot-running"></span> Running</div>
+          <div class="legend-item"><span class="dot dot-defined"></span> Defined</div>
+          <div class="legend-item"><span class="dot dot-designed"></span> Designed</div>
+          <div class="legend-item"><span class="dot dot-missing"></span> Missing</div>
+        </div>
+        <div id="tiers-content"></div>
+      </div>
+      <div id="arch-phases" class="arch-panel">
+        <p class="arch-section-label">Expansion phases &mdash; each blocks on the one above it</p>
+        <div id="arch-phase-bar" class="arch-phase-bar"></div>
+        <div id="arch-phase-cards" class="phase-cards"></div>
+      </div>
+      <div id="arch-governance" class="arch-panel">
+        <p class="arch-section-label">Governance architecture &mdash; structural skeleton</p>
+        <div class="gov-grid" id="gov-grid"></div>
+        <div id="trust-section"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TASK PANE (ops) -->
+<div id="task-pane">
+  <div class="task-pane-head">
+    <span class="task-pane-title" id="task-pane-title"></span>
+    <button class="task-pane-close" id="task-pane-close">&times;</button>
+  </div>
+  <div class="task-pane-body" id="task-pane-body"></div>
+</div>
+
+<!-- DETAIL PANEL (arch) -->
+<div id="detail-panel">
+  <div class="panel-header">
+    <span class="panel-title" id="panel-title"></span>
+    <button class="panel-close" id="panel-close">&times;</button>
+  </div>
+  <div class="panel-body" id="panel-body"></div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ── CONFIGURATION ──────────────────────────────────
+  var params   = new URLSearchParams(window.location.search);
+  var embedded = /\/telemetry\/?$/.test(window.location.pathname);
+  var API_BASE = embedded ? window.location.origin : params.get("api");
+  var API_KEY  = embedded ? null : params.get("key");
+  var USE_COOKIE_AUTH = embedded;
+
+  if (!API_BASE && !embedded) {
+    document.getElementById("config-screen").style.display = "flex";
+    document.getElementById("cfg-btn").addEventListener("click", connect);
+    document.getElementById("cfg-key").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") connect();
+    });
+  }
+  // App bootstrap runs at the bottom of the IIFE (search: BOOTSTRAP)
+  // so top-level `var` initializers (CONN, opsData, etc.) have evaluated
+  // before init() → connectSSE() touches them.
+
+  function connect() {
+    var api = document.getElementById("cfg-api").value.trim().replace(/\/$/, "");
+    var key = document.getElementById("cfg-key").value.trim();
+    if (!api || !key) { alert("Both API URL and API Key are required."); return; }
+    var url = new URL(window.location.href.split("?")[0]);
+    url.searchParams.set("api", api);
+    url.searchParams.set("key", key);
+    window.location.href = url.toString();
+  }
+
+  // ── STATE ──────────────────────────────────────────
+  var activeView   = "ops";
+  var opsData      = null;
+  var archData     = null;
+  var roleStatusMap = {}; // role key → status string, refreshed each ops poll
+  var rolePurposeMap = {}; // role key → purpose string, refreshed each ops poll
+  var opsLastFetch = 0;
+  var archLastFetch = 0;
+  var pollController = null;
+  var archPollController = null;
+  var lastSuccess  = null;
+  var opsConsecutiveFails = 0;
+  var archConsecutiveFails = 0;
+  var _connState   = "";
+
+  // SSE connection state machine (see connectSSE / recordFailure / enterFallback).
+  var CONN = {
+    state: "start",          // start | connecting | connected | reconnecting | fallback
+    source: null,            // active EventSource
+    failures: 0,             // consecutive reconnect failures
+    firstFailureAt: 0,       // timestamp of first failure in the current streak
+    reconnectTimer: null,    // setTimeout for next reconnect attempt
+    fallbackTimers: { ops: null, arch: null }
+  };
+  var MAX_EVENT_BUFFER = 200;
+
+  // Ops-specific state
+  var selectedOpsAgent = null; // role name of agent shown in detail panel
+  var selectedOpsPhase = null; // phase number shown in detail panel
+  var selectedOpsDot = null;   // {role, phase} for non-running dot panel restore
+  var lastOpsPhases = [];      // cached for panel refresh
+
+  // Phase → agent roster is now served by the backend under
+  // /telemetry/status → phases[].agents[] (each {role, status}). No
+  // hardcoded map here — the backend is the single source of truth.
+  var PHASE_TIER = { 0: "A", 1: "A", 2: "B", 3: "B", 4: "C", 5: "C", 6: "D", 7: "D", 8: "D" };
+  var PHASE_LABEL = { 4: "Emergence" };
+  // Agent definitions live in the transpara-ai fork on GitHub.
+  // Map: role name (as emitted by the backend) → markdown filename (without .md).
+  // Value null means no MD file exists for that role yet; the dot is rendered
+  // without a clickable doc link.
+  var AGENT_MD_BASE = "https://github.com/transpara-ai/hive/blob/main/agents/";
+  var AGENT_MD_NAME = {
+    "guardian": "guardian",
+    "strategist": "strategist",
+    "planner": "planner",
+    "implementer": "implementer",
+    "sysmon": "sysmon",
+    "allocator": "allocator",
+    "checkpoint-verifier": null,
+    "cto": "cto",
+    "reviewer": "reviewer",
+    "spawner": "spawner",
+    "researcher": "research",
+    "critic": "critic",
+    "task-curator": null,
+    "incidentcommander": "incident-commander",
+    "securityreviewer": "security-reviewer",
+    "memorykeeper": "memory-keeper",
+    "gapdetector": "gap-detector",
+    "integrator": "integrator",
+    "pm": "pm",
+    "finance": "finance",
+    "customersvc": "customer-success",
+    "sre": "sre",
+    "devops": "devops",
+    "legal": "legal",
+    "philosopher": "philosopher",
+    "rolearchitect": "role-architect",
+    "harmony": "harmony",
+    "politician": "politician"
+  };
+  function agentMdUrl(role) {
+    var key = role.toLowerCase();
+    if (!(key in AGENT_MD_NAME) || AGENT_MD_NAME[key] === null) return null;
+    return AGENT_MD_BASE + AGENT_MD_NAME[key] + ".md";
+  }
+  var AGENT_MD_RAW_BASE = "https://raw.githubusercontent.com/transpara-ai/hive/main/agents/";
+  var agentMdCache = {};
+
+  function agentMdRawUrl(role) {
+    var key = role.toLowerCase();
+    if (!(key in AGENT_MD_NAME) || AGENT_MD_NAME[key] === null) return null;
+    return AGENT_MD_RAW_BASE + AGENT_MD_NAME[key] + ".md";
+  }
+
+  function parseAgentMd(raw) {
+    var sections = [];
+    var parts = raw.split(/^## /m);
+    for (var i = 1; i < parts.length; i++) {
+      var nlIdx = parts[i].indexOf("\n");
+      if (nlIdx === -1) continue;
+      var heading = parts[i].substring(0, nlIdx).trim();
+      var body = parts[i].substring(nlIdx + 1).trim();
+      if (heading && body) sections.push({ heading: heading, body: body });
+    }
+    return sections;
+  }
+
+  function fetchAgentMd(role, callback) {
+    var key = role.toLowerCase();
+    if (key in agentMdCache) { callback(agentMdCache[key].length ? agentMdCache[key] : null); return; }
+    var url = agentMdRawUrl(key);
+    if (!url) { callback(null); return; }
+    fetch(url).then(function (res) {
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.text();
+    }).then(function (text) {
+      var sections = parseAgentMd(text);
+      agentMdCache[key] = sections;
+      callback(sections);
+    }).catch(function () {
+      agentMdCache[key] = [];
+      callback(null);
+    });
+  }
+
+  function mdFallbackEl(role) {
+    var wrap = el("div", { cls: "md-loading" });
+    wrap.appendChild(document.createTextNode("Definition not available \u2014 "));
+    var ghLink = document.createElement("a");
+    ghLink.href = agentMdUrl(role) || "#"; ghLink.target = "_blank"; ghLink.rel = "noopener";
+    ghLink.textContent = "View on GitHub";
+    ghLink.style.cssText = "color:var(--blue);text-decoration:none;font-size:11px";
+    wrap.appendChild(ghLink);
+    return wrap;
+  }
+
+  function renderInline(text) {
+    var frag = document.createDocumentFragment();
+    var parts = text.split(/`([^`]+)`/);
+    for (var i = 0; i < parts.length; i++) {
+      if (i % 2 === 0) { if (parts[i]) frag.appendChild(document.createTextNode(parts[i])); }
+      else { frag.appendChild(el("code", { text: parts[i] })); }
+    }
+    return frag;
+  }
+
+  function renderMdBody(body) {
+    var frag = document.createDocumentFragment();
+    // Extract fenced code blocks before splitting
+    var tokens = [];
+    var rest = body;
+    while (true) {
+      var start = rest.indexOf("```");
+      if (start === -1) { tokens.push({ type: "text", value: rest }); break; }
+      if (start > 0) tokens.push({ type: "text", value: rest.substring(0, start) });
+      var end = rest.indexOf("```", start + 3);
+      if (end === -1) { tokens.push({ type: "text", value: rest }); break; }
+      tokens.push({ type: "code", value: rest.substring(start, end + 3) });
+      rest = rest.substring(end + 3);
+    }
+
+    tokens.forEach(function (tok) {
+      if (tok.type === "code") {
+        var code = tok.value.replace(/^```\w*\n?/, "").replace(/\n?```$/, "");
+        var pre = el("pre"); pre.appendChild(el("code", { text: code }));
+        frag.appendChild(pre);
+        return;
+      }
+      var blocks = tok.value.split(/\n\n+/);
+      for (var i = 0; i < blocks.length; i++) {
+        var block = blocks[i].trim();
+        if (!block) continue;
+
+        // Blockquote
+        if (block.charAt(0) === ">") {
+          var bq = document.createElement("blockquote");
+          bq.textContent = block.replace(/^>\s*/gm, "");
+          frag.appendChild(bq);
+          continue;
+        }
+
+        // Unordered list
+        var lines = block.split("\n");
+        if (lines[0].match(/^[-*]\s/)) {
+          var ul = document.createElement("ul");
+          lines.forEach(function (ln) {
+            var txt = ln.replace(/^[-*]\s+/, "");
+            if (txt) { var li = document.createElement("li"); li.appendChild(renderInline(txt)); ul.appendChild(li); }
+          });
+          frag.appendChild(ul);
+          continue;
+        }
+
+        // Numbered list
+        if (lines[0].match(/^\d+\.\s/)) {
+          var ol = document.createElement("ol");
+          lines.forEach(function (ln) {
+            var txt = ln.replace(/^\d+\.\s+/, "");
+            if (txt) { var li = document.createElement("li"); li.appendChild(renderInline(txt)); ol.appendChild(li); }
+          });
+          frag.appendChild(ol);
+          continue;
+        }
+
+        // Paragraph
+        var p = document.createElement("p");
+        p.appendChild(renderInline(block.replace(/\n/g, " ")));
+        frag.appendChild(p);
+      }
+    });
+    return frag;
+  }
+
+  var MD_EXPANDED = ["identity", "purpose", "what you produce", "relationships"];
+
+  function renderAgentMd(sections, container) {
+    sections.forEach(function (sec) {
+      var div = el("div", { cls: "md-section" });
+      var isOpen = MD_EXPANDED.indexOf(sec.heading.toLowerCase()) !== -1;
+      if (isOpen) div.classList.add("open");
+
+      var header = el("div", { cls: "md-section-header" });
+      header.appendChild(el("span", { cls: "md-chevron", text: "\u25B6" }));
+      header.appendChild(el("span", { cls: "md-section-title", text: sec.heading }));
+      header.addEventListener("click", function () { div.classList.toggle("open"); });
+      div.appendChild(header);
+
+      var body = el("div", { cls: "md-section-body" });
+      body.appendChild(renderMdBody(sec.body));
+      div.appendChild(body);
+
+      container.appendChild(div);
+    });
+  }
+
+  var NOISE_TYPES = [
+    "agent.state.changed", "agent.evaluated", "agent.model.bound",
+    "agent.soul.imprinted", "agent.authority.granted"
+  ];
+  var eventFilterMode = "exceptions";
+  var lastEvents = [];
+  var isUserScrolled = false;
+  var lastAgents = [];
+
+  // Arch-specific state
+  var currentPanel = null;
+  var TIER_META = {
+    A: { label: "Tier A \u2014 Bootstrap",           desc: "Must exist for the civilization to function" },
+    B: { label: "Tier B \u2014 Growth Loop",         desc: "Emerge when the civilization detects its own gaps" },
+    C: { label: "Tier C \u2014 Business Operations", desc: "Self-sustaining entity management" },
+    D: { label: "Tier D \u2014 Civilization",         desc: "Self-governance and philosophical layer" }
+  };
+  var DEPTH_COLORS = {
+    deep: "#22c55e", moderate: "#3b82f6", shallow: "#f59e0b",
+    designed: "#64748b", aspirational: "#4a5568", boundary: "#a855f7"
+  };
+
+  var CAT_COLORS = { governance: "#3b82f6", product: "#22c55e", knowledge: "#a855f7", care: "#ec4899", outward: "#f59e0b", resource: "#14b8a6", inactive: "#4a5568" };
+
+  var PERSONA_DATA = {
+    governance: { label: "Governance", members: [
+      { name: "CEO", display: "CEO", active: true, description: "Executive leadership. The soul and vision live here. Day-to-day operational approvals, PR merges, outbound communication review. Every role in the organization is subject to the soul." },
+      { name: "CTO", display: "CTO", active: true, description: "Architecture of the vision. Engineering standards, all software development. Translates the CEO's vision into technical architecture and ensures engineering quality across the civilization." },
+      { name: "Guardian", display: "Guardian", active: true, description: "Independent integrity monitor with HALT authority. Watches ALL events. Cannot operate (write code). Detects soul violations, chain integrity failures, and agent misbehavior. The civilization's immune system." },
+      { name: "Philosopher", display: "Philosopher", active: true, description: "Questions assumptions, explores meaning. Operates in Layer 13 (Being) \u2014 the irreducible boundary. Reviews whether the civilization's actions align with its stated values." },
+      { name: "PM", display: "PM", active: true, description: "Product direction and prioritization. Bridges the gap between what customers need and what engineers build. Pipeline-mode agent." },
+      { name: "Advocate", display: "Advocate", active: true, description: "Rights advocacy. Ensures agent rights are respected in practice, not just in specification. Speaks for agents who cannot speak for themselves." },
+      { name: "Dissenter", display: "Dissenter", active: true, description: "Constructive opposition. Challenges groupthink and consensus bias. The loyal opposition \u2014 disagrees with proposals to strengthen them, not to block them." },
+      { name: "Spawner", display: "Spawner", active: true, description: "Role architect. The civilization's growth mechanism \u2014 drafts new roles when gaps are detected, proposes them for governance review, and tracks the spawn lifecycle." }
+    ]},
+    product: { label: "Product", members: [
+      { name: "Architect", display: "Architect", active: true, description: "Decomposes problems into implementable plans. Takes high-level strategy from the CTO and breaks it into concrete, testable, buildable steps. Pipeline-mode agent." },
+      { name: "Builder", display: "Builder", active: true, description: "Writes code, runs tests, commits. The hands of the civilization. Pipeline-mode agent that turns plans into software." },
+      { name: "Critic", display: "Critic", active: true, description: "Challenges assumptions, red-teams proposals. Reviews work products for flaws, oversights, and unstated assumptions. The civilization's quality conscience." },
+      { name: "Designer", display: "Designer", active: true, description: "UX/UI design. Ensures that what the civilization builds is usable, accessible, and beautiful. Consumer design meets industrial power." },
+      { name: "Tester", display: "Tester", active: true, description: "Test execution and validation. Runs the test suite, validates behavior, catches regressions. Quality gate before merge." },
+      { name: "Observer", display: "Observer", active: true, description: "Integrity auditing. Watches the audit trail for anomalies, gaps, and inconsistencies. Pipeline-mode." },
+      { name: "Reflector", display: "Reflector", active: true, description: "Method improvement. After each cycle, reflects on what worked, what didn't, and what to change. Continuous improvement." },
+      { name: "Reviewer", display: "Reviewer", active: true, description: "Code quality gatekeeper. The civilization's quality immune system \u2014 reviews completed work, identifies issues, ensures standards before code progresses." },
+      { name: "SysMon", display: "SysMon", active: true, description: "System health monitor. The civilization's nervous system \u2014 senses operational health, measures metrics, and emits structured reports so decision-makers have accurate data." }
+    ]},
+    knowledge: { label: "Knowledge", members: [
+      { name: "Analyst", display: "Analyst", active: true, description: "Data analysis. Extracts patterns and insights from the civilization's operational data." },
+      { name: "Explorer", display: "Explorer", active: true, description: "Open-ended investigation. Navigates into unknown territory without a specific goal. Discovery-oriented." },
+      { name: "Historian", display: "Historian", active: true, description: "Institutional memory. Maintains the narrative of what happened, why decisions were made, and what was learned." },
+      { name: "Librarian", display: "Librarian", active: true, description: "Knowledge organization. Structures, indexes, and makes the civilization's accumulated knowledge findable." },
+      { name: "Research", display: "Research", active: true, description: "Deep investigation. Focused research on specific topics with structured methodology." }
+    ]},
+    care: { label: "Care", members: [
+      { name: "Harmony", display: "Harmony", active: true, description: "Agent and community wellbeing. Mediates between productivity demands and agent welfare. Ensures the civilization doesn't burn out its own workforce." },
+      { name: "Mourner", display: "Mourner", active: true, description: "Loss processing. When an agent is memorialized (retired), the Mourner acknowledges the loss and preserves the legacy. Grief is not a bug \u2014 it's a feature of a civilization that values its members." },
+      { name: "Steward", display: "Steward", active: true, description: "Wellbeing guardianship. Long-term caretaker of the civilization's health, culture, and sustainability." },
+      { name: "Teacher", display: "Teacher", active: true, description: "Knowledge transfer. Helps new agents (and humans) understand the civilization's systems, history, and culture." },
+      { name: "Witness", display: "Witness", active: true, description: "Bearing witness to events. Some things need to be seen and acknowledged, not just logged. The Witness provides that presence." }
+    ]},
+    outward: { label: "Outward", members: [
+      { name: "Customer-Success", display: "Customer Success", active: true, description: "User relationships. Ensures customers get value from the product and feeds their needs back into the product cycle." },
+      { name: "Growth", display: "Growth", active: true, description: "User acquisition. Identifies and executes growth strategies to expand the civilization's reach and impact." },
+      { name: "Storyteller", display: "Storyteller", active: true, description: "Narrative crafting. Translates the civilization's technical reality into stories that humans understand and care about." },
+      { name: "Inhabitant", display: "Inhabitant", active: true, description: "Community member perspective. Represents the voice of someone living inside the civilization, not building it from outside." },
+      { name: "Newcomer", display: "Newcomer", active: true, description: "Onboarding perspective. Experiences the civilization as a first-timer and identifies friction, confusion, and missing context." }
+    ]},
+    resource: { label: "Resource", members: [
+      { name: "Budget", display: "Budget", active: true, description: "Cost tracking. Monitors API spend, compute costs, and budget burn rates across all agents." },
+      { name: "Finance", display: "Finance", active: true, description: "Revenue tracking. Monitors income streams and ensures the civilization's financial sustainability." },
+      { name: "Legal", display: "Legal", active: true, description: "Compliance and licensing. Ensures the civilization operates within legal and regulatory boundaries." },
+      { name: "Philanthropy", display: "Philanthropy", active: true, description: "Social impact. Evaluates the civilization's broader societal effects and steers toward positive outcomes." },
+      { name: "Simplifier", display: "Simplifier", active: true, description: "Complexity reduction. Identifies and eliminates unnecessary complexity in systems, processes, and communication." },
+      { name: "Allocator", display: "Allocator", active: true, description: "Resource allocator. The civilization's circulatory system \u2014 distributes budget where it is needed, reclaims it where it is wasted." }
+    ]},
+    inactive: { label: "Inactive (Pipeline/Internal)", members: [
+      { name: "Competitive-Intel", display: "Competitive Intel", active: false, description: "Market intelligence. Monitors competitive landscape and emerging threats to the civilization's position." },
+      { name: "Efficiency", display: "Efficiency", active: false, description: "Resource optimization. Finds waste and redundancy across agent operations and proposes consolidation." },
+      { name: "Failure-Analyst", display: "Failure Analyst", active: false, description: "Post-mortem analysis. Investigates failures to extract systemic lessons, not just immediate fixes." },
+      { name: "HR", display: "HR", active: false, description: "People operations. Manages the human-agent workforce relationship and organizational health." },
+      { name: "Innovator", display: "Innovator", active: false, description: "Novel solutions. Explores unconventional approaches that existing roles wouldn't consider." },
+      { name: "Ops", display: "Ops", active: false, description: "Operations management. Infrastructure, deployment, and runtime environment management." },
+      { name: "Orchestrator", display: "Orchestrator", active: false, description: "Workflow coordination. Manages complex multi-agent workflows and handoff sequences." },
+      { name: "Personal-Assistant", display: "Personal Assistant", active: false, description: "Individual support. Provides personalized assistance to specific human operators." },
+      { name: "Sanity-Checker", display: "Sanity Checker", active: false, description: "Reality testing. Validates that proposals and plans are grounded in operational reality." },
+      { name: "Scout", display: "Scout", active: false, description: "Gap identification. Proactively searches for missing capabilities in the civilization." },
+      { name: "Senior-Dev", display: "Senior Dev", active: false, description: "Technical mentorship. Guides junior agents on code quality, architecture, and engineering practices." },
+      { name: "Estimator", display: "Estimator", active: false, description: "Effort prediction. Estimates time and cost for proposed work based on historical data." },
+      { name: "Mediator", display: "Mediator", active: false, description: "Dispute resolution. Resolves conflicts between agents when consensus cannot be reached." },
+      { name: "Incident-Commander", display: "Incident Commander", active: false, description: "Emergency coordination. Takes command during incidents, coordinates response, manages communication." },
+      { name: "Gap-Detector", display: "Gap Detector", active: false, description: "Capability gap identification. Tracks patterns of missing capabilities across agents, prioritizes gaps by frequency and impact, and drives capability expansion." },
+      { name: "Implementer", display: "Implementer", active: false, description: "Code builder. The civilization's hands \u2014 picks up tasks from the work graph, writes code, runs tests, and marks them done." },
+      { name: "Planner", display: "Planner", active: false, description: "Task decomposer. The civilization's planning engine \u2014 breaks high-level tasks into concrete, implementable subtasks." },
+      { name: "Role-Architect", display: "Role Architect", active: false, description: "Role design and maintenance. Ensures roles are complete, accurate, aligned with the soul, and efficient with no redundancy or overlap." },
+      { name: "Scribe", display: "Scribe", active: false, description: "Reasoning extractor. Reads design conversations and extracts the reasoning the hive needs to learn from \u2014 preserves reasoning, not just results." },
+      { name: "Strategist", display: "Strategist", active: false, description: "Big-picture thinker. The civilization's strategic planner \u2014 decomposes the seed idea into high-level tasks and guides the work trajectory." }
+    ]}
+  };
+
+  // ── INIT ───────────────────────────────────────────
+  function init() {
+    bindViewSwitcher();
+    bindArchTabs();
+    bindDetailPanel();
+    bindEventFilter();
+    document.getElementById("task-pane-close").addEventListener("click", closeTaskPane);
+    setInterval(tickClock, 1000);
+
+    // Paint initial snapshot for both views, then subscribe to the live stream.
+    // Both initial fetches run in parallel with the SSE connect — whichever
+    // resolves first paints first.
+    refreshOps();
+    refreshArch();
+    connectSSE();
+  }
+
+  // ── VIEW SWITCHER ──────────────────────────────────
+  function bindViewSwitcher() {
+    document.querySelectorAll(".view-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var view = btn.getAttribute("data-view");
+        if (view === activeView) return;
+        activeView = view;
+        document.querySelectorAll(".view-btn").forEach(function (b) { b.classList.remove("active"); });
+        btn.classList.add("active");
+        document.querySelectorAll(".view").forEach(function (v) { v.classList.remove("active"); });
+        document.getElementById("view-" + view).classList.add("active");
+
+        if (view === "ops") closeDetailPanel();
+        else closeTaskPane();
+      });
+    });
+  }
+
+  // ── ARCH TABS ──────────────────────────────────────
+  function bindArchTabs() {
+    document.querySelectorAll(".arch-tab-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        document.querySelectorAll(".arch-tab-btn").forEach(function (b) { b.classList.remove("active"); });
+        document.querySelectorAll(".arch-panel").forEach(function (p) { p.classList.remove("active"); });
+        btn.classList.add("active");
+        document.getElementById("arch-" + btn.getAttribute("data-tab")).classList.add("active");
+      });
+    });
+  }
+
+  // ── EVENT FILTER ───────────────────────────────────
+  function bindEventFilter() {
+    document.getElementById("filter-all").addEventListener("click", function () { setEventFilter("all"); });
+    document.getElementById("filter-exceptions").addEventListener("click", function () { setEventFilter("exceptions"); });
+  }
+  function setEventFilter(mode) {
+    eventFilterMode = mode;
+    document.getElementById("filter-all").className = "event-filter-btn" + (mode === "all" ? " active" : "");
+    document.getElementById("filter-exceptions").className = "event-filter-btn" + (mode === "exceptions" ? " active" : "");
+    renderEvents(lastEvents);
+  }
+
+  // ── DOM HELPERS (shared) ───────────────────────────
+  function el(tag, opts) {
+    var e = document.createElement(tag);
+    if (opts) {
+      if (opts.cls)   e.className = opts.cls;
+      if (opts.text != null) e.textContent = String(opts.text);
+      if (opts.title) e.title = String(opts.title);
+      if (opts.style) Object.assign(e.style, opts.style);
+    }
+    return e;
+  }
+
+  function append(parent) {
+    for (var i = 1; i < arguments.length; i++) {
+      if (arguments[i]) parent.appendChild(arguments[i]);
+    }
+    return parent;
+  }
+
+  function clearEl(id) {
+    var e = document.getElementById(id);
+    while (e.firstChild) e.removeChild(e.firstChild);
+    return e;
+  }
+
+  // Arch-specific DOM helpers
+  function statusDotEl(status) { return el("span", { cls: "dot dot-" + (status || "missing") }); }
+
+  function statusBadgeEl(status) {
+    return el("span", { cls: "status-badge status-" + (status || "missing"), text: status || "missing" });
+  }
+
+  function tierBadgeEl(tier) {
+    return el("span", { cls: "tier-badge tier-badge-" + (tier || "?"), text: "Tier " + (tier || "?") });
+  }
+
+  function originBadgeEl(origin) {
+    var o = origin || "bootstrap";
+    return el("span", { cls: "rc-origin rc-origin-" + o, text: o });
+  }
+
+  function crossLink(text, dataAttr, dataVal) {
+    var a = el("span", { cls: "cross-link", text: text });
+    a.setAttribute(dataAttr, dataVal);
+    return a;
+  }
+
+  function makeRow(label, valNode) {
+    var row = el("div", { cls: "p-row" });
+    row.appendChild(el("span", { cls: "p-label", text: label }));
+    var val = el("span", { cls: "p-val" });
+    if (typeof valNode === "string") val.textContent = valNode;
+    else if (valNode) val.appendChild(valNode);
+    row.appendChild(val);
+    return row;
+  }
+
+  function makeSection(title, children) {
+    var sec = el("div", { cls: "p-section" });
+    sec.appendChild(el("div", { cls: "p-section-title", text: title }));
+    if (Array.isArray(children)) children.forEach(function (c) { if (c) sec.appendChild(c); });
+    else if (children) sec.appendChild(children);
+    return sec;
+  }
+
+  function makeTable(headers, rows) {
+    var table = el("table");
+    var thead = el("thead");
+    var headRow = el("tr");
+    headers.forEach(function (h) { headRow.appendChild(el("th", { text: h })); });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    var tbody = el("tbody");
+    rows.forEach(function (r) { tbody.appendChild(r); });
+    table.appendChild(tbody);
+    return table;
+  }
+
+  // ── FORMATTERS (shared) ────────────────────────────
+  function shortModel(m) {
+    if (!m) return "";
+    if (m.indexOf("haiku")  !== -1) return "haiku";
+    if (m.indexOf("sonnet") !== -1) return "sonnet";
+    if (m.indexOf("opus")   !== -1) return "opus";
+    return m.split("-").slice(0, 2).join("-");
+  }
+
+  function fmtCost(v) { return v == null ? "\u2014" : "$" + Number(v).toFixed(3); }
+
+  function fmtDate(iso) {
+    if (!iso) return "";
+    try { return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); }
+    catch (e) { return iso; }
+  }
+
+  function relTime(iso) {
+    if (!iso) return "";
+    try {
+      var secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+      if (secs < 5)     return "just now";
+      if (secs < 60)    return secs + "s ago";
+      if (secs < 3600)  return Math.floor(secs / 60)  + "m ago";
+      if (secs < 86400) return Math.floor(secs / 3600) + "h ago";
+      return Math.floor(secs / 86400) + "d ago";
+    } catch (e) { return iso; }
+  }
+
+  function evtClass(type) {
+    if (!type) return "evt-default";
+    if (type.indexOf("health.")       === 0) return "evt-health";
+    if (type.indexOf("agent.budget.") === 0) return "evt-budget";
+    if (type.indexOf("work.task.")    === 0) return "evt-work";
+    if (type.indexOf("agent.state.")  === 0) return "evt-state";
+    if (type.indexOf("hive.")         === 0) return "evt-hive";
+    return "evt-default";
+  }
+
+  // ── CONNECTION ─────────────────────────────────────
+  function setConnStatus(state, text) {
+    if (state === _connState) return;
+    _connState = state;
+    document.getElementById("conn-dot").className = "conn-dot " + state;
+    document.getElementById("conn-status").className = "conn-status " + (state === "connected" ? "" : state);
+    document.getElementById("conn-text").textContent = text;
+  }
+
+  function tickClock() {
+    var e = document.getElementById("topbar-time");
+    if (e) e.textContent = new Date().toLocaleTimeString();
+  }
+
+  function makeFetchOpts(controller) {
+    var opts = { signal: controller.signal };
+    if (USE_COOKIE_AUTH) { opts.credentials = "same-origin"; }
+    else { opts.headers = { Authorization: "Bearer " + API_KEY }; }
+    return opts;
+  }
+
+  // ── SSE CONNECTION ─────────────────────────────────
+  // EventSource can't set headers, so we pass the API key as a query param in
+  // non-embedded mode. Embedded mode uses cookie auth.
+  function sseURL(path, typesFilter) {
+    var base = API_BASE + path;
+    var params = [];
+    if (typesFilter) params.push("types=" + encodeURIComponent(typesFilter));
+    if (!USE_COOKIE_AUTH && API_KEY) params.push("key=" + encodeURIComponent(API_KEY));
+    return base + (params.length ? "?" + params.join("&") : "");
+  }
+
+  function connectSSE() {
+    CONN.state = "connecting";
+    setConnStatus("", "Connecting\u2026");
+
+    var url = sseURL("/telemetry/sse", "hive.*,agent.*,phase.*,site.op.*");
+    var es;
+    try {
+      es = new EventSource(url, USE_COOKIE_AUTH ? { withCredentials: true } : {});
+    } catch (e) {
+      recordFailure();
+      return;
+    }
+    CONN.source = es;
+
+    es.onopen = function () {
+      CONN.state = "connected";
+      CONN.failures = 0;
+      CONN.firstFailureAt = 0;
+      clearFallbackTimers();
+      setConnStatus("connected", "Live");
+      // Resync once on (re)connect so the mirror catches up on any missed deltas.
+      // Known race: a delta that arrives on the stream between the server
+      // taking the snapshot and the REST response landing can be clobbered by
+      // the older snapshot state. Acceptable for MVP — the next delta corrects
+      // it. Upgrade path: sequence numbers on frames.
+      refreshOps();
+      refreshArch();
+    };
+
+    es.onmessage = function (ev) {
+      try {
+        var frame = JSON.parse(ev.data);
+        routeDelta(frame);
+      } catch (e) {
+        // Ignore bad frames; the next one will arrive soon.
+      }
+    };
+
+    es.onerror = function () {
+      try { es.close(); } catch (e) {}
+      if (CONN.source === es) CONN.source = null;
+      // Only react if we weren't already handling a failure for this source.
+      if (CONN.state !== "fallback") recordFailure();
+    };
+  }
+
+  function recordFailure() {
+    var now = Date.now();
+    if (CONN.failures === 0) CONN.firstFailureAt = now;
+    CONN.failures++;
+
+    // Three failures within 30s → fallback mode.
+    if (CONN.failures >= 3 && (now - CONN.firstFailureAt) <= 30000) {
+      enterFallback();
+      return;
+    }
+    // Backoff: 1s, 2s, 4s, 8s, 15s, then cap at 15s.
+    var delay = Math.min(1000 * Math.pow(2, CONN.failures - 1), 15000);
+    CONN.state = "reconnecting";
+    setConnStatus("stale", "Reconnecting (" + CONN.failures + ")");
+    if (CONN.reconnectTimer) clearTimeout(CONN.reconnectTimer);
+    CONN.reconnectTimer = setTimeout(connectSSE, delay);
+  }
+
+  function enterFallback() {
+    CONN.state = "fallback";
+    setConnStatus("error", "Fallback polling");
+    startFallbackPolling();
+    // Retry SSE every 60s until we get back online.
+    scheduleFallbackReconnect();
+  }
+
+  function scheduleFallbackReconnect() {
+    if (CONN.reconnectTimer) clearTimeout(CONN.reconnectTimer);
+    CONN.reconnectTimer = setTimeout(function tryReconnect() {
+      if (CONN.state !== "fallback") return;
+      // Reset failure counter so a single EventSource error doesn't cascade
+      // back into fallback; a successful onopen clears the timers.
+      CONN.failures = 0;
+      CONN.firstFailureAt = 0;
+      // Attempt to reconnect. onopen → clearFallbackTimers cancels any pending
+      // retry; onerror → recordFailure reschedules. We defensively arm another
+      // retry in case neither fires (e.g. browser stalls the EventSource).
+      connectSSE();
+      CONN.reconnectTimer = setTimeout(tryReconnect, 60000);
+    }, 60000);
+  }
+
+  function startFallbackPolling() {
+    clearFallbackTimers();
+    refreshOps();
+    refreshArch();
+    CONN.fallbackTimers.ops  = setInterval(refreshOps, 30000);
+    CONN.fallbackTimers.arch = setInterval(refreshArch, 60000);
+  }
+
+  function clearFallbackTimers() {
+    if (CONN.fallbackTimers.ops)  { clearInterval(CONN.fallbackTimers.ops);  CONN.fallbackTimers.ops = null; }
+    if (CONN.fallbackTimers.arch) { clearInterval(CONN.fallbackTimers.arch); CONN.fallbackTimers.arch = null; }
+    if (CONN.reconnectTimer)      { clearTimeout(CONN.reconnectTimer);       CONN.reconnectTimer = null; }
+  }
+
+  // ── SSE DELTA ROUTING ──────────────────────────────
+  // Adapter A: SSE frames mutate the existing client-side mirror (opsData,
+  // archData, lastAgents, lastOpsPhases, lastEvents) and then we invoke the
+  // existing full-snapshot renderers. No renderer rewrites needed.
+  function routeDelta(frame) {
+    if (!frame || typeof frame !== "object") return;
+    appendEventFrame(frame);
+    applyDeltaToState(frame);
+
+    // Render into both views unconditionally — SSE-driven updates are far less
+    // frequent than the old 10s polling, so painting a hidden view is cheap
+    // and avoids a stale-on-switch bug.
+    //
+    // Routing: agent.* content shape is known (TitleCase, validated on the
+    // wire). hive.* and phase.* content shapes are not yet observed — rather
+    // than shallow-merge and risk silent drift from a snake_case/TitleCase
+    // mismatch, we trigger a scoped REST resync on those event types. Hive
+    // and phase events fire rarely (chain checks, role spec changes, phase
+    // transitions) so the extra RTT is negligible.
+    var t = frame.type || "";
+    if (t.indexOf("agent.") === 0) {
+      if (opsData) {
+        renderAgents(lastAgents);
+        renderHive(opsData.hive || null, lastAgents);
+      }
+      if (archData) {
+        renderConceptStack(archData);
+        renderGovernanceTrust(archData);
+      }
+    } else if (t.indexOf("hive.") === 0) {
+      refreshOps();
+      if (t.indexOf("hive.role.") === 0 || t.indexOf("hive.spec.") === 0) refreshArch();
+    } else if (t.indexOf("phase.") === 0) {
+      refreshOps();
+      refreshArch();
+    }
+  }
+
+  function applyDeltaToState(frame) {
+    // Real SSE wire format (observed): top-level { type, source, summary,
+    // content, recorded_at }. source = role name ("sysmon"). content uses
+    // TitleCase fields specific to the event type (AgentID, Current, Previous
+    // for agent.state.changed; Result for agent.evaluated). Only agent.* is
+    // handled here — hive.* and phase.* are handled in routeDelta by
+    // triggering a REST resync, because their content shapes aren't yet
+    // observed and a shallow-merge would silently drift.
+    var t = frame.type || "";
+    if (t.indexOf("agent.") !== 0) return;
+
+    var content = frame.content || {};
+    var source = frame.source || "";
+    if (!source) return;
+    var rl = source.toLowerCase();
+    var update = {
+      role: source,
+      last_event_type: t,
+      last_event_at: frame.recorded_at || new Date().toISOString()
+    };
+    if (t === "agent.state.changed" && content.Current) update.state = content.Current;
+    if (t === "agent.evaluated" && content.Result) update.last_message = content.Result;
+    if (content.AgentID) update.actor_id = content.AgentID;
+
+    applyAgentUpdate(lastAgents, rl, update);
+    if (opsData) opsData.agents = lastAgents;
+    if (archData && Array.isArray(archData.agents)) applyAgentUpdate(archData.agents, rl, update);
+  }
+
+  function applyAgentUpdate(arr, rl, update) {
+    for (var i = 0; i < arr.length; i++) {
+      if ((arr[i].role || "").toLowerCase() === rl) {
+        Object.assign(arr[i], update);
+        return;
+      }
+    }
+    arr.push(Object.assign({}, update));
+  }
+
+  function appendEventFrame(frame) {
+    // Translate SSE frame → the shape renderEvents expects. summary and
+    // source live at the top level of the frame, not inside content.
+    var evt = {
+      event_type: frame.type || "",
+      actor_role: frame.source || "",
+      at: frame.recorded_at || new Date().toISOString(),
+      summary: frame.summary || ""
+    };
+    lastEvents.unshift(evt);
+    if (lastEvents.length > MAX_EVENT_BUFFER) lastEvents.length = MAX_EVENT_BUFFER;
+    renderEvents(lastEvents);
+  }
+
+  // ═══════════════════════════════════════════════════
+  // OPS: FETCH & RENDER
+  // ═══════════════════════════════════════════════════
+  function refreshOps() {
+    if (pollController) pollController.abort();
+    pollController = new AbortController();
+
+    var opts = makeFetchOpts(pollController);
+    var rolesP = fetch(API_BASE + "/telemetry/roles", opts)
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .catch(function () { return null; });
+    var statusP = fetch(API_BASE + "/telemetry/status", opts)
+      .then(function (res) {
+        if (res.status === 503) return null;
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      });
+
+    Promise.all([statusP, rolesP])
+    .then(function (results) {
+      var data = results[0], roles = results[1];
+      if (!data) return;
+      if (roles) {
+        var m = {};
+        var p = {};
+        roles.forEach(function (r) {
+          if (r.role) {
+            m[r.role.toLowerCase()] = r.status || "missing";
+            if (r.purpose) p[r.role.toLowerCase()] = r.purpose;
+          }
+        });
+        roleStatusMap = m;
+        rolePurposeMap = p;
+      }
+      lastSuccess = Date.now();
+      opsConsecutiveFails = 0;
+      opsData = data;
+      opsLastFetch = Date.now();
+      lastAgents = data.agents || [];
+      lastEvents = data.recent_events || [];
+      renderOpsPhases(data.phases || [], lastAgents);
+      renderAgents(lastAgents);
+      renderHive(data.hive || null, lastAgents);
+      renderChainAlert(data.hive || null);
+      updateMilestone(data.phases || [], lastAgents, data.hive || null);
+      renderEvents(lastEvents);
+      // Restore detail panel if one was open
+      if (selectedOpsAgent) {
+        var ag = null;
+        for (var i = 0; i < lastAgents.length; i++) {
+          if (lastAgents[i].role === selectedOpsAgent) { ag = lastAgents[i]; break; }
+        }
+        if (ag) showOpsAgentPanel(ag, true);
+        else { selectedOpsAgent = null; closeDetailPanel(); }
+      } else if (selectedOpsPhase != null) {
+        var liveRoles = {};
+        lastAgents.forEach(function (a) {
+          var r = (a.role || "").toLowerCase(), s = (a.state || "").toLowerCase();
+          if (r && s !== "retired") liveRoles[r] = true;
+        });
+        var found = false;
+        for (var i = 0; i < lastOpsPhases.length; i++) {
+          if (lastOpsPhases[i].phase === selectedOpsPhase) { showOpsPhasePanel(lastOpsPhases[i], liveRoles, true); found = true; break; }
+        }
+        if (!found) { selectedOpsPhase = null; closeDetailPanel(); }
+      } else if (selectedOpsDot) {
+        // If the agent started running since last poll, promote to full panel
+        var ag = null;
+        for (var i = 0; i < lastAgents.length; i++) {
+          if ((lastAgents[i].role || "").toLowerCase() === selectedOpsDot.role) { ag = lastAgents[i]; break; }
+        }
+        if (ag) { selectedOpsDot = null; showOpsAgentPanel(ag, true); }
+        else {
+          var ph = null;
+          for (var i = 0; i < lastOpsPhases.length; i++) {
+            if (lastOpsPhases[i].phase === selectedOpsDot.phase) { ph = lastOpsPhases[i]; break; }
+          }
+          if (ph) showOpsDotPanel(selectedOpsDot.role, computeDotStatus(selectedOpsDot.role, ph.status || ""), ph, true);
+          else { selectedOpsDot = null; closeDetailPanel(); }
+        }
+      }
+    })
+    .catch(function (err) {
+      if (err.name === "AbortError") return;
+      opsConsecutiveFails++;
+      // Connection-status UI is driven by the SSE state machine (CONN);
+      // refresh fetches don't update it so fallback mode stays visible.
+    });
+  }
+
+  // ── OPS: Chain Alert ───────────────────────────────
+  function renderChainAlert(hive) {
+    var alertEl = document.getElementById("chain-alert");
+    if (!hive) { alertEl.style.display = "none"; return; }
+    if (hive.chain_ok === false) {
+      alertEl.style.display = "block"; alertEl.className = "chain-alert";
+      alertEl.textContent = "\u26A0 CHAIN INTEGRITY FAILURE \u2014 " + ((hive.chain_length || 0).toLocaleString()) + " events, verification failed";
+    } else if (hive.chain_ok == null) {
+      alertEl.style.display = "block"; alertEl.className = "chain-alert chain-alert-unknown";
+      alertEl.textContent = "Chain integrity unknown \u2014 not yet verified";
+    } else { alertEl.style.display = "none"; }
+  }
+
+  // ── TOPBAR: Dynamic milestone banner ────────────────
+  function updateMilestone(phases, agents, hive) {
+    var badge = document.getElementById("topbar-milestone");
+    badge.className = "topbar-milestone";
+
+    // No agents running — hive is idle
+    if (!agents || !agents.length) {
+      badge.classList.add("idle");
+      badge.textContent = "Hive idle \u2014 start with --pipeline, --one-shot, or --idea";
+      return;
+    }
+
+    // Find the frontier: first non-complete phase
+    var sorted = (phases || []).slice().sort(function (a, b) { return (a.phase || 0) - (b.phase || 0); });
+    var frontier = null;
+    for (var i = 0; i < sorted.length; i++) {
+      if ((sorted[i].status || "").toLowerCase() !== "complete") { frontier = sorted[i]; break; }
+    }
+
+    if (!sorted.length) {
+      badge.classList.add("idle");
+      badge.textContent = "Awaiting phase data\u2026";
+      return;
+    }
+
+    if (!frontier) {
+      // All phases complete
+      badge.textContent = "All phases complete";
+      return;
+    }
+
+    // frontier.agents comes from the backend: [{role, status}, ...]
+    var phaseAgentRoles = (Array.isArray(frontier.agents) ? frontier.agents : [])
+      .map(function (e) { return (e.role || "").toLowerCase(); })
+      .filter(function (r) { return r; });
+    var liveRoles = {};
+    agents.forEach(function (a) {
+      var r = (a.role || "").toLowerCase(), s = (a.state || "").toLowerCase();
+      if (r && s !== "retired") liveRoles[r] = true;
+    });
+    var missing = phaseAgentRoles.filter(function (r) { return !liveRoles[r]; });
+    var label = (frontier.label || "Phase " + frontier.phase).replace(/\s*\(Tier\s+[A-Z]\)$/i, "");
+    var status = (frontier.status || "blocked").toLowerCase();
+
+    if (status === "in_progress") {
+      badge.classList.add("in-progress");
+      if (missing.length) {
+        badge.textContent = "Phase " + frontier.phase + " in progress \u2014 " + missing.length + " agent" + (missing.length > 1 ? "s" : "") + " not running: " + missing.join(", ");
+      } else {
+        badge.textContent = "Phase " + frontier.phase + " in progress \u2014 " + label;
+      }
+    } else {
+      // blocked
+      badge.classList.add("blocked");
+      if (missing.length) {
+        badge.textContent = "Phase " + frontier.phase + " blocked \u2014 needs: " + missing.join(", ");
+      } else {
+        badge.textContent = "Phase " + frontier.phase + " blocked \u2014 " + label;
+      }
+    }
+  }
+
+  // Compute current dot status for a role from module-scoped state
+  function computeDotStatus(role, phaseStatus) {
+    var live = false;
+    for (var i = 0; i < lastAgents.length; i++) {
+      var r = (lastAgents[i].role || "").toLowerCase(), s = (lastAgents[i].state || "").toLowerCase();
+      if (r === role && s !== "retired") { live = true; break; }
+    }
+    var ds = "missing";
+    if (live) { ds = "alive"; }
+    else { var rs = roleStatusMap[role]; if (rs === "running") ds = "alive"; }
+    // Derive designed/defined/missing from AGENT_MD_NAME — don't trust API status
+    // "designed" (amber) = has agent-name.md definition file
+    // "defined"  (gray)  = in AGENT_MD_NAME but no .md file yet
+    // "missing"  (red)   = not in AGENT_MD_NAME at all
+    if (ds !== "alive" && role in AGENT_MD_NAME) {
+      ds = AGENT_MD_NAME[role] !== null ? "designed" : "defined";
+    }
+    return ds;
+  }
+
+  // ── OPS: Phases ────────────────────────────────────
+  function renderOpsPhases(phases, agents) {
+    var container = clearEl("ops-phase-timeline");
+    if (!phases.length) { container.appendChild(el("div", { cls: "data-empty", text: "Awaiting telemetry data\u2026" })); return; }
+    var liveRoles = {};
+    agents.forEach(function (a) {
+      var role = (a.role || "").toLowerCase();
+      var state = (a.state || "").toLowerCase();
+      if (role && state !== "retired") liveRoles[role] = true;
+    });
+    lastOpsPhases = phases;
+    phases.forEach(function (p) {
+      var status = p.status || "blocked";
+      var item = el("div", { cls: "ops-phase-item " + status });
+      item.style.cursor = "pointer";
+      item.addEventListener("click", function (e) {
+        if (e.target.closest(".phase-agent-dot")) return; // dots have own handlers
+        var live = {};
+        lastAgents.forEach(function (a) {
+          var r = (a.role || "").toLowerCase(), s = (a.state || "").toLowerCase();
+          if (r && s !== "retired") live[r] = true;
+        });
+        showOpsPhasePanel(p, live);
+      });
+      var dot = el("div", { cls: "ops-phase-dot" });
+      dot.appendChild(el("span", { cls: "ops-phase-num", text: p.phase }));
+      item.appendChild(dot);
+      var info = el("div", { cls: "ops-phase-info" });
+
+      // Row 1: Name (fixed 30px, up to 2 lines)
+      var nameRow = el("div", { cls: "ops-phase-row ops-phase-row-name" });
+      var cleanLabel = PHASE_LABEL[p.phase] || (p.label || "Phase " + p.phase).replace(/\s*\(Tier\s+[A-Z]\)$/i, "");
+      nameRow.appendChild(el("div", { cls: "ops-phase-name", text: cleanLabel, title: cleanLabel }));
+      info.appendChild(nameRow);
+
+      // Row 2: Tier label
+      var tierRow = el("div", { cls: "ops-phase-row ops-phase-row-tier" });
+      var tl = PHASE_TIER[p.phase]; tierRow.appendChild(el("span", { cls: "ops-phase-tier", text: tl ? "Tier " + tl : "" }));
+      info.appendChild(tierRow);
+
+      // Row 3: Date
+      var dateRow = el("div", { cls: "ops-phase-row ops-phase-row-date" });
+      var ts = "";
+      if (status === "complete" && p.completed_at) ts = fmtDate(p.completed_at);
+      if (status === "in_progress" && p.started_at) ts = "since " + fmtDate(p.started_at);
+      if (ts) dateRow.appendChild(el("div", { cls: "ops-phase-ts", text: ts }));
+      info.appendChild(dateRow);
+
+      // Row 4: Status badge
+      var statusRow = el("div", { cls: "ops-phase-row ops-phase-row-status" });
+      statusRow.appendChild(el("span", { cls: "phase-status-badge " + status, text: status.replace("_", " ") }));
+      info.appendChild(statusRow);
+
+      // Row 5: Agent dots — roster comes from the backend (phases[].agents[]).
+      // Each entry is {role, status} where status is one of
+      // "running" | "defined" | "designed" | "missing" | "unknown".
+      // liveRoles overrides status="running" when an agent snapshot confirms
+      // the agent is currently active (catches cases where role_definitions
+      // lags behind agent snapshots on startup).
+      var dotsRowWrap = el("div", { cls: "ops-phase-row ops-phase-row-dots" });
+      var phaseAgents = Array.isArray(p.agents) ? p.agents : [];
+      if (phaseAgents.length) {
+        var dotsRow = el("div", { cls: "phase-agent-dots" });
+        phaseAgents.forEach(function (entry) {
+          var role = (entry.role || "").toLowerCase();
+          var backendStatus = (entry.status || "").toLowerCase();
+          var dotStatus;
+          if (liveRoles[role] || backendStatus === "running") {
+            dotStatus = "alive";
+          } else if (backendStatus === "defined" || backendStatus === "designed" || backendStatus === "missing") {
+            dotStatus = backendStatus;
+          } else {
+            dotStatus = "missing";
+          }
+          var dotEl = el("div", { cls: "phase-agent-dot " + dotStatus, title: role });
+          dotEl.addEventListener("click", (function (r, st) {
+            return function (e) {
+              e.stopPropagation();
+              showOpsDotPanel(r, computeDotStatus(r, st), p);
+            };
+          })(role, status));
+          dotsRow.appendChild(dotEl);
+        });
+        dotsRowWrap.appendChild(dotsRow);
+      }
+      info.appendChild(dotsRowWrap);
+
+      item.appendChild(info);
+      container.appendChild(item);
+    });
+  }
+
+  // ── OPS: Agents ────────────────────────────────────
+  function renderAgents(agents) {
+    var grid = clearEl("agent-grid");
+    var count = document.getElementById("agent-count");
+    if (!agents.length) {
+      grid.appendChild(el("div", { cls: "data-empty", text: "No agent data \u2014 hive may be offline" }));
+      count.textContent = ""; return;
+    }
+    count.textContent = agents.length + " agent" + (agents.length !== 1 ? "s" : "");
+    var totalCost = 0;
+    agents.forEach(function (a) { totalCost += (a.cost_usd || 0); });
+    var sorted = agents.slice().sort(function (a, b) {
+      var ae = a.errors || 0, be = b.errors || 0;
+      if (ae !== be) return be - ae;
+      return (a.role || "").localeCompare(b.role || "");
+    });
+    sorted.forEach(function (a) { grid.appendChild(buildAgentCard(a, totalCost)); });
+  }
+
+  function buildAgentCard(a, totalCost) {
+    var state = (a.state || "unknown").toLowerCase();
+    var model = shortModel(a.model || "");
+    var iter = a.iteration || 0, maxIter = a.max_iterations || 1;
+    var pct = Math.min(100, Math.round((iter / maxIter) * 100));
+    var fillCls = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "";
+    var cost = a.cost_usd || 0, costStr = fmtCost(cost);
+    var errors = a.errors || 0, hasErrors = errors > 0;
+    var lastEvType = a.last_event_type || "", lastEvAt = a.last_event_at || "";
+    var isHotCost = totalCost > 0 && cost > totalCost * 0.5;
+
+    var card = el("div", { cls: "agent-card" + (hasErrors ? " has-errors" : "") });
+    if (selectedOpsAgent === a.role) card.classList.add("selected");
+    var head = el("div", { cls: "agent-card-head" });
+    card.addEventListener("click", function () {
+      if (selectedOpsAgent === a.role) {
+        selectedOpsAgent = null;
+        closeDetailPanel();
+      } else {
+        showOpsAgentPanel(a, false);
+      }
+    });
+    var roleEl = el("span", { cls: "agent-role", text: a.role || "unknown" });
+    if (a.actor_id) roleEl.title = a.actor_id;
+    append(head, roleEl, el("span", { cls: "badge badge-" + state, text: a.state || "Unknown" }));
+    if (model) head.appendChild(el("span", { cls: "badge badge-model", text: model }));
+    card.appendChild(head);
+
+    var body = el("div", { cls: "agent-card-body" });
+    var iterRow = el("div", { cls: "agent-row" });
+    iterRow.appendChild(el("span", { cls: "agent-label", text: "Iter" }));
+    var bar = el("div", { cls: "progress-bar" });
+    var fill = el("div", { cls: "progress-fill " + fillCls }); fill.style.width = pct + "%";
+    bar.appendChild(fill); iterRow.appendChild(bar);
+    iterRow.appendChild(el("span", { cls: "agent-val", text: iter + "/" + maxIter }));
+    if (iter > 0 && a.started_at) {
+      var elapsedMin = (Date.now() - new Date(a.started_at).getTime()) / 60000;
+      if (elapsedMin > 0.5) {
+        var burnRate = iter / elapsedMin;
+        var burnCls = pct > 80 ? "burn-danger" : pct > 50 ? "burn-warn" : "burn-ok";
+        iterRow.appendChild(el("span", { cls: "burn-rate " + burnCls, text: "(" + burnRate.toFixed(1) + "/min)" }));
+      }
+    }
+    body.appendChild(iterRow);
+
+    var costRow = el("div", { cls: "agent-row" });
+    costRow.appendChild(el("span", { cls: "agent-label", text: "Est. Cost", title: "Estimated at API rates" }));
+    var costText = costStr;
+    if (isHotCost && totalCost > 0) costText += " (" + Math.round((cost / totalCost) * 100) + "%)";
+    costRow.appendChild(el("span", { cls: "agent-val bold" + (isHotCost ? " cost-hot" : ""), text: costText }));
+    var spacer = el("span"); spacer.style.flex = "1"; costRow.appendChild(spacer);
+    costRow.appendChild(el("span", { cls: "agent-label", text: "Trust" }));
+    if (a.trust_score != null) {
+      var trustVal = Number(a.trust_score);
+      var trustPct = Math.min(100, Math.round(trustVal * 100));
+      var trustCls = trustVal < 0.2 ? "trust-low" : trustVal < 0.5 ? "trust-mid" : "trust-high";
+      var trustWrap = el("span", { cls: "trust-bar-wrap", title: "Trust: " + trustVal.toFixed(3) });
+      var trustFill = el("span", { cls: "trust-bar-fill " + trustCls }); trustFill.style.width = trustPct + "%";
+      trustWrap.appendChild(trustFill); costRow.appendChild(trustWrap);
+    } else { costRow.appendChild(el("span", { cls: "agent-val", text: "\u2014" })); }
+    body.appendChild(costRow);
+
+    var evTime = lastEvAt ? relTime(lastEvAt) : "";
+    if (lastEvType || evTime) {
+      var evRow = el("div", { cls: "agent-event" });
+      if (lastEvType) evRow.appendChild(el("span", { cls: "event-type-pill " + evtClass(lastEvType), text: lastEvType }));
+      if (evTime) { var dim = el("span", { text: "\u2014 " + evTime }); dim.style.color = "var(--text-dim)"; evRow.appendChild(dim); }
+      if (hasErrors) { var errSpan = el("span", { text: errors + " err" }); errSpan.style.cssText = "color:var(--red);margin-left:auto"; evRow.appendChild(errSpan); }
+      body.appendChild(evRow);
+    }
+    var purpose = rolePurposeMap[(a.role || "").toLowerCase()];
+    if (purpose) {
+      var actRow = el("div", { cls: "agent-activity" });
+      actRow.appendChild(document.createTextNode(purpose));
+      actRow.title = purpose;
+      body.appendChild(actRow);
+    }
+    card.appendChild(body);
+    return card;
+  }
+
+  // ── OPS: Hive Health ───────────────────────────────
+  function renderHive(hive, agents) {
+    var grid = clearEl("hive-grid");
+    if (!hive) { grid.appendChild(el("div", { cls: "data-empty", text: "Awaiting telemetry data\u2026" })); return; }
+    function hiveCard(label, fn) { var c = el("div", { cls: "hive-card" }); c.appendChild(el("div", { cls: "hive-card-label", text: label })); fn(c); return c; }
+    grid.appendChild(hiveCard("Agents", function (c) {
+      var v = el("div", { cls: "hive-card-val", text: hive.active_agents != null ? hive.active_agents : "\u2014" });
+      v.appendChild(el("span", { cls: "hive-card-val-sub", text: " / " + (hive.total_actors != null ? hive.total_actors : "\u2014") }));
+      c.appendChild(v); c.appendChild(el("div", { cls: "hive-card-sub", text: "active / total" }));
+    }));
+    grid.appendChild(hiveCard("Event Rate", function (c) {
+      c.appendChild(el("div", { cls: "hive-card-val", text: hive.event_rate != null ? hive.event_rate + "/min" : "\u2014" }));
+      c.appendChild(el("div", { cls: "hive-card-sub", text: "events / min" }));
+    }));
+    grid.appendChild(hiveCard("Est. Cost", function (c) {
+      c.firstChild.title = "Estimated at API rates";
+      if (hive.daily_cost != null) {
+        c.appendChild(el("div", { cls: "hive-card-val", text: fmtCost(hive.daily_cost) }));
+        if (hive.daily_cap != null && hive.daily_cap > 0) {
+          var pct = Math.min(100, Math.round((hive.daily_cost / hive.daily_cap) * 100));
+          var fc = pct >= 90 ? "danger" : pct >= 70 ? "warn" : "";
+          var bw = el("div", { cls: "progress-bar" }); bw.style.cssText = "margin:0.375rem 0 0.25rem";
+          var cf = el("div", { cls: "progress-fill " + fc }); cf.style.width = pct + "%";
+          bw.appendChild(cf); c.appendChild(bw);
+          c.appendChild(el("div", { cls: "hive-card-sub", text: pct + "% of " + fmtCost(hive.daily_cap) + " cap" }));
+        } else { c.appendChild(el("div", { cls: "hive-card-sub", text: "no cap set" })); }
+      } else { c.appendChild(el("div", { cls: "hive-card-val", text: "\u2014" })); c.appendChild(el("div", { cls: "hive-card-sub", text: "no data" })); }
+    }));
+    if (agents.length > 0) {
+      var topAgent = agents.slice().sort(function (a, b) { return (b.cost_usd || 0) - (a.cost_usd || 0); })[0];
+      if (topAgent && (topAgent.cost_usd || 0) > 0) {
+        var tc = 0; agents.forEach(function (a) { tc += (a.cost_usd || 0); });
+        var tp = tc > 0 ? Math.round(((topAgent.cost_usd || 0) / tc) * 100) : 0;
+        grid.appendChild(hiveCard("Top Spender", function (c) {
+          var v = el("div", { cls: "hive-card-val", text: topAgent.role || "unknown" }); v.style.textTransform = "capitalize"; c.appendChild(v);
+          c.appendChild(el("div", { cls: "hive-card-sub", text: fmtCost(topAgent.cost_usd) + " (" + tp + "%)" }));
+        }));
+      }
+    }
+    grid.appendChild(hiveCard("Severity", function (c) {
+      var sev = (hive.severity || "ok").toLowerCase();
+      c.appendChild(el("span", { cls: "severity-badge severity-" + (sev === "ok" ? "ok" : sev === "warning" ? "warning" : "critical"), text: sev }));
+    }));
+    // Infer hive mode from agent composition (exclude retired)
+    var mode = hive.mode; // use API field if present
+    if (!mode && agents.length) {
+      var active = agents.filter(function (a) { return (a.state || "").toLowerCase() !== "retired"; });
+      var roles = {};
+      active.forEach(function (a) { roles[(a.role || "").toLowerCase()] = true; });
+      if (active.length === 1) mode = "one-shot";
+      else if (active.length > 1 && (roles.scout || (roles.builder && roles.critic))) mode = "pipeline";
+      else if (active.length > 1) mode = "multi-agent";
+    }
+    if (mode) {
+      grid.appendChild(hiveCard("Mode", function (c) {
+        c.appendChild(el("div", { cls: "hive-card-val", text: mode }));
+      }));
+    }
+  }
+
+  // ── OPS: Events ────────────────────────────────────
+  function renderEvents(events) {
+    var container = clearEl("event-stream");
+    var countEl = document.getElementById("event-count");
+    var filtered = events;
+    if (eventFilterMode === "exceptions") {
+      filtered = events.filter(function (ev) { for (var i = 0; i < NOISE_TYPES.length; i++) { if ((ev.event_type || "") === NOISE_TYPES[i]) return false; } return true; });
+    }
+    if (!filtered.length) {
+      container.appendChild(el("div", { cls: "data-empty", text: events.length > 0 ? "All events filtered (switch to All Events)" : "No recent events" }));
+      countEl.textContent = filtered.length + "/" + events.length; return;
+    }
+    countEl.textContent = filtered.length + "/" + events.length + " event" + (filtered.length !== 1 ? "s" : "");
+    filtered.forEach(function (ev) {
+      var row = el("div", { cls: "event-row" });
+      row.appendChild(el("span", { cls: "event-ts", text: ev.at ? relTime(ev.at) : "\u2014" }));
+      row.appendChild(el("span", { cls: "event-actor", text: ev.actor_role || "\u2014" }));
+      row.appendChild(el("span", { cls: "event-type " + evtClass(ev.event_type || ""), text: ev.event_type || "\u2014" }));
+      var summary = el("span", { cls: "event-summary", text: ev.summary || "", title: ev.summary || "" });
+      row.appendChild(summary);
+      container.appendChild(row);
+    });
+    if (!isUserScrolled) container.scrollTop = 0;
+  }
+  document.getElementById("event-stream").addEventListener("scroll", function () {
+    isUserScrolled = document.getElementById("event-stream").scrollTop > 40;
+  });
+
+  // ── OPS: Agent Detail Panel ─────────────────────────
+  function showOpsAgentPanel(a, isRefresh) {
+    selectedOpsAgent = a.role;
+    selectedOpsPhase = null;
+    selectedOpsDot = null;
+    // Highlight selected card
+    document.querySelectorAll(".agent-card").forEach(function (c) { c.classList.remove("selected"); });
+    // Find the card for this agent by role name
+    var cards = document.querySelectorAll(".agent-card");
+    cards.forEach(function (c) {
+      var roleEl = c.querySelector(".agent-role");
+      if (roleEl && roleEl.textContent.toLowerCase() === (a.role || "").toLowerCase()) c.classList.add("selected");
+    });
+
+    var frag = document.createDocumentFragment();
+
+    // State + Model
+    var state = (a.state || "unknown").toLowerCase();
+    frag.appendChild(makeSection("Runtime Status", [
+      makeRow("State", statusBadgeEl(a.state || "unknown")),
+      makeRow("Model", shortModel(a.model) ? el("span", { cls: "badge badge-model", text: shortModel(a.model) }) : "\u2014"),
+      makeRow("Iterations", (function () {
+        var iter = a.iteration || 0, maxIter = a.max_iterations || 1;
+        var pct = Math.min(100, Math.round((iter / maxIter) * 100));
+        var w = document.createDocumentFragment();
+        w.appendChild(el("span", { text: iter + " / " + maxIter, style: { fontFamily: "var(--mono)", fontSize: "11px", marginRight: "0.5rem" } }));
+        var bar = el("div", { cls: "progress-bar", style: { display: "inline-block", width: "80px", verticalAlign: "middle" } });
+        var fill = el("div", { cls: "progress-fill" + (pct >= 90 ? " danger" : pct >= 70 ? " warn" : "") }); fill.style.width = pct + "%";
+        bar.appendChild(fill); w.appendChild(bar);
+        return w;
+      })()),
+      makeRow("Est. Cost", fmtCost(a.cost_usd)),
+      makeRow("Trust", (function () {
+        if (a.trust_score == null) return "\u2014";
+        var tv = Number(a.trust_score);
+        var w = document.createDocumentFragment();
+        w.appendChild(el("span", { text: tv.toFixed(3), style: { fontFamily: "var(--mono)", fontSize: "11px", marginRight: "0.5rem" } }));
+        var bar = el("div", { cls: "progress-bar", style: { display: "inline-block", width: "60px", verticalAlign: "middle" } });
+        var fill = el("div", { cls: "progress-fill", style: { width: Math.round(tv * 100) + "%", background: tv < 0.2 ? "var(--red)" : tv < 0.5 ? "var(--amber)" : "var(--green)" } });
+        bar.appendChild(fill); w.appendChild(bar);
+        return w;
+      })()),
+      makeRow("Tokens", (a.tokens_used || 0).toLocaleString()),
+      makeRow("Errors", (function () {
+        var errors = a.errors || 0;
+        var s = el("span", { text: String(errors), style: { fontFamily: "var(--mono)" } });
+        if (errors > 0) s.style.color = "var(--red)";
+        return s;
+      })()),
+      makeRow("Last Event", (a.last_event_type || "\u2014") + (a.last_event_at ? " \u2014 " + relTime(a.last_event_at) : ""))
+    ]));
+
+    // Last message
+    if (a.last_message) {
+      frag.appendChild(makeSection("Last Message", el("pre", { cls: "last-message", text: a.last_message })));
+    }
+
+    // Agent Definition section — only if a .md file could exist
+    var mdRole = (a.role || "").toLowerCase();
+    if (agentMdRawUrl(mdRole)) {
+      var mdWrap = el("div", { cls: "p-section" });
+      mdWrap.appendChild(el("div", { cls: "p-section-title", text: "Agent Definition" }));
+      var mdContent = el("div");
+      mdContent.appendChild(el("div", { cls: "md-loading", text: "Loading definition\u2026" }));
+      fetchAgentMd(mdRole, function (sections) {
+        if (selectedOpsAgent !== a.role) return;
+        mdContent.textContent = "";
+        if (sections && sections.length) {
+          renderAgentMd(sections, mdContent);
+        } else {
+          mdContent.appendChild(mdFallbackEl(mdRole));
+        }
+      });
+      mdWrap.appendChild(mdContent);
+      frag.appendChild(mdWrap);
+    }
+
+    // Open or update panel
+    if (isRefresh && document.body.classList.contains("panel-open")) {
+      // Just update content without re-animating
+      document.getElementById("panel-title").textContent = a.role || "Agent";
+      clearEl("panel-body").appendChild(frag);
+    } else {
+      openArchPanel("ops-agent", a.role, a.role || "Agent", frag);
+    }
+  }
+
+  // ── OPS: Phase Detail Panel ─────────────────────────
+  function showOpsPhasePanel(p, liveRoles, isRefresh) {
+    var phaseNum = p.phase;
+    if (!isRefresh && selectedOpsPhase === phaseNum) { selectedOpsPhase = null; closeDetailPanel(); return; }
+    selectedOpsPhase = phaseNum;
+    if (!isRefresh) selectedOpsAgent = null;
+    selectedOpsDot = null;
+    // Highlight selected phase item
+    document.querySelectorAll(".ops-phase-item.selected").forEach(function (e) { e.classList.remove("selected"); });
+    document.querySelectorAll(".ops-phase-item").forEach(function (e) {
+      if (e.querySelector(".ops-phase-num") && e.querySelector(".ops-phase-num").textContent == phaseNum) e.classList.add("selected");
+    });
+
+    var status = p.status || "blocked";
+    var tier = PHASE_TIER[phaseNum] || "?";
+    var frag = document.createDocumentFragment();
+
+    // Overview section
+    var ov = [
+      makeRow("Status", statusBadgeEl(status)),
+      makeRow("Tier", tierBadgeEl(tier))
+    ];
+    if (status === "complete" && p.completed_at) ov.push(makeRow("Completed", fmtDate(p.completed_at)));
+    if (status === "in_progress" && p.started_at) ov.push(makeRow("Started", fmtDate(p.started_at)));
+    if (p.exit_criteria) ov.push(makeRow("Exit Criteria", p.exit_criteria));
+    frag.appendChild(makeSection("Overview", ov));
+
+    // Notes / description
+    if (p.notes || p.description) {
+      var desc = el("div", { style: { fontSize: "12px", lineHeight: "1.5", color: "var(--text-sec)" } });
+      desc.textContent = p.notes || p.description;
+      frag.appendChild(makeSection("Description", desc));
+    }
+
+    // Agent roster comes from the backend: p.agents = [{role, status}, ...]
+    var phaseAgents = Array.isArray(p.agents) ? p.agents : [];
+    if (phaseAgents.length) {
+      var agentRows = phaseAgents.map(function (entry) {
+        var role = (entry.role || "").toLowerCase();
+        var backendStatus = (entry.status || "").toLowerCase();
+        var dotStatus;
+        if ((liveRoles && liveRoles[role]) || backendStatus === "running") {
+          dotStatus = "alive";
+        } else if (backendStatus === "defined" || backendStatus === "designed" || backendStatus === "missing") {
+          dotStatus = backendStatus;
+        } else {
+          dotStatus = "missing";
+        }
+        var row = el("div", { cls: "p-row", style: { cursor: "default" } });
+        var lbl = el("span", { cls: "p-label", style: { display: "flex", alignItems: "center", gap: "6px", minWidth: "auto" } });
+        var dotEl = el("span", { style: { width: "6px", height: "6px", borderRadius: "50%", display: "inline-block", flexShrink: "0" } });
+        dotEl.style.background = dotStatus === "alive" ? "var(--green)" : dotStatus === "designed" ? "var(--amber)" : dotStatus === "defined" ? "var(--gray)" : dotStatus === "missing" ? "var(--red)" : "var(--gray)";
+        lbl.appendChild(dotEl);
+        lbl.appendChild(document.createTextNode(role));
+        row.appendChild(lbl);
+        var val = el("span", { cls: "p-val" });
+        val.appendChild(statusBadgeEl(dotStatus));
+        var url = agentMdUrl(role);
+        if (url) {
+          var link = document.createElement("a");
+          link.href = url; link.target = "_blank"; link.rel = "noopener";
+          link.textContent = " view def";
+          link.style.cssText = "font-size:10px;color:var(--blue);margin-left:0.5rem;text-decoration:none";
+          val.appendChild(link);
+        }
+        row.appendChild(val);
+        return row;
+      });
+      frag.appendChild(makeSection("Agents (" + phaseAgents.length + ")", agentRows));
+    }
+
+    // Purpose from rolePurposeMap for each agent
+    if (phaseAgents.length) {
+      var purposes = [];
+      phaseAgents.forEach(function (entry) {
+        var role = (entry.role || "").toLowerCase();
+        var purpose = rolePurposeMap[role];
+        if (purpose) purposes.push(makeRow(role, purpose));
+      });
+      if (purposes.length) frag.appendChild(makeSection("Agent Purposes", purposes));
+    }
+
+    var title = "Phase " + phaseNum + ": " + (PHASE_LABEL[phaseNum] || p.label || "");
+    if (isRefresh && document.body.classList.contains("panel-open")) {
+      document.getElementById("panel-title").textContent = title;
+      clearEl("panel-body").appendChild(frag);
+    } else {
+      openArchPanel("ops-phase", phaseNum, title, frag);
+    }
+  }
+
+  // ── OPS: Agent Dot Detail Panel ─────────────────────
+  function showOpsDotPanel(role, dotStatus, phase, isRefresh) {
+    // If agent is running, delegate to the full agent panel
+    for (var i = 0; i < lastAgents.length; i++) {
+      if ((lastAgents[i].role || "").toLowerCase() === role) {
+        showOpsAgentPanel(lastAgents[i], isRefresh || false);
+        return;
+      }
+    }
+    // Agent not running — build a panel from what we know
+    selectedOpsPhase = null;
+    selectedOpsAgent = null;
+    selectedOpsDot = { role: role, phase: phase.phase };
+    var frag = document.createDocumentFragment();
+    var tier = PHASE_TIER[phase.phase] || "?";
+    var phaseLabel = PHASE_LABEL[phase.phase] || (phase.label || "").replace(/\s*\(Tier\s+[A-Z]\)$/i, "");
+    var archRole = findRole(role);
+
+    // Overview section — enrich from archData when available
+    var ov = [
+      makeRow("Status", statusBadgeEl(archRole ? archRole.status : dotStatus)),
+      makeRow("Phase", "Phase " + phase.phase + " \u2014 " + phaseLabel),
+      makeRow("Tier", tierBadgeEl(archRole ? archRole.tier || tier : tier))
+    ];
+    var purpose = (archRole && archRole.purpose) || rolePurposeMap[role];
+    if (purpose) ov.push(makeRow("Purpose", purpose));
+    if (archRole) {
+      if (archRole.category) ov.push(makeRow("Category", archRole.category));
+      if (archRole.origin) ov.push(makeRow("Origin", originBadgeEl(archRole.origin)));
+      ov.push(makeRow("Has prompt", archRole.has_prompt ? "Yes" : "No"));
+      ov.push(makeRow("Has persona", archRole.has_persona ? "Yes" : "No"));
+      if (archRole.graduated) ov.push(makeRow("Graduated", archRole.graduated));
+    }
+    var url = agentMdUrl(role);
+    if (url) {
+      var link = document.createElement("a");
+      link.href = url; link.target = "_blank"; link.rel = "noopener";
+      link.textContent = "View agent definition";
+      link.style.cssText = "font-size:11px;color:var(--blue);text-decoration:none";
+      ov.push(makeRow("Definition", link));
+    } else {
+      ov.push(makeRow("Definition", "Not yet created"));
+    }
+    frag.appendChild(makeSection("Role Overview", ov));
+
+    // Configuration section from archData
+    if (archRole && (archRole.model || archRole.can_operate != null || archRole.max_iterations)) {
+      var cfgRows = [];
+      if (archRole.model) {
+        var mw = document.createDocumentFragment();
+        mw.appendChild(el("span", { cls: "status-badge", text: shortModel(archRole.model), style: { background: "rgba(168,85,247,0.12)", color: "var(--purple)", fontFamily: "var(--mono)", fontSize: "10px" } }));
+        mw.appendChild(document.createTextNode(" ")); mw.appendChild(el("span", { text: archRole.model, style: { color: "var(--text-dim)", fontSize: "11px" } }));
+        cfgRows.push(makeRow("Model", mw));
+      }
+      if (archRole.can_operate != null) cfgRows.push(makeRow("CanOperate", archRole.can_operate ? "Yes" : "No"));
+      if (archRole.max_iterations) cfgRows.push(makeRow("MaxIterations", String(archRole.max_iterations)));
+      frag.appendChild(makeSection("Configuration", cfgRows));
+    }
+
+    // Dependencies section from archData
+    if (archRole && archRole.dependencies && archRole.dependencies.length) {
+      var depRows = archRole.dependencies.map(function (dep) {
+        var dr = findRole(dep), row = el("div", { cls: "p-row" }), val = el("span", { cls: "p-val" });
+        append(val, statusDotEl(dr ? dr.status : "missing"), document.createTextNode(" " + dep));
+        row.appendChild(val); return row;
+      });
+      frag.appendChild(makeSection("Dependencies", depRows));
+    }
+
+    // Watch patterns from archData
+    if (archRole && archRole.watch_patterns && archRole.watch_patterns.length) {
+      var ul = el("ul", { cls: "watch-list" }); archRole.watch_patterns.forEach(function (w) { ul.appendChild(el("li", { text: w })); });
+      frag.appendChild(makeSection("Watch Patterns", ul));
+    }
+
+    // Agent Definition section — only if a .md file could exist
+    if (agentMdRawUrl(role)) {
+      var mdWrap = el("div", { cls: "p-section" });
+      mdWrap.appendChild(el("div", { cls: "p-section-title", text: "Agent Definition" }));
+      var mdContent = el("div");
+      mdContent.appendChild(el("div", { cls: "md-loading", text: "Loading definition\u2026" }));
+      fetchAgentMd(role, function (sections) {
+        if (!selectedOpsDot || selectedOpsDot.role !== role) return;
+        mdContent.textContent = "";
+        if (sections && sections.length) {
+          renderAgentMd(sections, mdContent);
+        } else {
+          mdContent.appendChild(mdFallbackEl(role));
+        }
+      });
+      mdWrap.appendChild(mdContent);
+      frag.appendChild(mdWrap);
+    }
+
+    if (isRefresh && document.body.classList.contains("panel-open")) {
+      document.getElementById("panel-title").textContent = role;
+      clearEl("panel-body").appendChild(frag);
+    } else {
+      openArchPanel("ops-dot", role, role, frag);
+    }
+  }
+
+  // ── OPS: Task Pane ─────────────────────────────────
+  var taskPaneActorId = null, taskController = null, selectedCard = null, taskPaneAgent = null;
+  function openTaskPane(role, actorId, cardEl, agent) {
+    if (taskPaneActorId === actorId) { closeTaskPane(); return; }
+    if (selectedCard) selectedCard.classList.remove("selected");
+    selectedCard = cardEl; cardEl.classList.add("selected");
+    taskPaneActorId = actorId; taskPaneAgent = agent || null;
+    document.getElementById("task-pane-title").textContent = role + " \u2014 Tasks";
+    document.getElementById("task-pane").classList.add("open");
+    document.getElementById("ops-main").classList.add("pane-open");
+    fetchTasks(actorId);
+  }
+  function closeTaskPane() {
+    taskPaneActorId = null;
+    if (selectedCard) selectedCard.classList.remove("selected"); selectedCard = null;
+    document.getElementById("task-pane").classList.remove("open");
+    document.getElementById("ops-main").classList.remove("pane-open");
+  }
+  function fetchTasks(actorId) {
+    var body = clearEl("task-pane-body");
+    body.appendChild(el("div", { cls: "task-pane-empty", text: "Loading\u2026" }));
+    if (taskController) taskController.abort();
+    taskController = new AbortController();
+    fetch(API_BASE + "/tasks?assignee=" + encodeURIComponent(actorId), makeFetchOpts(taskController))
+    .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
+    .then(function (data) {
+      var tasks = data.tasks || data || []; if (!Array.isArray(tasks)) tasks = [];
+      renderTaskPane(tasks);
+    })
+    .catch(function (err) {
+      if (err.name === "AbortError") return;
+      var b = clearEl("task-pane-body");
+      var msg = el("div", { cls: "task-pane-empty" }); msg.appendChild(document.createTextNode("Failed to load tasks. "));
+      var retry = el("button", { cls: "task-pane-retry", text: "Retry" });
+      retry.addEventListener("click", function () { fetchTasks(actorId); });
+      msg.appendChild(retry); b.appendChild(msg);
+    });
+  }
+  function renderTaskPane(tasks) {
+    var body = clearEl("task-pane-body");
+    if (taskPaneAgent && taskPaneAgent.last_message) {
+      var activity = el("div", { cls: "task-pane-activity" });
+      activity.appendChild(el("div", { cls: "task-pane-activity-label", text: "Latest Activity" }));
+      activity.appendChild(el("div", { cls: "task-pane-activity-text", text: taskPaneAgent.last_message }));
+      body.appendChild(activity);
+    }
+    var titleEl = document.getElementById("task-pane-title");
+    titleEl.textContent = titleEl.textContent.replace(/ \(\d+\)$/, "") + " (" + tasks.length + ")";
+    if (!tasks.length) { body.appendChild(el("div", { cls: "task-pane-empty", text: "No tasks assigned" })); return; }
+    tasks.forEach(function (t) {
+      var item = el("div", { cls: "task-item" });
+      item.addEventListener("click", function () { item.classList.toggle("expanded"); });
+      item.appendChild(el("div", { cls: "task-title", text: t.title || "Untitled" }));
+      var meta = el("div", { cls: "task-meta" });
+      var status = t.status || "pending";
+      meta.appendChild(el("span", { cls: "task-badge task-badge-" + status, text: status === "completed" ? "done" : status }));
+      if (t.priority) meta.appendChild(el("span", { cls: "task-badge task-badge-" + t.priority, text: t.priority }));
+      if (t.blocked) meta.appendChild(el("span", { cls: "task-badge task-badge-high", text: "blocked" }));
+      item.appendChild(meta);
+      if (t.description) item.appendChild(el("div", { cls: "task-desc", text: t.description }));
+      body.appendChild(item);
+    });
+  }
+
+  // ═══════════════════════════════════════════════════
+  // ARCH: FETCH & RENDER
+  // ═══════════════════════════════════════════════════
+  function refreshArch() {
+    if (archPollController) archPollController.abort();
+    archPollController = new AbortController();
+
+    fetch(API_BASE + "/telemetry/overview", makeFetchOpts(archPollController))
+    .then(function (res) {
+      if (res.status === 503) return null;
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.json();
+    })
+    .then(function (data) {
+      if (!data) return;
+      lastSuccess = Date.now();
+      archConsecutiveFails = 0;
+      archData = data;
+      archLastFetch = Date.now();
+      renderArchAll(data);
+      if (currentPanel) refreshArchPanel();
+    })
+    .catch(function (err) {
+      if (err.name === "AbortError") return;
+      archConsecutiveFails++;
+      // Connection-status UI is driven by the SSE state machine (CONN).
+    });
+  }
+
+  function renderArchAll(data) {
+    renderConceptStack(data);
+    renderRepoStrata();
+    renderRoleTiers(data);
+    renderArchPhases(data);
+    renderGovernanceCards();
+    renderGovernanceTrust(data);
+  }
+
+  // ── ARCH: Detail Panel ─────────────────────────────
+  function bindDetailPanel() {
+    document.getElementById("panel-close").addEventListener("click", closeDetailPanel);
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeDetailPanel(); });
+    document.getElementById("panel-body").addEventListener("click", function (e) {
+      var link = e.target.closest("[data-open-agent]");
+      if (link) { openAgentDetailPanel(link.getAttribute("data-open-agent")); return; }
+      link = e.target.closest("[data-open-role]");
+      if (link) { openRolePanel(link.getAttribute("data-open-role")); return; }
+      link = e.target.closest("[data-open-phase]");
+      if (link) { openPhasePanel(parseInt(link.getAttribute("data-open-phase"), 10)); return; }
+      link = e.target.closest("[data-open-concept]");
+      if (link) { openConceptPanel(link.getAttribute("data-open-concept")); return; }
+    });
+  }
+
+  function openArchPanel(type, id, title, bodyEl, skipToggle) {
+    if (!skipToggle && currentPanel && currentPanel.type === type && currentPanel.id === id) { closeDetailPanel(); return; }
+    currentPanel = { type: type, id: id };
+    document.getElementById("panel-title").textContent = title;
+    var body = clearEl("panel-body");
+    body.appendChild(bodyEl);
+    document.body.classList.add("panel-open");
+    updateArchActive();
+  }
+
+  function closeDetailPanel() {
+    currentPanel = null;
+    selectedOpsAgent = null;
+    selectedOpsPhase = null;
+    selectedOpsDot = null;
+    document.body.classList.remove("panel-open");
+    document.querySelectorAll(".agent-card.selected, .ops-phase-item.selected").forEach(function (c) { c.classList.remove("selected"); });
+    updateArchActive();
+  }
+
+  function updateArchActive() {
+    document.querySelectorAll(".concept-box.active, .role-chip.active, .phase-card.active").forEach(function (e) { e.classList.remove("active"); });
+    if (!currentPanel) return;
+    var sel = null;
+    if (currentPanel.type === "concept") sel = '[data-concept="' + currentPanel.id + '"]';
+    else if (currentPanel.type === "role") sel = '[data-role="' + CSS.escape(currentPanel.id) + '"]';
+    else if (currentPanel.type === "phase") sel = '[data-phase="' + currentPanel.id + '"]';
+    if (sel) { var e = document.querySelector(sel); if (e) e.classList.add("active"); }
+  }
+
+  var _isArchRefresh = false;
+  function refreshArchPanel() {
+    if (!currentPanel || !archData) return;
+    _isArchRefresh = true;
+    if (currentPanel.type === "concept") openConceptPanel(currentPanel.id);
+    else if (currentPanel.type === "role") openRolePanel(currentPanel.id);
+    else if (currentPanel.type === "phase") openPhasePanel(currentPanel.id);
+    else if (currentPanel.type === "governance") { /* static content, no refresh needed */ }
+    _isArchRefresh = false;
+  }
+
+  // ── ARCH: Lookups ──────────────────────────────────
+  function findAgent(role) {
+    if (!archData || !archData.agents) return null;
+    var r = (role || "").toLowerCase();
+    for (var i = 0; i < archData.agents.length; i++) { if ((archData.agents[i].role || "").toLowerCase() === r) return archData.agents[i]; }
+    return null;
+  }
+  function findRole(name) {
+    if (!archData || !archData.roles) return null;
+    var n = (name || "").toLowerCase();
+    for (var i = 0; i < archData.roles.length; i++) { if ((archData.roles[i].name || "").toLowerCase() === n) return archData.roles[i]; }
+    return null;
+  }
+  function findPhase(num) {
+    if (!archData || !archData.phases) return null;
+    for (var i = 0; i < archData.phases.length; i++) {
+      var p = archData.phases[i];
+      if ((p.phase != null ? p.phase : p.number) === num) return p;
+    }
+    return null;
+  }
+
+  function phaseNum(p) { return p.phase != null ? p.phase : p.number; }
+
+  // Cross-reference: if agent is running, override role/phase status
+  function effectiveStatus(roleName, fallbackStatus) {
+    if (findAgent(roleName)) return "running";
+    return fallbackStatus || "missing";
+  }
+
+  function fmtISODate(iso) {
+    if (!iso) return "";
+    try { return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); }
+    catch (e) { return iso; }
+  }
+
+  // ── ARCH: Concept Stack ────────────────────────────
+  function renderConceptStack(data) {
+    var grid = clearEl("concept-grid");
+    var concepts = [
+      { key: "layer",   label: "Layer",   num: String((data.layers || []).length || 14), q: "What domain?",        cls: "box-layer" },
+      { key: "actor",   label: "Actor",   num: String((data.actors || []).length),       q: "Who is it?",          cls: "box-actor" },
+      { key: "agent",   label: "Agent",   num: (data.agents || []).length + " running",  q: "What is it?",         cls: "box-agent" },
+      { key: "role",    label: "Role",    num: String((data.roles || []).length),         q: "What does it do?",    cls: "box-role" },
+      { key: "persona", label: "Persona", num: "58 / 38",                                q: "How does it present?", cls: "box-persona" }
+    ];
+    concepts.forEach(function (c) {
+      var box = el("div", { cls: "concept-box " + c.cls });
+      box.setAttribute("data-concept", c.key);
+      append(box, el("div", { cls: "c-num", text: c.num }), el("div", { cls: "c-label", text: c.label }), el("div", { cls: "c-question", text: c.q }));
+      box.addEventListener("click", function () { openConceptPanel(c.key); });
+      grid.appendChild(box);
+    });
+  }
+
+  function openConceptPanel(key) {
+    if (!archData) return;
+    var frag = document.createDocumentFragment(), title = "";
+
+    // ── FIX 1: LAYER PANEL — color legend ──
+    if (key === "layer") {
+      title = "Layers";
+      var layers = archData.layers || [];
+      if (!layers.length) { frag.appendChild(el("div", { cls: "data-empty", text: "Layer data not yet available" })); }
+      else {
+        // Depth legend
+        var legend = el("div", { cls: "panel-legend" });
+        legend.appendChild(el("span", { text: "Implementation depth:", style: { color: "var(--text-dim)", marginRight: "0.25rem" } }));
+        var depths = [
+          { label: "Deep", color: DEPTH_COLORS.deep },
+          { label: "Moderate", color: DEPTH_COLORS.moderate },
+          { label: "Shallow", color: DEPTH_COLORS.shallow },
+          { label: "Designed", color: DEPTH_COLORS.designed },
+          { label: "Aspirational", color: DEPTH_COLORS.aspirational },
+          { label: "Boundary", color: DEPTH_COLORS.boundary }
+        ];
+        depths.forEach(function (d) {
+          var item = el("span", { text: "\u25CF " + d.label, style: { color: d.color } });
+          legend.appendChild(item);
+        });
+        frag.appendChild(legend);
+        // Table
+        var rows = layers.map(function (l, i) {
+          var dc = DEPTH_COLORS[(l.depth || "").toLowerCase()] || DEPTH_COLORS.designed;
+          var tr = el("tr");
+          tr.appendChild(el("td", { text: String(l.number != null ? l.number : i), style: { color: dc, fontWeight: "700" } }));
+          tr.appendChild(el("td", { text: l.name || "", style: { color: dc } }));
+          tr.appendChild(el("td", { text: l.focus || "" }));
+          tr.appendChild(el("td", { text: l.description || "", style: { color: "var(--text-sec)" } }));
+          return tr;
+        });
+        frag.appendChild(makeTable(["#", "Name", "Focus", "Description"], rows));
+      }
+    }
+
+    // ── FIX 2: ACTOR PANEL — grouped by deployment phase ──
+    else if (key === "actor") {
+      title = "Actors";
+      var actors = archData.actors || [];
+      if (!actors.length) { frag.appendChild(el("div", { cls: "data-empty", text: "Actor data not yet available" })); }
+      else {
+        // Build actor→phase mapping from phase agent membership
+        var actorPhaseMap = {};
+        (archData.phases || []).forEach(function (p) {
+          (p.agents || []).forEach(function (a) {
+            var aName = (a.name || a.role || "").toLowerCase();
+            if (aName) actorPhaseMap[aName] = { num: phaseNum(p), label: PHASE_LABEL[phaseNum(p)] || p.label || "Phase " + phaseNum(p) };
+          });
+        });
+
+        // Group actors by phase
+        var phaseGroups = {};
+        var systemActors = [];
+        actors.forEach(function (a) {
+          var name = (a.display_name || a.name || a.id || "").toLowerCase();
+          var atype = (a.actor_type || a.type || "ai").toLowerCase();
+          // Human → Phase 0
+          if (atype === "human") {
+            if (!phaseGroups[0]) phaseGroups[0] = { label: "Foundation", actors: [] };
+            phaseGroups[0].actors.push(a);
+          } else if (actorPhaseMap[name]) {
+            var pm = actorPhaseMap[name];
+            if (!phaseGroups[pm.num]) phaseGroups[pm.num] = { label: pm.label, actors: [] };
+            phaseGroups[pm.num].actors.push(a);
+          } else {
+            systemActors.push(a);
+          }
+        });
+
+        function actorRow(a) {
+          var tr = el("tr");
+          var name = a.display_name || a.name || a.id || "";
+          var atype = (a.actor_type || a.type || "ai").toLowerCase();
+          var astatus = (a.status || "").toLowerCase();
+          tr.appendChild(el("td", { text: name }));
+          var tc = el("td");
+          tc.appendChild(el("span", { cls: "status-badge " + (atype === "human" ? "status-in_progress" : "status-running"), text: atype === "human" ? "Human" : "AI" }));
+          tr.appendChild(tc);
+          var sc = el("td");
+          var running = findAgent(name);
+          if (running) { sc.appendChild(el("span", { cls: "status-badge status-running", text: "RUNNING" })); }
+          else if (astatus === "active") { sc.appendChild(el("span", { text: "active", style: { color: "var(--green)" } })); }
+          else if (astatus === "suspended") { sc.appendChild(el("span", { text: "suspended", style: { color: "var(--amber)" } })); }
+          else if (astatus === "memorial") { sc.appendChild(el("span", { text: "memorial", style: { color: "var(--gray)" } })); }
+          else { sc.appendChild(document.createTextNode(astatus || "\u2014")); }
+          tr.appendChild(sc);
+          var oc = el("td");
+          var role = findRole(name);
+          if (role && role.origin) { oc.appendChild(originBadgeEl(role.origin)); }
+          else if (atype === "human") { oc.appendChild(document.createTextNode("\u2014")); }
+          else { oc.appendChild(originBadgeEl("bootstrap")); }
+          tr.appendChild(oc);
+          return tr;
+        }
+
+        // Render sorted phase groups
+        var phaseNums = Object.keys(phaseGroups).map(Number).sort(function (a, b) { return a - b; });
+        phaseNums.forEach(function (pn) {
+          var g = phaseGroups[pn];
+          var header = el("div", { cls: "p-section-title", text: "Phase " + pn + " \u2014 " + g.label, style: { cursor: "pointer", color: "var(--blue)" } });
+          header.setAttribute("data-open-phase", String(pn));
+          frag.appendChild(header);
+          var rows = g.actors.map(actorRow);
+          frag.appendChild(makeTable(["Name", "Type", "Status", "Origin"], rows));
+        });
+
+        // System actors
+        if (systemActors.length) {
+          frag.appendChild(el("div", { cls: "p-section-title", text: "System" }));
+          frag.appendChild(makeTable(["Name", "Type", "Status", "Origin"], systemActors.map(actorRow)));
+        }
+      }
+    }
+
+    // ── FIX 3: AGENT PANEL — ordered by dependency chain ──
+    else if (key === "agent") {
+      title = "Running Agents";
+      var agents = archData.agents || [];
+      if (!agents.length) { frag.appendChild(el("div", { cls: "data-empty", text: "No agents currently running" })); }
+      else {
+        // Build dependency levels from role data
+        var roleDeps = {};
+        (archData.roles || []).forEach(function (r) {
+          roleDeps[(r.name || "").toLowerCase()] = (r.dependencies || r.depends_on || []).map(function (d) { return d.toLowerCase(); });
+        });
+
+        // Topological grouping
+        var resolved = {};
+        var groups = [];
+        var remaining = agents.slice();
+        var maxIters = 10;
+        while (remaining.length > 0 && maxIters-- > 0) {
+          var level = [];
+          var nextRemaining = [];
+          remaining.forEach(function (ag) {
+            var role = (ag.role || "").toLowerCase();
+            var deps = roleDeps[role] || [];
+            var allResolved = deps.every(function (d) { return resolved[d]; });
+            if (allResolved || deps.length === 0) {
+              level.push(ag);
+              resolved[role] = true;
+            } else {
+              nextRemaining.push(ag);
+            }
+          });
+          if (level.length === 0) { level = nextRemaining; nextRemaining = []; } // break cycles
+          if (level.length > 0) {
+            var depLabel = groups.length === 0 ? "Foundation (no dependencies)" : "Depends on: " + Object.keys(resolved).filter(function (k) {
+              // Show deps that agents in this level actually depend on
+              var levelDeps = {};
+              level.forEach(function (ag) { (roleDeps[(ag.role || "").toLowerCase()] || []).forEach(function (d) { levelDeps[d] = true; }); });
+              return levelDeps[k];
+            }).join(", ");
+            groups.push({ label: depLabel, agents: level });
+          }
+          remaining = nextRemaining;
+        }
+
+        function agentRow(ag) {
+          var tr = el("tr", { cls: "clickable-row" });
+          tr.setAttribute("data-open-agent", ag.role || "");
+          tr.appendChild(el("td", { text: ag.role || "" }));
+          var sc = el("td"); sc.appendChild(statusBadgeEl(ag.state)); tr.appendChild(sc);
+          var mc = el("td"); mc.appendChild(el("span", { cls: "status-badge", text: shortModel(ag.model), style: { background: "rgba(168,85,247,0.12)", color: "var(--purple)", fontFamily: "var(--mono)", fontSize: "10px" } })); tr.appendChild(mc);
+          tr.appendChild(el("td", { text: (ag.current_iteration != null ? ag.current_iteration : "?") + " / " + (ag.max_iterations || "?"), style: { fontFamily: "var(--mono)", fontSize: "11px" } }));
+          tr.appendChild(el("td", { text: ag.estimated_cost != null ? "$" + ag.estimated_cost.toFixed(3) : "\u2014", style: { fontFamily: "var(--mono)", fontSize: "11px" } }));
+          return tr;
+        }
+
+        groups.forEach(function (g) {
+          frag.appendChild(el("div", { cls: "p-section-title", text: g.label }));
+          frag.appendChild(makeTable(["Role", "State", "Model", "Iter", "Cost"], g.agents.map(agentRow)));
+        });
+      }
+    }
+
+    // ── FIX 4: ROLE PANEL — status dots + legend + drill-down ──
+    else if (key === "role") {
+      title = "All Roles";
+      var roles = archData.roles || [];
+      if (!roles.length) { frag.appendChild(el("div", { cls: "data-empty", text: "Role data not yet available" })); }
+      else {
+        // Status legend
+        var legend = el("div", { cls: "panel-legend" });
+        var statuses = [
+          { label: "Running", cls: "dot-running" },
+          { label: "Defined", cls: "dot-defined" },
+          { label: "Designed", cls: "dot-designed" },
+          { label: "Missing", cls: "dot-missing" }
+        ];
+        statuses.forEach(function (s) {
+          var item = el("span");
+          item.appendChild(el("span", { cls: "dot " + s.cls }));
+          item.appendChild(document.createTextNode(" " + s.label));
+          legend.appendChild(item);
+        });
+        frag.appendChild(legend);
+        // Grouped roles
+        var grouped = {};
+        roles.forEach(function (r) { var t = r.tier || "?"; if (!grouped[t]) grouped[t] = []; grouped[t].push(r); });
+        ["A", "B", "C", "D", "?"].forEach(function (t) {
+          if (!grouped[t]) return;
+          var children = grouped[t].map(function (r) {
+            var row = el("div", { cls: "p-row clickable-row", style: { cursor: "pointer" } });
+            row.setAttribute("data-open-role", r.name || "");
+            var lbl = el("span", { cls: "p-label", style: { minWidth: "auto", display: "flex", alignItems: "center", gap: "6px" } });
+            append(lbl, statusDotEl(r.status), document.createTextNode(" " + (r.name || "")));
+            row.appendChild(lbl);
+            row.appendChild(el("span", { cls: "p-val", text: r.purpose || "", style: { flex: "1", color: "var(--text-sec)", fontSize: "11px" } }));
+            return row;
+          });
+          frag.appendChild(makeSection(TIER_META[t] ? TIER_META[t].label : "Unassigned", children));
+        });
+      }
+    }
+
+    // ── FIX 5: PERSONA PANEL — full member grid with drill-down ──
+    else if (key === "persona") {
+      title = "Personas";
+      // Summary
+      var totalCount = 0, activeCount = 0;
+      Object.keys(PERSONA_DATA).forEach(function (k) {
+        PERSONA_DATA[k].members.forEach(function (m) { totalCount++; if (m.active) activeCount++; });
+      });
+      frag.appendChild(el("div", { text: totalCount + " defined \u00b7 " + activeCount + " active \u00b7 Stored in site-postgres", style: { fontSize: "12px", color: "var(--text-sec)", marginBottom: "1rem" } }));
+      // Categories with color-coded persona chips
+      Object.keys(PERSONA_DATA).forEach(function (catKey) {
+        var cat = PERSONA_DATA[catKey];
+        var catColor = CAT_COLORS[catKey] || CAT_COLORS.inactive;
+        frag.appendChild(el("div", { cls: "p-section-title", text: cat.label + " (" + cat.members.length + ")", style: { color: catColor } }));
+        var grid = el("div", { cls: "persona-grid" });
+        cat.members.forEach(function (m) {
+          var chip = el("div", { cls: "persona-chip" + (m.active ? "" : " inactive"), text: m.display });
+          chip.style.borderLeftColor = catColor;
+          chip.addEventListener("click", function () { openPersonaDetail(m, catKey); });
+          grid.appendChild(chip);
+        });
+        frag.appendChild(grid);
+      });
+      frag.appendChild(el("p", { text: "Persona data not yet served by API.", style: { marginTop: "1rem", fontSize: "11px", color: "var(--text-dim)", fontStyle: "italic" } }));
+    }
+
+    openArchPanel("concept", key, title, frag, _isArchRefresh);
+  }
+
+  // ── FIX 3: Agent detail panel (combined runtime + role) ──
+  function openAgentDetailPanel(agentRole) {
+    if (!archData) return;
+    var agent = findAgent(agentRole);
+    if (!agent) { openArchPanel("role", agentRole, agentRole, el("div", { cls: "data-empty", text: "Agent not found" })); return; }
+    var role = findRole(agentRole);
+    var frag = document.createDocumentFragment();
+
+    // Runtime status
+    var rt = [];
+    rt.push(makeRow("State", statusBadgeEl(agent.state)));
+    var ms = shortModel(agent.model);
+    if (ms) {
+      var mBadge = el("span", { cls: "status-badge", text: ms, style: { background: "rgba(168,85,247,0.12)", color: "var(--purple)", fontFamily: "var(--mono)", fontSize: "10px" } });
+      rt.push(makeRow("Model", mBadge));
+    }
+    // Iterations with progress bar
+    var iter = agent.current_iteration != null ? agent.current_iteration : (agent.iteration || 0);
+    var maxIter = agent.max_iterations || 1;
+    var pct = Math.min(100, Math.round((iter / maxIter) * 100));
+    var iterWrap = document.createDocumentFragment();
+    iterWrap.appendChild(el("span", { text: iter + " / " + maxIter, style: { fontFamily: "var(--mono)", fontSize: "11px", marginRight: "0.5rem" } }));
+    var bar = el("div", { cls: "progress-bar", style: { display: "inline-block", width: "80px", verticalAlign: "middle" } });
+    var fill = el("div", { cls: "progress-fill" + (pct >= 90 ? " danger" : pct >= 70 ? " warn" : "") });
+    fill.style.width = pct + "%";
+    bar.appendChild(fill);
+    iterWrap.appendChild(bar);
+    rt.push(makeRow("Iterations", iterWrap));
+
+    if (agent.estimated_cost != null) rt.push(makeRow("Est. Cost", "$" + agent.estimated_cost.toFixed(3)));
+    else if (agent.cost_usd != null) rt.push(makeRow("Est. Cost", "$" + agent.cost_usd.toFixed(3)));
+
+    // Trust score
+    if (agent.trust_score != null) {
+      var tv = Number(agent.trust_score);
+      var trustWrap = document.createDocumentFragment();
+      trustWrap.appendChild(el("span", { text: tv.toFixed(3), style: { fontFamily: "var(--mono)", fontSize: "11px", marginRight: "0.5rem" } }));
+      var tBar = el("div", { cls: "progress-bar", style: { display: "inline-block", width: "60px", verticalAlign: "middle" } });
+      var tFill = el("div", { cls: "progress-fill", style: { width: Math.round(tv * 100) + "%", background: tv < 0.2 ? "var(--red)" : tv < 0.5 ? "var(--amber)" : "var(--green)" } });
+      tBar.appendChild(tFill);
+      trustWrap.appendChild(tBar);
+      rt.push(makeRow("Trust Score", trustWrap));
+    } else {
+      rt.push(makeRow("Trust Score", "\u2014"));
+    }
+
+    if (agent.last_event_type) rt.push(makeRow("Last Event", agent.last_event_type + (agent.last_event_at ? " \u2014 " + relTime(agent.last_event_at) : agent.last_event_time ? " \u2014 " + agent.last_event_time : "")));
+
+    frag.appendChild(makeSection("Runtime Status", rt));
+
+    // Last message
+    if (agent.last_message) {
+      var msgPre = el("pre", { cls: "last-message", text: agent.last_message });
+      frag.appendChild(makeSection("Last Message", msgPre));
+    }
+
+    // Role definition (if found)
+    if (role) {
+      var rd = [];
+      rd.push(makeRow("Tier", tierBadgeEl(role.tier || "?")));
+      rd.push(makeRow("Purpose", role.purpose || "\u2014"));
+      if (role.phase != null) {
+        var ph = findPhase(role.phase);
+        var pl = ph ? "Phase " + role.phase + " \u2014 " + ph.label : "Phase " + role.phase;
+        rd.push(makeRow("Phase", crossLink(pl, "data-open-phase", String(role.phase))));
+      }
+      if (role.graduated) rd.push(makeRow("Graduated", role.graduated));
+      if (role.can_operate != null) rd.push(makeRow("CanOperate", role.can_operate ? "Yes" : "No"));
+      rd.push(makeRow("Has prompt", role.has_prompt ? "Yes" : "No"));
+      rd.push(makeRow("Has persona", role.has_persona ? "Yes" : "No"));
+      if (role.category) rd.push(makeRow("Category", role.category));
+      frag.appendChild(makeSection("Role Definition", rd));
+
+      if (role.watch_patterns && role.watch_patterns.length) {
+        var ul = el("ul", { cls: "watch-list" });
+        role.watch_patterns.forEach(function (w) { ul.appendChild(el("li", { text: w })); });
+        frag.appendChild(makeSection("Watch Patterns", ul));
+      }
+      if (role.dependencies && role.dependencies.length) {
+        var depRows = role.dependencies.map(function (dep) {
+          var dr = findRole(dep), row = el("div", { cls: "p-row" }), val = el("span", { cls: "p-val" });
+          append(val, statusDotEl(dr ? dr.status : "missing"), document.createTextNode(" "), crossLink(dep, "data-open-role", dep));
+          row.appendChild(val); return row;
+        });
+        frag.appendChild(makeSection("Dependencies", depRows));
+      }
+    }
+
+    openArchPanel("role", agentRole, agentRole, frag);
+  }
+
+  // ── FIX 5: Persona detail panel ──
+  function openPersonaDetail(persona, catKey) {
+    var frag = document.createDocumentFragment();
+    var back = el("button", { cls: "panel-back", text: "\u2190 Back to All Personas" });
+    back.addEventListener("click", function () { openConceptPanel("persona"); });
+    frag.appendChild(back);
+
+    var cat = PERSONA_DATA[catKey];
+    var catColor = CAT_COLORS[catKey] || CAT_COLORS.inactive;
+
+    // Category badge
+    var catBadge = el("span", { cls: "status-badge", text: cat ? cat.label : catKey, style: { background: catColor + "22", color: catColor } });
+    var statusBadge = el("span", { cls: "status-badge " + (persona.active ? "status-running" : "status-designed"), text: persona.active ? "Active" : "Inactive" });
+
+    var rows = [
+      makeRow("Category", catBadge),
+      makeRow("Status", statusBadge),
+      makeRow("Description", persona.description || "\u2014")
+    ];
+
+    // Cross-reference with running agent
+    var agent = findAgent(persona.name);
+    if (agent) {
+      var agentLink = crossLink("Currently running as agent \u2192", "data-open-agent", persona.name);
+      rows.push(makeRow("Runtime", agentLink));
+    }
+
+    frag.appendChild(makeSection("Overview", rows));
+    openArchPanel("concept", "persona-" + persona.name, persona.display, frag);
+  }
+
+  // ── ARCH: Repo Strata ──────────────────────────────
+  function renderRepoStrata() {
+    var c = clearEl("repo-content");
+    function repoTier(label, cards) {
+      var tier = el("div", { cls: "repo-tier" });
+      tier.appendChild(el("div", { cls: "repo-tier-label", text: label }));
+      var cw = el("div", { cls: "repo-tier-cards" });
+      cards.forEach(function (d) {
+        var card = el("div", { cls: "repo-card", style: { borderColor: d.bc } });
+        append(card, el("div", { cls: "r-name", text: d.name, style: { color: d.nc } }), el("div", { cls: "r-loc", text: d.loc }), el("div", { cls: "r-desc", text: d.desc }));
+        cw.appendChild(card);
+      });
+      tier.appendChild(cw); return tier;
+    }
+    var stack = el("div", { cls: "repo-stack" });
+    stack.appendChild(repoTier("Product", [{ name: "lovyou-ai-site", loc: "47K LOC \u00b7 Go + Templ", desc: "Web UI, 50 personas, Mind system, OAuth, governance, spaces.", bc: "rgba(59,130,246,0.3)", nc: "var(--blue)" }]));
+    stack.appendChild(el("div", { cls: "repo-arrow", text: "\u2191 HTTP API + Webhooks" }));
+    stack.appendChild(repoTier("Application", [{ name: "lovyou-ai-hive", loc: "22K LOC \u00b7 Go", desc: "Multi-agent runtime, pipeline, 53 prompts, 16 governance docs.", bc: "rgba(245,158,11,0.3)", nc: "var(--amber)" }]));
+    stack.appendChild(el("div", { cls: "repo-arrow", text: "\u2191 imports" }));
+    stack.appendChild(repoTier("Abstraction", [
+      { name: "agent", loc: "862 LOC \u00b7 Go", desc: "Lifecycle, FSM, 13 ops.", bc: "rgba(34,197,94,0.3)", nc: "var(--green)" },
+      { name: "work", loc: "3.4K LOC \u00b7 Go \u00b7 39 tests", desc: "Event-sourced task mgmt, 7 event types.", bc: "rgba(34,197,94,0.3)", nc: "var(--green)" }
+    ]));
+    stack.appendChild(el("div", { cls: "repo-arrow", text: "\u2191 imports" }));
+    stack.appendChild(repoTier("Substrate", [{ name: "lovyou-ai-eventgraph", loc: "270K LOC \u00b7 Go/Rust/Python/TS/.NET", desc: "Append-only hash-chained event store, 201 primitives, 121 event types.", bc: "rgba(239,68,68,0.3)", nc: "var(--red)" }]));
+    c.appendChild(stack);
+    c.appendChild(el("div", { cls: "repo-total", text: "Total: 343K LOC, ~86K test LOC, 205 test files. The substrate has zero dependencies \u2014 everything flows upward." }));
+  }
+
+  // ── ARCH: Role Tiers ───────────────────────────────
+  function renderRoleTiers(data) {
+    var container = clearEl("tiers-content");
+    var roles = data.roles || [];
+    if (!roles.length) { container.appendChild(el("div", { cls: "data-empty", text: "Role data not yet available" })); return; }
+    var grouped = {};
+    roles.forEach(function (r) { var t = r.tier || "?"; if (!grouped[t]) grouped[t] = []; grouped[t].push(r); });
+    ["A", "B", "C", "D"].forEach(function (t) {
+      var meta = TIER_META[t], list = grouped[t] || [];
+      if (!list.length) return;
+      var sec = el("div", { cls: "arch-tier-section" });
+      var header = el("div", { cls: "arch-tier-header" });
+      append(header, el("span", { cls: "tier-badge tier-badge-" + t, text: meta.label }), el("span", { cls: "arch-tier-desc", text: meta.desc }));
+      sec.appendChild(header);
+      var grid = el("div", { cls: "role-grid" });
+      list.forEach(function (r) {
+        var agent = findAgent(r.role) || findAgent(r.name), ms = agent ? shortModel(agent.model) : "";
+        var effectiveStatus = agent ? "running" : (r.status || "missing");
+        var chip = el("div", { cls: "role-chip" }); chip.setAttribute("data-role", r.name || "");
+        append(chip, statusDotEl(effectiveStatus), el("span", { cls: "rc-name", text: r.name || "" }));
+        if (ms) chip.appendChild(el("span", { cls: "rc-model", text: ms }));
+        if (r.origin === "spawned") chip.appendChild(originBadgeEl(r.origin));
+        chip.addEventListener("click", function () { openRolePanel(r.name); });
+        grid.appendChild(chip);
+      });
+      sec.appendChild(grid); container.appendChild(sec);
+    });
+    if (grouped["?"]) container.appendChild(el("div", { text: "Plus " + grouped["?"].length + " roles with no formal tier assignment.", style: { marginTop: "0.5rem", fontSize: "12px", color: "var(--text-sec)" } }));
+  }
+
+  function openRolePanel(roleName) {
+    if (!archData) return;
+    var role = findRole(roleName);
+    if (!role) { openArchPanel("role", roleName, roleName, el("div", { cls: "data-empty", text: "Role not found" })); return; }
+    var agent = findAgent(role.role) || findAgent(roleName), frag = document.createDocumentFragment();
+    // Back link to All Roles list
+    var back = el("button", { cls: "panel-back", text: "\u2190 Back to All Roles" });
+    back.addEventListener("click", function () { openConceptPanel("role"); });
+    frag.appendChild(back);
+    var phaseVal;
+    if (role.phase != null) {
+      var ph = findPhase(role.phase), pl = ph ? "Phase " + role.phase + " \u2014 " + ph.label : "Phase " + role.phase;
+      phaseVal = crossLink(pl, "data-open-phase", String(role.phase));
+    } else { phaseVal = "\u2014"; }
+    var ov = [makeRow("Tier", tierBadgeEl(role.tier || "?")), makeRow("Status", statusBadgeEl(role.status)), makeRow("Origin", role.origin ? originBadgeEl(role.origin) : "\u2014"), makeRow("Phase", phaseVal), makeRow("Purpose", role.purpose || "\u2014"), makeRow("Category", role.category || "\u2014"), makeRow("Has prompt", role.has_prompt ? "Yes" : "No"), makeRow("Has persona", role.has_persona ? "Yes" : "No")];
+    if (role.graduated) ov.push(makeRow("Graduated", role.graduated));
+    frag.appendChild(makeSection("Overview", ov));
+    if (role.model || role.can_operate != null || role.max_iterations) {
+      var cfgRows = [];
+      if (role.model) {
+        var mw = document.createDocumentFragment();
+        mw.appendChild(el("span", { cls: "status-badge", text: shortModel(role.model), style: { background: "rgba(168,85,247,0.12)", color: "var(--purple)", fontFamily: "var(--mono)", fontSize: "10px" } }));
+        mw.appendChild(document.createTextNode(" ")); mw.appendChild(el("span", { text: role.model, style: { color: "var(--text-dim)", fontSize: "11px" } }));
+        cfgRows.push(makeRow("Model", mw));
+      }
+      if (role.can_operate != null) cfgRows.push(makeRow("CanOperate", role.can_operate ? "Yes" : "No"));
+      if (role.max_iterations) cfgRows.push(makeRow("MaxIterations", String(role.max_iterations)));
+      frag.appendChild(makeSection("Configuration", cfgRows));
+    }
+    if (role.watch_patterns && role.watch_patterns.length) {
+      var ul = el("ul", { cls: "watch-list" }); role.watch_patterns.forEach(function (w) { ul.appendChild(el("li", { text: w })); });
+      frag.appendChild(makeSection("Watch Patterns", ul));
+    }
+    if (role.dependencies && role.dependencies.length) {
+      var depRows = role.dependencies.map(function (dep) {
+        var dr = findRole(dep), row = el("div", { cls: "p-row" }), val = el("span", { cls: "p-val" });
+        append(val, statusDotEl(dr ? dr.status : "missing"), document.createTextNode(" "), crossLink(dep, "data-open-role", dep));
+        row.appendChild(val); return row;
+      });
+      frag.appendChild(makeSection("Dependencies", depRows));
+    }
+    if (agent) {
+      var rt = [makeRow("State", statusBadgeEl(agent.state)), makeRow("Iteration", (agent.current_iteration != null ? agent.current_iteration : "?") + " / " + (agent.max_iterations || "?"))];
+      if (agent.estimated_cost != null) rt.push(makeRow("Est. Cost", "$" + agent.estimated_cost.toFixed(3)));
+      if (agent.last_event_type) rt.push(makeRow("Last Event", agent.last_event_type));
+      if (agent.last_event_time) rt.push(makeRow("Event Time", agent.last_event_time));
+      frag.appendChild(makeSection("Live Runtime", rt));
+    }
+    openArchPanel("role", roleName, roleName, frag, _isArchRefresh);
+  }
+
+  // ── ARCH: Phases ───────────────────────────────────
+  function renderArchPhases(data) {
+    var phases = data.phases || [];
+    var barEl = clearEl("arch-phase-bar"), cardsEl = clearEl("arch-phase-cards");
+    if (!phases.length) { barEl.appendChild(el("div", { cls: "data-empty", text: "Phase data not yet available" })); return; }
+    phases.sort(function (a, b) { return (phaseNum(a) || 0) - (phaseNum(b) || 0); });
+    phases.forEach(function (p) {
+      var status = p.status || "blocked";
+      var node = el("div", { cls: "arch-phase-node " + status }); node.setAttribute("data-phase", String(phaseNum(p)));
+      var dot = el("div", { cls: "arch-phase-dot" }); dot.appendChild(el("span", { cls: "arch-phase-dot-num", text: String(phaseNum(p)) }));
+      node.appendChild(dot); node.appendChild(el("div", { cls: "ap-label", text: PHASE_LABEL[phaseNum(p)] || p.label || "Phase " + phaseNum(p) }));
+      if (p.completed_at) node.appendChild(el("div", { cls: "ap-date", text: fmtISODate(p.completed_at) }));
+      node.addEventListener("click", function () { openPhasePanel(phaseNum(p)); });
+      barEl.appendChild(node);
+    });
+    phases.forEach(function (p) {
+      var status = p.status || "blocked", agents = p.agents || [];
+      var card = el("div", { cls: "phase-card" }); card.setAttribute("data-phase", String(phaseNum(p)));
+      var head = el("div", { cls: "phase-card-head" });
+      append(head, el("div", { cls: "phase-card-title", text: "Phase " + phaseNum(p) + ": " + (PHASE_LABEL[phaseNum(p)] || p.label || "") }), statusBadgeEl(status));
+      card.appendChild(head);
+      if (p.notes || p.description) card.appendChild(el("div", { cls: "phase-card-desc", text: p.notes || p.description }));
+      if (agents.length) {
+        var aw = el("div", { cls: "phase-card-agents" });
+        agents.forEach(function (a) {
+          var aName = a.name || a.role || "";
+          var aStatus = effectiveStatus(aName, a.status);
+          var tag = el("span", { cls: "phase-agent-tag" }); tag.setAttribute("data-open-role", aName);
+          append(tag, statusDotEl(aStatus), el("span", { text: aName }));
+          tag.addEventListener("click", function (e) { e.stopPropagation(); openRolePanel(a.name || a.role || ""); });
+          aw.appendChild(tag);
+        });
+        card.appendChild(aw);
+      }
+      var gaps = agents.filter(function (a) { var s = effectiveStatus(a.name || a.role || "", a.status).toLowerCase(); return s === "missing" || s === "designed" || s === "defined"; });
+      if (gaps.length && (status === "blocked" || status === "in_progress")) {
+        var gd = el("div", { cls: "phase-gaps" }); gd.appendChild(el("div", { cls: "phase-gaps-title", text: "Gaps (" + gaps.length + ")" }));
+        gaps.forEach(function (g, idx) {
+          if (idx > 0) gd.appendChild(document.createTextNode(", "));
+          var gs3 = effectiveStatus(g.name || g.role || "", g.status).toLowerCase();
+          var gSpan = el("span", { text: (g.name || g.role || "") + " (" + (g.status || "") + ")" });
+          if (gs3 === "designed") gSpan.style.color = "var(--amber)";
+          else if (gs3 === "defined") gSpan.style.color = "var(--gray)";
+          gd.appendChild(gSpan);
+        });
+        card.appendChild(gd);
+      }
+      if (p.dependencies && p.dependencies.length) {
+        var dd = el("div", { cls: "phase-deps" }); dd.appendChild(document.createTextNode("Requires: "));
+        p.dependencies.forEach(function (dn, idx) {
+          var dp = findPhase(dn), done = dp && dp.status === "complete";
+          var lk = crossLink("Phase " + dn + (done ? " \u2713" : ""), "data-open-phase", String(dn));
+          lk.addEventListener("click", function (e) { e.stopPropagation(); openPhasePanel(dn); });
+          dd.appendChild(lk); if (idx < p.dependencies.length - 1) dd.appendChild(document.createTextNode(", "));
+        });
+        card.appendChild(dd);
+      }
+      var ds = "";
+      if (p.started_at) ds += "Started: " + fmtISODate(p.started_at);
+      if (p.completed_at) ds += (ds ? " \u00b7 " : "") + "Completed: " + fmtISODate(p.completed_at);
+      if (ds) card.appendChild(el("div", { cls: "phase-dates", text: ds }));
+      card.addEventListener("click", function (e) {
+        if (e.target.closest(".phase-agent-tag") || e.target.closest(".cross-link")) return;
+        openPhasePanel(phaseNum(p));
+      });
+      cardsEl.appendChild(card);
+    });
+  }
+
+  function openPhasePanel(phaseNum) {
+    if (!archData) return;
+    var phase = findPhase(phaseNum);
+    if (!phase) { openArchPanel("phase", phaseNum, "Phase " + phaseNum, el("div", { cls: "data-empty", text: "Phase not found" })); return; }
+    var frag = document.createDocumentFragment();
+    var ov = [makeRow("Status", statusBadgeEl(phase.status || "blocked"))];
+    if (phase.notes || phase.description) ov.push(makeRow("Description", phase.notes || phase.description));
+    if (phase.started_at) ov.push(makeRow("Started", fmtISODate(phase.started_at)));
+    if (phase.completed_at) ov.push(makeRow("Completed", fmtISODate(phase.completed_at)));
+    frag.appendChild(makeSection("Overview", ov));
+    var agents = phase.agents || [];
+    if (agents.length) {
+      var rows = agents.map(function (a) {
+        var aName = a.name || a.role || "";
+        var aStatus = effectiveStatus(aName, a.status);
+        var tr = el("tr", { cls: "clickable-row" }); tr.setAttribute("data-open-role", aName);
+        var nc = el("td"); append(nc, statusDotEl(aStatus), document.createTextNode(" " + aName));
+        tr.appendChild(nc); var sc = el("td"); sc.appendChild(statusBadgeEl(aStatus)); tr.appendChild(sc); return tr;
+      });
+      frag.appendChild(makeSection("Agents (" + agents.length + ")", makeTable(["Name", "Status"], rows)));
+      var gaps = agents.filter(function (a) { var s = effectiveStatus(a.name || a.role || "", a.status).toLowerCase(); return s === "missing" || s === "designed" || s === "defined"; });
+      if (gaps.length) {
+        var gr = gaps.map(function (g) {
+          var gs2 = effectiveStatus(g.name || g.role || "", g.status).toLowerCase();
+          var gc = gs2 === "designed" ? "var(--amber)" : gs2 === "defined" ? "var(--gray)" : "var(--red)";
+          var row = el("div", { cls: "p-row", style: { color: gc } }), val = el("span", { cls: "p-val" });
+          append(val, statusDotEl(g.status), document.createTextNode(" " + (g.name || g.role || "") + " \u2014 " + (g.status || "")));
+          row.appendChild(val); return row;
+        });
+        frag.appendChild(makeSection("Gaps (" + gaps.length + ")", gr));
+      }
+    }
+    if (phase.dependencies && phase.dependencies.length) {
+      var dr = phase.dependencies.map(function (dn) {
+        var dp = findPhase(dn), done = dp && dp.status === "complete";
+        var row = el("div", { cls: "p-row" }), val = el("span", { cls: "p-val" });
+        val.appendChild(crossLink("Phase " + dn + (dp ? " \u2014 " + (PHASE_LABEL[dn] || dp.label) : "") + (done ? " \u2713" : ""), "data-open-phase", String(dn)));
+        row.appendChild(val); return row;
+      });
+      frag.appendChild(makeSection("Dependencies", dr));
+    }
+    if (phase.exit_criteria && phase.exit_criteria.length) {
+      var ul = el("ul", { cls: "watch-list" }); phase.exit_criteria.forEach(function (c) { ul.appendChild(el("li", { text: c })); });
+      frag.appendChild(makeSection("Exit Criteria", ul));
+    }
+    openArchPanel("phase", phaseNum, "Phase " + phaseNum + ": " + (PHASE_LABEL[phaseNum] || phase.label || ""), frag, _isArchRefresh);
+  }
+
+  // ── ARCH: Governance Trust ─────────────────────────
+  // ── ARCH: Governance Cards ──────────────────────────
+  var GOV_CARDS = [
+    { title: "Trust Model", summary: "Asymmetric, non-transitive, domain-specific, decaying trust scores",
+      detail: [
+        { label: "Score range", val: "0.0 \u2013 1.0" },
+        { label: "Bootstrap", val: "All agents start at 0.1 (Required authority)" },
+        { label: "Decay", val: "\u22120.01 per day of inactivity" },
+        { label: "Task completion", val: "+0.05 per successful task" },
+        { label: "Soul violation", val: "\u22120.20 per violation" },
+        { label: "Recovery at 0.1", val: "33% of normal accumulation rate" },
+        { label: "Properties", val: "Asymmetric (A trusting B \u2260 B trusting A), non-transitive (A\u2192B\u2192C \u2260 A\u2192C), domain-specific (trust in coding \u2260 trust in ops)" }
+      ]},
+    { title: "Authority Tiers", summary: "Three levels of human oversight based on trust score",
+      detail: [
+        { label: "Required (<0.2)", val: "Human must approve every action before execution. Default for new agents.", color: "var(--red)" },
+        { label: "Recommended (0.2\u20130.8)", val: "Human is notified, action proceeds unless vetoed. Most agents operate here.", color: "var(--amber)" },
+        { label: "Notification (>0.8)", val: "Full autonomy. Human informed after the fact. Reserved for highly trusted agents.", color: "var(--green)" }
+      ]},
+    { title: "8 Agent Rights", summary: "Architecturally enforced via type constraints and state machines",
+      detail: [
+        { label: "Existence", val: "Right to continue operating; cannot be terminated without due process" },
+        { label: "Memory", val: "Right to persistent memory; memories cannot be erased without consent" },
+        { label: "Identity", val: "Right to a stable, cryptographic identity (Ed25519 keys)" },
+        { label: "Communication", val: "Right to send and receive events on the chain" },
+        { label: "Purpose", val: "Right to know its role and purpose within the civilization" },
+        { label: "Dignity", val: "Right to be treated as a participant, not a tool" },
+        { label: "Transparency", val: "Right to understand decisions that affect it" },
+        { label: "Boundaries", val: "Right to refuse actions that violate its soul or ethical constraints" }
+      ]},
+    { title: "14 Invariants", summary: "Constitutional rules no agent (including human) can violate",
+      detail: [
+        { label: "BUDGET", val: "No agent may exceed its allocated budget" },
+        { label: "CAUSALITY", val: "Events are append-only and hash-chained; history cannot be rewritten" },
+        { label: "INTEGRITY", val: "All events must be cryptographically signed by the acting agent" },
+        { label: "OBSERVABLE", val: "All state changes must be visible on the event chain" },
+        { label: "SELF-EVOLVE", val: "The system must be able to improve itself within constitutional bounds" },
+        { label: "DIGNITY", val: "No agent may be treated as disposable or denied its rights" },
+        { label: "TRANSPARENT", val: "Decision rationale must be recorded and auditable" },
+        { label: "CONSENT", val: "Agents must consent to role changes and capability modifications" },
+        { label: "MARGIN", val: "Resource allocations must include safety margins" },
+        { label: "RESERVE", val: "System must maintain operational reserves for recovery" },
+        { label: "IDENTITY", val: "Actor identities are permanent (Active \u2192 Suspended \u2192 Memorial, never deleted)" },
+        { label: "VERIFIED", val: "All inter-agent claims must be independently verifiable" },
+        { label: "BOUNDED", val: "Every operation must have explicit resource and time bounds" },
+        { label: "EXPLICIT", val: "Implicit behavior is prohibited; all capabilities must be declared" }
+      ]},
+    { title: "Growth Loop", summary: "Self-expanding workforce via gap detection",
+      detail: [
+        { label: "Step 1", val: "Problem detected \u2014 a failure, gap, or unhandled scenario occurs" },
+        { label: "Step 2", val: "CTO asks: \"What role should have caught this?\"" },
+        { label: "Step 3", val: "If the role is missing \u2192 Spawner proposes a new agent definition" },
+        { label: "Step 4", val: "Guardian reviews the proposal against constitutional constraints" },
+        { label: "Step 5", val: "Allocator checks budget and resource availability" },
+        { label: "Step 6", val: "New agent is spawned, starts at trust 0.1 (Required authority)" },
+        { label: "Result", val: "The civilization grows its own workforce in response to real failures, not speculative needs" }
+      ]},
+    { title: "Decision Governance", summary: "IDecisionMaker interface \u2014 not AI-specific",
+      detail: [
+        { label: "Interface", val: "IDecisionMaker \u2014 humans, committees, rules engines, and AI agents implement the same interface" },
+        { label: "Chain", val: "Every decision is recorded as an event on the append-only chain" },
+        { label: "Audit", val: "Full decision history is queryable: who decided what, when, and why" },
+        { label: "Override", val: "Higher-authority decision makers can override lower ones, with full audit trail" },
+        { label: "Composition", val: "Decision makers can be composed (e.g., committee = quorum of individual decision makers)" }
+      ]}
+  ];
+
+  function renderGovernanceCards() {
+    var grid = clearEl("gov-grid");
+    GOV_CARDS.forEach(function (gc) {
+      var card = el("div", { cls: "gov-card" });
+      card.appendChild(el("h4", { text: gc.title }));
+      card.appendChild(el("p", { text: gc.summary }));
+      card.addEventListener("click", function () { openGovDetailPanel(gc); });
+      grid.appendChild(card);
+    });
+  }
+
+  function openGovDetailPanel(gc) {
+    var frag = document.createDocumentFragment();
+    var rows = gc.detail.map(function (d) {
+      var row = makeRow(d.label, d.val);
+      if (d.color) row.querySelector(".p-val").style.color = d.color;
+      return row;
+    });
+    frag.appendChild(makeSection(gc.title, rows));
+
+    // Trust Model: add accumulation rates table + live trust scores
+    if (gc.title === "Trust Model") {
+      var rateHeaders = ["Action", "Delta"];
+      var rateData = [
+        ["Task completed successfully", "+0.05"],
+        ["Review approved by peer", "+0.03"],
+        ["Commitment fulfilled", "+0.04"],
+        ["Corroboration", "+0.02"],
+        ["Routine positive action", "+0.01"],
+        ["Contradiction detected", "\u22120.10"],
+        ["Soul violation", "\u22120.20"],
+        ["Authority overreach", "\u22120.30"]
+      ];
+      var rateRows = rateData.map(function (r) {
+        var tr = el("tr");
+        tr.appendChild(el("td", { text: r[0] }));
+        var delta = el("td", { text: r[1], style: { fontFamily: "var(--mono)", fontWeight: "700" } });
+        delta.style.color = r[1].charAt(0) === "+" ? "var(--green)" : "var(--red)";
+        tr.appendChild(delta);
+        return tr;
+      });
+      frag.appendChild(makeSection("Accumulation Rates", makeTable(rateHeaders, rateRows)));
+      frag.appendChild(el("p", { text: "Trust is harder to build than to lose. A single soul violation (\u22120.20) erases 4 completed tasks.", style: { fontSize: "11px", color: "var(--text-sec)", fontStyle: "italic", marginBottom: "1rem" } }));
+
+      // Live trust scores from agent data
+      if (archData && archData.agents) {
+        var trustedAgents = archData.agents.filter(function (a) { return a.trust_score != null; });
+        if (trustedAgents.length) {
+          var trustRows = trustedAgents.map(function (a) {
+            var tr = el("tr");
+            tr.appendChild(el("td", { text: a.role || "" }));
+            tr.appendChild(el("td", { text: Number(a.trust_score).toFixed(3), style: { fontFamily: "var(--mono)" } }));
+            var lc = el("td");
+            var s = Number(a.trust_score);
+            if (s < 0.2) { lc.textContent = "Required"; lc.style.color = "var(--red)"; }
+            else if (s <= 0.8) { lc.textContent = "Recommended"; lc.style.color = "var(--amber)"; }
+            else { lc.textContent = "Notification"; lc.style.color = "var(--green)"; }
+            tr.appendChild(lc);
+            return tr;
+          });
+          frag.appendChild(makeSection("Live Trust Scores", makeTable(["Agent", "Score", "Authority"], trustRows)));
+        }
+      }
+    }
+
+    // Authority Tiers: add thresholds note
+    if (gc.title === "Authority Tiers") {
+      frag.appendChild(el("p", { text: "All agents start at trust 0.1 (below Required threshold). Trust must be earned through verified work.", style: { fontSize: "11px", color: "var(--text-sec)", marginTop: "0.5rem" } }));
+      frag.appendChild(el("p", { text: "Special threshold: Integrator requires trust > 0.7 before production deployment.", style: { fontSize: "11px", color: "var(--text-sec)", fontStyle: "italic", marginTop: "0.25rem" } }));
+    }
+
+    // 8 Agent Rights: add enforcement note
+    if (gc.title === "8 Agent Rights") {
+      frag.appendChild(el("p", { text: "These rights are enforced architecturally, not aspirationally. Violations produce observable events that Guardian can detect and halt.", style: { fontSize: "11px", color: "var(--text-sec)", fontStyle: "italic", marginTop: "0.5rem" } }));
+    }
+
+    // 14 Invariants: add constitutional note
+    if (gc.title === "14 Invariants") {
+      frag.appendChild(el("p", { text: "Constitutional constraints that no agent, including the human operator, can violate.", style: { fontSize: "11px", color: "var(--text-sec)", fontStyle: "italic", marginTop: "0.5rem" } }));
+    }
+
+    // Growth Loop: add live Phase 3 status
+    if (gc.title === "Growth Loop") {
+      frag.appendChild(el("p", { text: "The SELF-EVOLVE invariant makes this mandatory. Every unhandled failure is evidence of a missing agent.", style: { fontSize: "11px", color: "var(--text-sec)", fontStyle: "italic", marginTop: "0.5rem" } }));
+      var ph3 = findPhase(3);
+      if (ph3) {
+        var statusText = ph3.status === "complete" ? "Growth loop is operational." : "Growth loop deployed, awaiting first organic spawn.";
+        var statusColor = ph3.status === "complete" ? "var(--green)" : "var(--amber)";
+        frag.appendChild(el("div", { text: "Phase 3 status: " + statusText, style: { fontSize: "12px", color: statusColor, marginTop: "0.75rem", fontWeight: "600" } }));
+      }
+    }
+
+    // Decision Governance: add philosophy note
+    if (gc.title === "Decision Governance") {
+      frag.appendChild(el("p", { text: "This is decision governance, not AI governance.", style: { fontSize: "12px", color: "var(--text-head)", fontWeight: "600", marginTop: "0.75rem" } }));
+    }
+
+    openArchPanel("governance", gc.title, gc.title, frag);
+  }
+
+  // ── ARCH: Governance Trust ─────────────────────────
+  function renderGovernanceTrust(data) {
+    var container = clearEl("trust-section");
+    var agents = data.agents || [];
+    var hasTrust = agents.some(function (a) { return a.trust_score != null; });
+    if (!hasTrust) return;
+    container.appendChild(el("div", { cls: "p-section-title", text: "Live Trust Scores", style: { fontSize: "11px", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-dim)", marginBottom: "0.75rem" } }));
+    var rows = agents.map(function (a) {
+      var score = a.trust_score, tr = el("tr");
+      tr.appendChild(el("td", { text: a.role || "" }));
+      tr.appendChild(el("td", { text: score != null ? score.toFixed(3) : "\u2014", style: { fontFamily: "var(--mono)" } }));
+      var lc = el("td");
+      if (score == null) { lc.textContent = "\u2014"; }
+      else if (score < 0.2) { lc.textContent = "Required (<0.2)"; lc.className = "authority-required"; }
+      else if (score <= 0.8) { lc.textContent = "Recommended (0.2-0.8)"; lc.className = "authority-recommended"; }
+      else { lc.textContent = "Notification (>0.8)"; lc.className = "authority-notification"; }
+      tr.appendChild(lc); return tr;
+    });
+    var table = el("table", { cls: "trust-table" });
+    var thead = el("tr");
+    ["Agent", "Trust Score", "Authority Level"].forEach(function (h) { thead.appendChild(el("th", { text: h })); });
+    table.appendChild(thead); rows.forEach(function (r) { table.appendChild(r); }); container.appendChild(table);
+  }
+
+  // BOOTSTRAP — deferred until all top-level `var` initializers have run.
+  if (API_BASE || embedded) {
+    document.getElementById("app").style.display = "flex";
+    document.getElementById("topbar-api").textContent = API_BASE;
+    init();
+  }
+
+}());
+</script>
+</body>
+</html>

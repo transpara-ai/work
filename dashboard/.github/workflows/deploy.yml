@@ -1,0 +1,22 @@
+name: Deploy telemetry page
+
+on:
+  push:
+    branches: [main]
+    paths: [dashboard.html]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify work-server to refresh telemetry page
+        env:
+          WORK_SERVER_URL: ${{ secrets.WORK_SERVER_URL }}
+          WORK_SERVER_KEY: ${{ secrets.WORK_SERVER_KEY }}
+        run: |
+          curl -sf -X POST \
+            -H "Authorization: Bearer $WORK_SERVER_KEY" \
+            "$WORK_SERVER_URL/telemetry/refresh" \
+            --max-time 10 \
+            --retry 2 \
+            --retry-delay 5
