@@ -563,12 +563,23 @@ func (sv *server) buildStatusSnapshot(ctx context.Context) (map[string]any, erro
 		}
 	}
 
-	phases, err := sv.queryPhases(ctx)
+	// Enriched phases include the per-phase agent roster (from
+	// telemetry_phase_agents) annotated with each role's current status (from
+	// telemetry_role_definitions). The dashboard consumes phases[].agents[] to
+	// render phase-dots without a hardcoded client-side mapping.
+	phases, err := sv.queryEnrichedPhases(ctx)
 	if err != nil && !isMissingTable(err) {
 		return nil, err
 	}
 	if phases == nil {
-		phases = []telPhase{}
+		phases = []telPhaseEnriched{}
+	}
+	if len(phases) > 0 {
+		roles, err := sv.queryRoles(ctx)
+		if err != nil && !isMissingTable(err) {
+			return nil, err
+		}
+		annotatePhaseAgents(phases, roles)
 	}
 
 	events, err := sv.queryEvents(ctx, 50)
