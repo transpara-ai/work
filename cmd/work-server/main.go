@@ -8,8 +8,7 @@
 //	WORK_API_TOKEN            — bearer token for workspace-scoped external API; falls back to WORK_API_KEY if unset
 //	DATABASE_URL              — Postgres DSN (optional; defaults to in-memory)
 //	PORT                      — HTTP port to listen on (optional; defaults to 8080)
-//	TELEMETRY_DASHBOARD_URL   — URL to fetch dashboard HTML from (optional; default: transpara-ai/summary raw GitHub)
-//	TELEMETRY_DASHBOARD_PATH  — path to dashboard.html on disk (optional; highest priority, then cached URL page, then embedded fallback)
+//	TELEMETRY_DASHBOARD_PATH  — path to dashboard.html on disk (optional; overrides the embedded copy for local dev)
 //
 // Endpoints:
 //
@@ -48,13 +47,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/signal"
 	"sort"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -68,6 +65,7 @@ import (
 	"github.com/lovyou-ai/eventgraph/go/pkg/types"
 
 	"github.com/lovyou-ai/work"
+	"github.com/lovyou-ai/work/dashboard"
 )
 
 // dashboardHTML is the read-only monitoring dashboard served at GET /.
@@ -612,11 +610,6 @@ func run() error {
 	if port == "" {
 		port = "8080"
 	}
-	dashboardURL := os.Getenv("TELEMETRY_DASHBOARD_URL")
-	if dashboardURL == "" {
-		dashboardURL = "https://raw.githubusercontent.com/transpara-ai/summary/main/dashboard.html"
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -708,20 +701,13 @@ func run() error {
 	ts := work.NewTaskStore(s, factory, signer)
 
 	srv := &server{
-		ts:           ts,
-		store:        s,
-		humanID:      humanID,
-		apiKey:       apiKey,
-		apiToken:     apiToken,
-		pool:         pool,
-		dashboardURL: dashboardURL,
-		fanout:       newEventFanout(),
-	}
-
-	// Fetch telemetry dashboard from GitHub at startup. Non-fatal — falls
-	// back to TELEMETRY_DASHBOARD_PATH or the embedded HTML if unavailable.
-	if err := srv.fetchTelemetryDashboard(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to fetch telemetry dashboard: %v\n", err)
+		ts:       ts,
+		store:    s,
+		humanID:  humanID,
+		apiKey:   apiKey,
+		apiToken: apiToken,
+		pool:     pool,
+		fanout:   newEventFanout(),
 	}
 
 	// Tail hive's telemetry_event_stream and republish to SSE subscribers.
@@ -766,7 +752,6 @@ func run() error {
 	mux.HandleFunc("GET /telemetry/layers", srv.auth(srv.telemetryLayers))
 	mux.HandleFunc("GET /telemetry/overview", srv.auth(srv.telemetryOverview))
 	mux.HandleFunc("GET /telemetry/", srv.telemetryDashboard)
-	mux.HandleFunc("POST /telemetry/refresh", srv.auth(srv.telemetryRefresh))
 
 	// Workspace-scoped routes — isolated namespace per team, auth via WORK_API_TOKEN.
 	mux.HandleFunc("GET /w/{workspace}", srv.workspaceDashboard)
@@ -799,41 +784,16 @@ type server struct {
 	humanID  types.ActorID
 	apiKey   string
 	apiToken string
-	pool         *pgxpool.Pool // nil when running in-memory; telemetry handlers check this
-	dashboardURL string        // URL to fetch telemetry dashboard HTML from
+	pool     *pgxpool.Pool // nil when running in-memory; telemetry handlers check this
 
 	// fanout broadcasts bus-sourced events to SSE subscribers. A background
 	// goroutine (runEventPoller) tails hive's telemetry_event_stream at 500ms
 	// and republishes each new row on this fanout.
 	fanout *eventFanout
-
-	dashboardMu   sync.RWMutex
-	dashboardPage []byte // cached dashboard.html from GitHub
 }
 
-// fetchTelemetryDashboard fetches the telemetry dashboard HTML from the
-// configured URL and caches it in memory. Safe for concurrent use.
-func (sv *server) fetchTelemetryDashboard() error {
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(sv.dashboardURL)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("github returned %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MB cap
-	if err != nil {
-		return err
-	}
-	sv.dashboardMu.Lock()
-	sv.dashboardPage = body
-	sv.dashboardMu.Unlock()
-	return nil
-}
-
-// telemetryDashboard handles GET /telemetry/ — serves the cached dashboard HTML.
+// telemetryDashboard handles GET /telemetry/ — serves the embedded dashboard HTML.
+// TELEMETRY_DASHBOARD_PATH overrides the embedded copy for local dev (read per request).
 func (sv *server) telemetryDashboard(w http.ResponseWriter, r *http.Request) {
 	// Set a session cookie so the dashboard can poll without an Authorization
 	// header, avoiding Chrome Private-Network-Access preflight blocks.
@@ -847,7 +807,6 @@ func (sv *server) telemetryDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 
-	// Priority: TELEMETRY_DASHBOARD_PATH env var → cached GitHub page → embedded fallback.
 	if path := os.Getenv("TELEMETRY_DASHBOARD_PATH"); path != "" {
 		html, err := os.ReadFile(path)
 		if err != nil {
@@ -857,24 +816,7 @@ func (sv *server) telemetryDashboard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	sv.dashboardMu.RLock()
-	page := sv.dashboardPage
-	sv.dashboardMu.RUnlock()
-	if len(page) > 0 {
-		w.Write(page)
-		return
-	}
-	fmt.Fprint(w, telemetryDashboardHTML)
-}
-
-// telemetryRefresh handles POST /telemetry/refresh — re-fetches the dashboard
-// HTML from GitHub and replaces the cached page.
-func (sv *server) telemetryRefresh(w http.ResponseWriter, r *http.Request) {
-	if err := sv.fetchTelemetryDashboard(); err != nil {
-		writeErr(w, http.StatusBadGateway, "fetch failed: "+err.Error())
-		return
-	}
-	w.WriteHeader(http.StatusOK)
+	w.Write(dashboard.HTML)
 }
 
 // dashboard handles GET / — serves the read-only HTML monitoring dashboard.
