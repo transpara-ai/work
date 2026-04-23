@@ -3037,16 +3037,16 @@ body.panel-open #app { margin-right: var(--panel-width); transition: margin-righ
       tier.appendChild(cw); return tier;
     }
     var stack = el("div", { cls: "repo-stack" });
-    stack.appendChild(repoTier("Product", [{ name: "lovyou-ai-site", loc: "47K LOC \u00b7 Go + Templ", desc: "Web UI, 50 personas, Mind system, OAuth, governance, spaces.", bc: "rgba(59,130,246,0.3)", nc: "var(--blue)" }]));
+    stack.appendChild(repoTier("Product", [{ name: "site", loc: "47K LOC \u00b7 Go + Templ", desc: "Web UI, 50 personas, Mind system, OAuth, governance, spaces.", bc: "rgba(59,130,246,0.3)", nc: "var(--blue)" }]));
     stack.appendChild(el("div", { cls: "repo-arrow", text: "\u2191 HTTP API + Webhooks" }));
-    stack.appendChild(repoTier("Application", [{ name: "lovyou-ai-hive", loc: "22K LOC \u00b7 Go", desc: "Multi-agent runtime, pipeline, 53 prompts, 16 governance docs.", bc: "rgba(245,158,11,0.3)", nc: "var(--amber)" }]));
+    stack.appendChild(repoTier("Application", [{ name: "hive", loc: "22K LOC \u00b7 Go", desc: "Multi-agent runtime, pipeline, 53 prompts, 16 governance docs.", bc: "rgba(245,158,11,0.3)", nc: "var(--amber)" }]));
     stack.appendChild(el("div", { cls: "repo-arrow", text: "\u2191 imports" }));
     stack.appendChild(repoTier("Abstraction", [
       { name: "agent", loc: "862 LOC \u00b7 Go", desc: "Lifecycle, FSM, 13 ops.", bc: "rgba(34,197,94,0.3)", nc: "var(--green)" },
       { name: "work", loc: "3.4K LOC \u00b7 Go \u00b7 39 tests", desc: "Event-sourced task mgmt, 7 event types.", bc: "rgba(34,197,94,0.3)", nc: "var(--green)" }
     ]));
     stack.appendChild(el("div", { cls: "repo-arrow", text: "\u2191 imports" }));
-    stack.appendChild(repoTier("Substrate", [{ name: "lovyou-ai-eventgraph", loc: "270K LOC \u00b7 Go/Rust/Python/TS/.NET", desc: "Append-only hash-chained event store, 201 primitives, 121 event types.", bc: "rgba(239,68,68,0.3)", nc: "var(--red)" }]));
+    stack.appendChild(repoTier("Substrate", [{ name: "eventgraph", loc: "270K LOC \u00b7 Go/Rust/Python/TS/.NET", desc: "Append-only hash-chained event store, 201 primitives, 121 event types.", bc: "rgba(239,68,68,0.3)", nc: "var(--red)" }]));
     c.appendChild(stack);
     c.appendChild(el("div", { cls: "repo-total", text: "Total: 343K LOC, ~86K test LOC, 205 test files. The substrate has zero dependencies \u2014 everything flows upward." }));
   }

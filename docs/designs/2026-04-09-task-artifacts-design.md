@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-09
 **Status:** Draft
-**Scope:** lovyou-ai-work (Layer 1 event model, API, dashboard) + hive runtime integration points
+**Scope:** work (Layer 1 event model, API, dashboard) + hive runtime integration points
 
 ## Problem
 
@@ -282,7 +282,7 @@ Events are stored in the generic `events` table with `content_json`. New event t
 
 ## Build Sequence
 
-All changes are in the `lovyou-ai-work` repo unless noted.
+All changes are in the `work` repo unless noted.
 
 1. **Event types + content structs** (`events.go`) — add the two new types and registration
 2. **Store types** (`store.go`) — add `ArtifactEvent` struct

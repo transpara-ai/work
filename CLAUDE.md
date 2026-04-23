@@ -49,7 +49,7 @@ Tasks can be scoped to a named workspace string. The server exposes `/w/{workspa
 
 ### Telemetry
 
-`cmd/work-server/telemetry.go` queries four Postgres tables written by the `lovyou-ai-hive` process:
+`cmd/work-server/telemetry.go` queries four Postgres tables written by the `hive` process:
 - `telemetry_agent_snapshots` (24h retention)
 - `telemetry_hive_snapshots` (7d retention)
 - `telemetry_event_stream` (1,000-row ring buffer)

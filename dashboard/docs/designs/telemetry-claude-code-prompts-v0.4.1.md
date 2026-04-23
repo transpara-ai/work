@@ -18,7 +18,7 @@
 | 0.3.0 | 2026-04-04 | Post-recon: all corrections and gaps resolved. RegisterAgent pattern, process boundary, exact code paths. |
 | 0.3.1 | 2026-04-04 | Post Prompt 1: marked Prompt 1 COMPLETE. Added Prompt 1.1 (seed fix) — ON CONFLICT DO NOTHING → DO UPDATE SET with COALESCE for timestamps. One-time cleanup SQL for prior-run remnants. |
 | 0.3.2 | 2026-04-04 | Post Prompt 2: marked complete, 5 deviations documented, updated Prompt 3 context. |
-| 0.4.0 | 2026-04-04 | Dashboard moved from lovyou-ai-work to summary. Prompt 4 rewritten for standalone HTML with URL-param config. |
+| 0.4.0 | 2026-04-04 | Dashboard moved from work to summary. Prompt 4 rewritten for standalone HTML with URL-param config. |
 | 0.4.1 | 2026-04-04 | Prompts 3 and 4 COMPLETE. No deviations. Prompt 3: 480-line telemetry.go in work-server, 6 endpoints, nullable pointer types, 42P01 error code check. Prompt 4: 450-line dashboard.html in summary, URL-param config, createElement (no innerHTML), security hook passed. |
 
 ---
@@ -28,8 +28,8 @@
 Feed these to Claude Code **ONE AT A TIME**, in order. Wait for each to
 complete and verify before moving to the next. Do not skip ahead. Do not combine.
 
-**Prompts 1–2 execute in the `lovyou-ai-hive` repo.**
-**Prompt 3 executes in the `lovyou-ai-work` repo.**
+**Prompts 1–2 execute in the `hive` repo.**
+**Prompt 3 executes in the `work` repo.**
 **Prompt 4 executes in the `summary` repo.**
 **Prompt 5 spans all three repos.**
 
@@ -37,8 +37,8 @@ complete and verify before moving to the next. Do not skip ahead. Do not combine
 
 - Design spec `telemetry-mission-control-design-v0.4.1.md` is available (upload or commit)
 - You have all three repos checked out:
-  - `lovyou-ai-hive` — telemetry writer, pruner, types, LastResponse, agent registration (Prompts 1-2, DONE)
-  - `lovyou-ai-work` — telemetry API endpoints (Prompt 3)
+  - `hive` — telemetry writer, pruner, types, LastResponse, agent registration (Prompts 1-2, DONE)
+  - `work` — telemetry API endpoints (Prompt 3)
   - `summary` — mission control dashboard (Prompt 4)
 - hive-postgres is running (`postgres://hive:hive@localhost:5432/hive`)
 
@@ -114,7 +114,7 @@ last known value between verifications.
 
 ## Prompt 3 — Telemetry API (COMPLETE)
 
-**Repo: `lovyou-ai-work`**
+**Repo: `work`**
 
 Committed. Created `cmd/work-server/telemetry.go` (480 lines): 4 response types,
 6 handlers, 3 shared query helpers. Nullable fields as `*float64`/`*string`
@@ -140,7 +140,7 @@ Updated `README.md` with usage documentation.
 
 ## Prompt 5 — Integration, Phase Updates, and Polish (PR 5)
 
-**Repos: `lovyou-ai-work` (primary) + `lovyou-ai-hive` + `summary` (verification)**
+**Repos: `work` (primary) + `hive` + `summary` (verification)**
 
 ```
 Read the telemetry design spec at docs/designs/telemetry-mission-control-design-v0.4.1.md,
@@ -149,7 +149,7 @@ focusing on Sections 8-9.
 This is the integration and polish pass. Prompts 1-4 should be working
 individually. This prompt adds phase updates, verifies end-to-end, and documents.
 
-1. PHASE UPDATE ENDPOINT (in lovyou-ai-work)
+1. PHASE UPDATE ENDPOINT (in work)
 
    Add to cmd/work-server/telemetry.go:
 
@@ -226,7 +226,7 @@ individually. This prompt adds phase updates, verifies end-to-end, and documents
 
 3. DOCUMENTATION
 
-   Add to lovyou-ai-work README (or create docs/telemetry.md):
+   Add to work README (or create docs/telemetry.md):
 
    - What the telemetry system does (one paragraph)
    - Dashboard: in summary — open dashboard.html?api=URL&key=KEY

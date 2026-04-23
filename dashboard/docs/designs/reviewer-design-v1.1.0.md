@@ -701,7 +701,7 @@ implementers excluded from pending review queue.
 
 ## 9. Site Persona File
 
-Location: `lovyou-ai-site/graph/personas/reviewer.md`
+Location: `site/graph/personas/reviewer.md`
 
 ```markdown
 ---
@@ -805,7 +805,7 @@ The enrichment function needs access to the git working directory.
 `knowledge_content.go` pattern (confirmed by knowledge enrichment recon:
 cross-cutting event types go in eventgraph, not hive/events.go).
 
-### New in lovyou-ai-agent
+### New in agent
 
 | Method | Event Type |
 |--------|-----------|

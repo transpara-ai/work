@@ -1,13 +1,13 @@
-module github.com/lovyou-ai/work
+module github.com/transpara-ai/work
 
 go 1.24.2
 
 require (
 	github.com/jackc/pgx/v5 v5.8.0
-	github.com/lovyou-ai/eventgraph/go v0.0.0-20260309152918-5602caa542f2
+	github.com/transpara-ai/eventgraph/go v0.0.0-20260309152918-5602caa542f2
 )
 
-replace github.com/lovyou-ai/eventgraph/go => ../eventgraph/go
+replace github.com/transpara-ai/eventgraph/go => ../eventgraph/go
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect

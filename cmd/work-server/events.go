@@ -30,7 +30,7 @@ type EventFrame struct {
 // Subscribers are identified by an internal id (so we don't leak channels to
 // callers). Each subscriber gets a buffered channel; publishes that would block
 // are dropped silently — telemetry is best-effort, matching the pattern at
-// `lovyou-ai-hive/pkg/telemetry/writer.go:204-237`.
+// `hive/pkg/telemetry/writer.go:204-237`.
 type eventFanout struct {
 	mu     sync.Mutex
 	subs   map[int64]chan EventFrame

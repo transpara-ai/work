@@ -3,7 +3,7 @@
 The telemetry system snapshots live hive state — agent FSM states, iteration counts,
 token costs, hive health metrics, and a recent event stream — to dedicated Postgres
 tables every 10–15 seconds. The work-server exposes this data as a JSON API; a
-standalone dashboard HTML file in `lovyou-ai-summary` polls the API and renders the
+standalone dashboard HTML file in `summary` polls the API and renders the
 mission control view. Postgres is the bridge: the hive writes, the work-server reads,
 the dashboard fetches.
 
@@ -12,7 +12,7 @@ the dashboard fetches.
 ## Architecture
 
 ```
-lovyou-ai-hive               lovyou-ai-work               lovyou-ai-summary
+hive               work               summary
 (cmd/hive)                    (cmd/work-server)            (dashboard.html)
 ┌──────────────────┐          ┌────────────────────┐       ┌──────────────────┐
 │  Hive Runtime    │          │  Work-Server       │       │  Mission Control │
@@ -22,13 +22,13 @@ lovyou-ai-hive               lovyou-ai-work               lovyou-ai-summary
 └──────────────────┘          └────────────────────┘       └──────────────────┘
 ```
 
-**Writer** — `lovyou-ai-hive/pkg/telemetry/writer.go`. Pure Go goroutine, no LLM.
+**Writer** — `hive/pkg/telemetry/writer.go`. Pure Go goroutine, no LLM.
 Runs inside the hive process, writes every `TELEMETRY_INTERVAL` (default 10s).
 
-**API** — `lovyou-ai-work/cmd/work-server`. Reads from the same `DATABASE_URL` pool
+**API** — `work/cmd/work-server`. Reads from the same `DATABASE_URL` pool
 the work-server already uses for task data. No new DB connection.
 
-**Dashboard** — `lovyou-ai-summary/dashboard.html`. Static file, served from
+**Dashboard** — `summary/dashboard.html`. Static file, served from
 nucbuntu or opened directly in a browser. Configured entirely via URL parameters.
 
 ---
@@ -57,14 +57,14 @@ The telemetry writer runs a pruner goroutine alongside the snapshot goroutine:
 
 ## Dashboard
 
-Open `dashboard.html` from the `lovyou-ai-summary` repo in any browser:
+Open `dashboard.html` from the `summary` repo in any browser:
 
 ```
 # Served via any static file server on nucbuntu:
 open http://nucbuntu:PORT/dashboard.html?api=http://nucbuntu:8080&key=$API_KEY
 
 # Or served directly from GitHub Pages:
-open https://transpara-ai.github.io/lovyou-ai-summary/dashboard.html?api=http://nucbuntu:8080&key=$API_KEY
+open https://transpara-ai.github.io/summary/dashboard.html?api=http://nucbuntu:8080&key=$API_KEY
 
 # Or opened as a local file (CORS allows file:// with the work-server's * origin):
 open dashboard.html?api=http://nucbuntu:8080&key=$API_KEY

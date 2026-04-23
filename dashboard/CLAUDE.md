@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Static front-end assets for the Transpara AI hive on nucbuntu. No build step, no framework, no server-side rendering — a single HTML file served by the work-server at `/telemetry/`, or opened directly in a browser with query params.
 
 This is one of three repos in the telemetry system:
-- **lovyou-ai-hive** — telemetry writer (Go, runs in the hive process)
-- **lovyou-ai-work** — telemetry API (Go, runs in the work-server)
+- **hive** — telemetry writer (Go, runs in the hive process)
+- **work** — telemetry API (Go, runs in the work-server)
 - **summary** (this repo) — dashboard and static pages (HTML only)
 
 ## Files

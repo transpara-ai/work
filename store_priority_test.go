@@ -3,7 +3,7 @@ package work_test
 import (
 	"testing"
 
-	"github.com/lovyou-ai/work"
+	"github.com/transpara-ai/work"
 )
 
 func TestTaskStore_Create_DefaultPriority(t *testing.T) {
