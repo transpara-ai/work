@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/lovyou-ai/eventgraph/go/pkg/types"
-	"github.com/lovyou-ai/work"
+	"github.com/transpara-ai/eventgraph/go/pkg/types"
+	"github.com/transpara-ai/work"
 )
 
 func TestTaskStore_AddArtifact(t *testing.T) {

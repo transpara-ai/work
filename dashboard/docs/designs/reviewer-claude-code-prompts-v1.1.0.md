@@ -28,18 +28,18 @@ complete and verify before moving to the next.
 ## Prerequisites
 
 - Design spec `docs/designs/reviewer-design-v1.1.0.md` is committed
-  to `lovyou-ai-hive`
-- You are in the `lovyou-ai-hive` repo root
-- `lovyou-ai-eventgraph` and `lovyou-ai-agent` accessible as siblings
+  to `hive`
+- You are in the `hive` repo root
+- `eventgraph` and `agent` accessible as siblings
 
 ## Cross-Repository Coordination
 
 ```
-Prompt 1:    lovyou-ai-eventgraph + lovyou-ai-agent  (self-contained)
-Prompts 2-7: lovyou-ai-hive
+Prompt 1:    eventgraph + agent  (self-contained)
+Prompts 2-7: hive
 ```
 
-After Prompt 1, run `go mod tidy` in lovyou-ai-hive.
+After Prompt 1, run `go mod tidy` in hive.
 
 ---
 
@@ -123,7 +123,7 @@ STOP AFTER THIS PROMPT. Return findings in structured format.
 This prompt creates the Reviewer's event type and emit method across
 two repositories.
 
-TASK 1: Switch to lovyou-ai-eventgraph.
+TASK 1: Switch to eventgraph.
 
 Create the code.review.submitted event type following the EXACT pattern
 used by knowledge_event_types.go + knowledge_content.go (the most
@@ -174,7 +174,7 @@ Commit: "feat: add code review event type for Reviewer agent
 
 Co-Authored-By: transpara-ai (transpara-ai@transpara.com)"
 
-TASK 2: Switch to lovyou-ai-agent.
+TASK 2: Switch to agent.
 
 Create a single emit method following the EmitKnowledgeInsight pattern
 in knowledge.go:
@@ -208,7 +208,7 @@ Co-Authored-By: transpara-ai (transpara-ai@transpara.com)"
 ## Prompt 2 — Review Command Parsing + Validation + State (hive)
 
 ```
-Switch to lovyou-ai-hive. Run go mod tidy to pick up new eventgraph
+Switch to hive. Run go mod tidy to pick up new eventgraph
 types and agent emit methods.
 
 Read the Reviewer design spec at docs/designs/reviewer-design-v1.1.0.md,
@@ -311,7 +311,7 @@ for format reference.
    - The ## Anti-patterns section
 
 2. Create the site persona file. Check where other personas live
-   (lovyou-ai-site/graph/personas/ or similar). Use exact content
+   (site/graph/personas/ or similar). Use exact content
    from design spec section 9.
 
 3. Read both files back to verify.
@@ -609,7 +609,7 @@ Co-Authored-By: transpara-ai (transpara-ai@transpara.com)"
 ```
 Rebuild the hive binary and restart the service:
 
-cd ~/transpara-ai/repos/lovyou-ai-hive
+cd ~/transpara-ai/repos/hive
 go build -o /home/transpara/bin/hive ./cmd/hive
 systemctl --user restart lovyou-hive.service
 sleep 15

@@ -27,9 +27,9 @@ combine.
 ## Prerequisites
 
 - Design spec `docs/designs/knowledge-enrichment-infrastructure-v1.0.0.md`
-  is committed to `lovyou-ai-hive`
-- You are in the `lovyou-ai-hive` repo root
-- You have access to `lovyou-ai-eventgraph` and `lovyou-ai-agent` as
+  is committed to `hive`
+- You are in the `hive` repo root
+- You have access to `eventgraph` and `agent` as
   sibling directories (or via Go module replace directives)
 
 ## Cross-Repository Coordination
@@ -37,12 +37,12 @@ combine.
 This implementation touches three repositories in sequence:
 
 ```
-Prompt 1:    lovyou-ai-eventgraph  (event types + content structs)
-Prompt 2:    lovyou-ai-agent       (emit methods)
-Prompts 3-9: lovyou-ai-hive        (everything else)
+Prompt 1:    eventgraph  (event types + content structs)
+Prompt 2:    agent       (emit methods)
+Prompts 3-9: hive        (everything else)
 ```
 
-After Prompts 1 and 2, run `go mod tidy` in lovyou-ai-hive to pick up
+After Prompts 1 and 2, run `go mod tidy` in hive to pick up
 the new event types and emit methods.
 
 ## Key Recon Findings (from Prompt 0)
@@ -98,10 +98,10 @@ Key findings summarized above. All 10 recon questions answered.
 
 ---
 
-## Prompt 1 — Event Types + System Actor (lovyou-ai-eventgraph)
+## Prompt 1 — Event Types + System Actor (eventgraph)
 
 ```
-Switch to the lovyou-ai-eventgraph repository.
+Switch to the eventgraph repository.
 
 Read the knowledge enrichment infrastructure design spec at
 [path to spec in hive docs/designs/].
@@ -210,10 +210,10 @@ Co-Authored-By: transpara-ai (transpara-ai@transpara.com)"
 
 ---
 
-## Prompt 2 — Emit Methods (lovyou-ai-agent)
+## Prompt 2 — Emit Methods (agent)
 
 ```
-Switch to the lovyou-ai-agent repository.
+Switch to the agent repository.
 
 Read budget.go for the EmitBudgetAdjusted pattern, and spawn.go for the
 EmitRoleProposed pattern. These are the templates.
@@ -262,10 +262,10 @@ Co-Authored-By: transpara-ai (transpara-ai@transpara.com)"
 
 ---
 
-## Prompt 3 — Knowledge Store: Types and Interface (lovyou-ai-hive)
+## Prompt 3 — Knowledge Store: Types and Interface (hive)
 
 ```
-Switch to the lovyou-ai-hive repository. Run go mod tidy to pick up the
+Switch to the hive repository. Run go mod tidy to pick up the
 new event types and emit methods from Prompts 1 and 2.
 
 Create a new package: pkg/knowledge/
@@ -479,7 +479,7 @@ Co-Authored-By: transpara-ai (transpara-ai@transpara.com)"
 
 ---
 
-## Prompt 5 — System Actor + Chain Replay + Runtime Wiring (lovyou-ai-hive)
+## Prompt 5 — System Actor + Chain Replay + Runtime Wiring (hive)
 
 ```
 This prompt handles three related tasks: creating the system actor,
@@ -1011,7 +1011,7 @@ Co-Authored-By: transpara-ai (transpara-ai@transpara.com)"
 ```
 Rebuild the hive binary and restart the service:
 
-cd ~/transpara-ai/repos/lovyou-ai-hive
+cd ~/transpara-ai/repos/hive
 go build -o /home/transpara/bin/hive ./cmd/hive
 systemctl --user restart lovyou-hive.service
 sleep 15

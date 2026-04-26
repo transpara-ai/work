@@ -16,7 +16,7 @@
 | 0.3.0 | 2026-04-04 | Post-recon (Prompt 0): 5 corrections, 3 gap resolutions. No agent registry — RegisterAgent(). Iterations from BudgetRegistry. LastResponse absent. Event type corrected. Trust nullable. Model at registration. Process boundary clarified. |
 | 0.3.1 | 2026-04-04 | Post Prompt 1: Changed phase seed strategy from ON CONFLICT DO NOTHING to ON CONFLICT DO UPDATE SET. Seed data is authoritative for label/status/notes; manual timestamp updates from graduation ceremonies survive restarts via COALESCE. Added one-time cleanup SQL for prior-run remnants. |
 | 0.3.2 | 2026-04-04 | Post Prompt 2: 5 design deviations. No Loop pointer, Config.TelemetryWriter wiring, chain verify cached 5min, event rate nil, daily cap nil. |
-| 0.4.0 | 2026-04-04 | Dashboard moved from lovyou-ai-work to summary. Process boundary updated to three repos. |
+| 0.4.0 | 2026-04-04 | Dashboard moved from work to summary. Process boundary updated to three repos. |
 | 0.4.1 | 2026-04-04 | Prompts 3 and 4 complete. No deviations from design. |
 
 ---
@@ -27,8 +27,8 @@ A framework-level telemetry writer and live dashboard for the **Transpara AI hiv
 
 The system has three components:
 
-1. **Telemetry writer** — Pure Go, no LLM. Runs inside the **hive process** (`lovyou-ai-hive`). Snapshots agent state, hive health, and recent events to new postgres tables every 10–15 seconds.
-2. **Telemetry API** — HTTP endpoints serving the snapshot data as JSON. Added to the existing **work-server** (`lovyou-ai-work`). Reads from the same hive-postgres the writer writes to.
+1. **Telemetry writer** — Pure Go, no LLM. Runs inside the **hive process** (`hive`). Snapshots agent state, hive health, and recent events to new postgres tables every 10–15 seconds.
+2. **Telemetry API** — HTTP endpoints serving the snapshot data as JSON. Added to the existing **work-server** (`work`). Reads from the same hive-postgres the writer writes to.
 3. **Mission control dashboard** — Standalone HTML file in **summary**. Configurable API endpoint via URL parameters. Polls the telemetry API and renders live state. Served from nucbuntu (file server, GitHub Pages, or opened directly in browser).
 
 ### Process Boundary
@@ -36,7 +36,7 @@ The system has three components:
 The three components live in **three separate repos**:
 
 ```
-lovyou-ai-hive               lovyou-ai-work               summary
+hive               work               summary
 (cmd/hive)                    (cmd/work-server)            (dashboard.html)
 ┌──────────────────┐          ┌────────────────────┐       ┌──────────────────┐
 │  Hive Runtime    │          │  Work-Server       │       │  Mission Control │
@@ -218,7 +218,7 @@ INSERT INTO telemetry_phases (phase, label, status, started_at, completed_at, no
 
 ### Location in Codebase
 
-New package: `lovyou-ai-hive/pkg/telemetry/`
+New package: `hive/pkg/telemetry/`
 
 Files:
 - `writer.go` — Core snapshot writer, event stream recorder, agent registration
@@ -305,7 +305,7 @@ The writer reads from runtime structs. Data sources confirmed by recon:
 
 ### Process Boundary
 
-The telemetry API runs in the **work-server** (`lovyou-ai-work/cmd/work-server/`), a separate process from the hive. It reads from hive-postgres, which is the same database the work-server already uses for task data. No new database connection needed — the existing `DATABASE_URL` / pool serves both task and telemetry queries.
+The telemetry API runs in the **work-server** (`work/cmd/work-server/`), a separate process from the hive. It reads from hive-postgres, which is the same database the work-server already uses for task data. No new database connection needed — the existing `DATABASE_URL` / pool serves both task and telemetry queries.
 
 ### Endpoints
 
@@ -507,7 +507,7 @@ Detailed Claude Code prompts are in the companion document: `telemetry-claude-co
 - Wire writer + pruner startup into hive boot, respecting ctx cancellation
 - Unit tests for snapshot collection, registration, and pruning logic
 
-### Prompt 3: Telemetry API (in lovyou-ai-work)
+### Prompt 3: Telemetry API (in work)
 
 - Add `/telemetry/*` endpoints to `cmd/work-server/main.go`
 - Implement the JSON response shapes from Section 6
@@ -620,12 +620,12 @@ DSN: `postgres://hive:hive@localhost:5432/hive`
 
 | Component | Repo | Needed For | Status |
 |-----------|------|-----------|--------|
-| `telemetry_*` tables in hive-postgres | lovyou-ai-hive | All telemetry storage | **Done (Prompt 1)** — EnsureTables() |
-| `pkg/telemetry/` package | lovyou-ai-hive | Writer, pruner, types | **Done (Prompts 1+2)** |
-| `lastResponse` field on Loop | lovyou-ai-hive | Last-message capture | **Done (Prompt 2)** — field + getter + OnIteration wiring |
-| `RegisterAgent()` call in Runtime | lovyou-ai-hive | Agent registration for telemetry | **Done (Prompt 2)** — via Config.TelemetryWriter |
-| `/telemetry/*` HTTP endpoints | lovyou-ai-work | Dashboard data source | **Done (Prompt 3)** |
-| `POST /telemetry/phases/{phase}` | lovyou-ai-work | Graduation ceremony updates | Prompt 5 |
+| `telemetry_*` tables in hive-postgres | hive | All telemetry storage | **Done (Prompt 1)** — EnsureTables() |
+| `pkg/telemetry/` package | hive | Writer, pruner, types | **Done (Prompts 1+2)** |
+| `lastResponse` field on Loop | hive | Last-message capture | **Done (Prompt 2)** — field + getter + OnIteration wiring |
+| `RegisterAgent()` call in Runtime | hive | Agent registration for telemetry | **Done (Prompt 2)** — via Config.TelemetryWriter |
+| `/telemetry/*` HTTP endpoints | work | Dashboard data source | **Done (Prompt 3)** |
+| `POST /telemetry/phases/{phase}` | work | Graduation ceremony updates | Prompt 5 |
 | Dashboard HTML | summary | The actual UI (standalone, URL-param config) | **Done (Prompt 4)** |
 
 ---
