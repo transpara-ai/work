@@ -3,7 +3,10 @@ package work
 import (
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/transpara-ai/eventgraph/go/pkg/event"
 	"github.com/transpara-ai/eventgraph/go/pkg/store"
@@ -66,6 +69,24 @@ type CommentEvent struct {
 	Body      string
 	AuthorID  types.ActorID
 	Timestamp time.Time
+}
+
+// ChildTask records a direct task dependency edge where Task depends on ParentID.
+// In the Work graph this means Task is a child/subtask of ParentID.
+type ChildTask struct {
+	Task
+	ParentID            types.EventID
+	DependencyEventID   types.EventID
+	DependencyAddedBy   types.ActorID
+	DependencyTimestamp time.Time
+}
+
+// SupersededTask records a duplicate child task that was closed in favor of
+// an earlier canonical child under the same parent.
+type SupersededTask struct {
+	TaskID      types.EventID
+	TaskTitle   string
+	CanonicalID types.EventID
 }
 
 // TaskStore creates and queries tasks as auditable events on the shared graph.
@@ -379,6 +400,141 @@ func (ts *TaskStore) GetDependencies(taskID types.EventID) ([]types.EventID, err
 		}
 	}
 	return deps, nil
+}
+
+// DirectChildren returns tasks that directly depend on parentID, sorted by the
+// dependency event timestamp from oldest to newest. The oldest child is treated
+// as canonical when duplicate child titles are discovered.
+func (ts *TaskStore) DirectChildren(parentID types.EventID) ([]ChildTask, error) {
+	page, err := ts.store.ByType(EventTypeTaskDependencyAdded, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return nil, fmt.Errorf("fetch dependency events: %w", err)
+	}
+	children := make([]ChildTask, 0)
+	seenChildren := make(map[types.EventID]bool)
+	for _, ev := range page.Items() {
+		c, ok := ev.Content().(TaskDependencyContent)
+		if !ok || c.DependsOnID != parentID {
+			continue
+		}
+		if seenChildren[c.TaskID] {
+			continue
+		}
+		seenChildren[c.TaskID] = true
+		created, err := ts.store.Get(c.TaskID)
+		if err != nil {
+			continue
+		}
+		cc, ok := created.Content().(TaskCreatedContent)
+		if !ok {
+			continue
+		}
+		p := cc.Priority
+		if p == "" {
+			p = DefaultPriority
+		}
+		children = append(children, ChildTask{
+			Task: Task{
+				ID:          created.ID(),
+				Title:       cc.Title,
+				Description: cc.Description,
+				CreatedBy:   cc.CreatedBy,
+				Priority:    p,
+				Workspace:   cc.Workspace,
+			},
+			ParentID:            parentID,
+			DependencyEventID:   ev.ID(),
+			DependencyAddedBy:   c.AddedBy,
+			DependencyTimestamp: ev.Timestamp().Value(),
+		})
+	}
+	sort.SliceStable(children, func(i, j int) bool {
+		return children[i].DependencyTimestamp.Before(children[j].DependencyTimestamp)
+	})
+	return children, nil
+}
+
+// HasChildren reports whether taskID has at least one direct child/subtask.
+func (ts *TaskStore) HasChildren(taskID types.EventID) (bool, error) {
+	children, err := ts.DirectChildren(taskID)
+	if err != nil {
+		return false, err
+	}
+	return len(children) > 0, nil
+}
+
+// SupersedeDuplicateDirectChildren closes duplicate direct children of parentID.
+// Duplicates are detected by normalized title under the same parent. The oldest
+// child for each normalized title remains canonical; later open duplicates get
+// an audit comment, an artifact waiver, and a completion event pointing at the
+// canonical task. This preserves referential integrity instead of deleting or
+// rewriting the duplicated chain.
+func (ts *TaskStore) SupersedeDuplicateDirectChildren(
+	parentID types.EventID,
+	source types.ActorID,
+	causes []types.EventID,
+	convID types.ConversationID,
+) ([]SupersededTask, error) {
+	children, err := ts.DirectChildren(parentID)
+	if err != nil {
+		return nil, err
+	}
+	canonicalByTitle := make(map[string]ChildTask)
+	superseded := make([]SupersededTask, 0)
+	for _, child := range children {
+		key := normalizeTaskTitle(child.Title)
+		if key == "" {
+			continue
+		}
+		canonical, exists := canonicalByTitle[key]
+		if !exists {
+			canonicalByTitle[key] = child
+			continue
+		}
+		if canonical.ID == child.ID {
+			continue
+		}
+		status, err := ts.GetStatus(child.ID)
+		if err != nil {
+			return superseded, fmt.Errorf("get duplicate status: %w", err)
+		}
+		if status == StatusCompleted {
+			continue
+		}
+		body := fmt.Sprintf("Superseded duplicate child task. Canonical task: %s (%s). Parent task: %s.", canonical.ID.Value(), canonical.Title, parentID.Value())
+		if err := ts.AddComment(child.ID, body, source, causes, convID); err != nil {
+			return superseded, fmt.Errorf("comment duplicate child: %w", err)
+		}
+		if err := ts.WaiveArtifact(source, child.ID, "Superseded by canonical child task "+canonical.ID.Value(), causes, convID); err != nil {
+			return superseded, fmt.Errorf("waive duplicate child artifact: %w", err)
+		}
+		if err := ts.Complete(source, child.ID, body, causes, convID); err != nil {
+			return superseded, fmt.Errorf("complete duplicate child: %w", err)
+		}
+		superseded = append(superseded, SupersededTask{
+			TaskID:      child.ID,
+			TaskTitle:   child.Title,
+			CanonicalID: canonical.ID,
+		})
+	}
+	return superseded, nil
+}
+
+func normalizeTaskTitle(title string) string {
+	title = strings.ToLower(title)
+	var b strings.Builder
+	lastSpace := true
+	for _, r := range title {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+			lastSpace = false
+		case !lastSpace:
+			b.WriteByte(' ')
+			lastSpace = true
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // IsBlocked returns true if taskID has any declared dependency that is not yet completed
