@@ -8,6 +8,7 @@ import (
 )
 
 func TestLegacyBrowserUIHeadersAndNotice(t *testing.T) {
+	t.Setenv("WORK_LEGACY_BROWSER_UI", "1")
 	sv := &server{apiKey: "test-key", apiToken: "test-token"}
 	cases := []struct {
 		name            string
@@ -56,6 +57,54 @@ func TestLegacyBrowserUIHeadersAndNotice(t *testing.T) {
 	}
 }
 
+func TestLegacyBrowserUIRedirectsToSiteByDefault(t *testing.T) {
+	sv := &server{apiKey: "test-key", apiToken: "test-token"}
+	cases := []struct {
+		name            string
+		req             *http.Request
+		handler         http.HandlerFunc
+		wantReplacement string
+	}{
+		{
+			name:            "root dashboard",
+			req:             httptest.NewRequest(http.MethodGet, "http://nucbuntu:8080/", nil),
+			handler:         sv.dashboard,
+			wantReplacement: "http://nucbuntu:8201/ops/work",
+		},
+		{
+			name:            "telemetry dashboard",
+			req:             httptest.NewRequest(http.MethodGet, "http://nucbuntu:8080/telemetry/", nil),
+			handler:         sv.telemetryDashboard,
+			wantReplacement: "http://nucbuntu:8201/ops/telemetry",
+		},
+		{
+			name:            "workspace dashboard",
+			req:             workspaceDashboardRequest("http://nucbuntu:8080/w/journey-test", "journey-test"),
+			handler:         sv.workspaceDashboard,
+			wantReplacement: "http://nucbuntu:8201/ops/work?workspace=journey-test",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			tc.handler(rec, tc.req)
+			resp := rec.Result()
+			if resp.StatusCode != http.StatusFound {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusFound)
+			}
+			if got := resp.Header.Get("Location"); got != tc.wantReplacement {
+				t.Fatalf("Location = %q, want %q", got, tc.wantReplacement)
+			}
+			if got := resp.Header.Get(legacyUIStatusHeader); got != "disabled" {
+				t.Fatalf("%s = %q, want disabled", legacyUIStatusHeader, got)
+			}
+			if got := resp.Header.Get(legacyUIReplacementHeader); got != tc.wantReplacement {
+				t.Fatalf("%s = %q, want %q", legacyUIReplacementHeader, got, tc.wantReplacement)
+			}
+		})
+	}
+}
+
 func TestAPIRoutesDoNotCarryLegacyUIHeaders(t *testing.T) {
 	sv := &server{}
 	rec := httptest.NewRecorder()
@@ -67,6 +116,22 @@ func TestAPIRoutesDoNotCarryLegacyUIHeaders(t *testing.T) {
 	}
 	if got := resp.Header.Get(legacyUIReplacementHeader); got != "" {
 		t.Fatalf("%s = %q, want empty", legacyUIReplacementHeader, got)
+	}
+}
+
+func TestLegacyBrowserUIEnabled(t *testing.T) {
+	for _, value := range []string{"1", "true", "TRUE", "yes", "on"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("WORK_LEGACY_BROWSER_UI", value)
+			if !legacyBrowserUIEnabled() {
+				t.Fatal("legacyBrowserUIEnabled() = false, want true")
+			}
+		})
+	}
+
+	t.Setenv("WORK_LEGACY_BROWSER_UI", "")
+	if legacyBrowserUIEnabled() {
+		t.Fatal("legacyBrowserUIEnabled() = true, want false")
 	}
 }
 

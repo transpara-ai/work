@@ -806,6 +806,10 @@ type server struct {
 // TELEMETRY_DASHBOARD_PATH overrides the embedded copy for local dev (read per request).
 func (sv *server) telemetryDashboard(w http.ResponseWriter, r *http.Request) {
 	replacement := siteUIURL(r, "/ops/telemetry")
+	if !legacyBrowserUIEnabled() {
+		redirectLegacyBrowserUI(w, r, replacement)
+		return
+	}
 	markLegacyBrowserUI(w, replacement)
 	// Set a session cookie so the dashboard can poll without an Authorization
 	// header, avoiding Chrome Private-Network-Access preflight blocks.
@@ -836,6 +840,10 @@ func (sv *server) telemetryDashboard(w http.ResponseWriter, r *http.Request) {
 // fetch() calls can authenticate against GET /tasks.
 func (sv *server) dashboard(w http.ResponseWriter, r *http.Request) {
 	replacement := siteUIURL(r, "/ops/work")
+	if !legacyBrowserUIEnabled() {
+		redirectLegacyBrowserUI(w, r, replacement)
+		return
+	}
 	markLegacyBrowserUI(w, replacement)
 	html := strings.ReplaceAll(dashboardHTML, "{{API_KEY}}", jsEscapeKey(sv.apiKey))
 	html = injectLegacyUINotice(html, replacement)
@@ -852,6 +860,10 @@ func (sv *server) workspaceDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	replacement := siteUIURL(r, "/ops/work?workspace="+url.QueryEscape(workspace))
+	if !legacyBrowserUIEnabled() {
+		redirectLegacyBrowserUI(w, r, replacement)
+		return
+	}
 	markLegacyBrowserUI(w, replacement)
 	html := strings.ReplaceAll(workspaceDashboardHTML, "{{WORKSPACE}}", jsEscapeKey(workspace))
 	html = strings.ReplaceAll(html, "{{API_TOKEN}}", jsEscapeKey(sv.apiToken))
@@ -863,6 +875,21 @@ func (sv *server) workspaceDashboard(w http.ResponseWriter, r *http.Request) {
 func markLegacyBrowserUI(w http.ResponseWriter, replacement string) {
 	w.Header().Set(legacyUIStatusHeader, "legacy")
 	w.Header().Set(legacyUIReplacementHeader, replacement)
+}
+
+func redirectLegacyBrowserUI(w http.ResponseWriter, r *http.Request, replacement string) {
+	w.Header().Set(legacyUIStatusHeader, "disabled")
+	w.Header().Set(legacyUIReplacementHeader, replacement)
+	http.Redirect(w, r, replacement, http.StatusFound)
+}
+
+func legacyBrowserUIEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("WORK_LEGACY_BROWSER_UI"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func injectLegacyUINotice(page, replacement string) string {

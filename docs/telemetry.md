@@ -43,7 +43,8 @@ nucbuntu or opened directly in a browser. Configured entirely via URL parameters
 |----------------------|---------|---------------------------------------------|
 | `DATABASE_URL`       | —       | Postgres DSN (required for telemetry reads) |
 | `TELEMETRY_INTERVAL` | `10s`   | Writer snapshot frequency (hive process)    |
-| `SITE_UI_BASE_URL`   | derived from request host on port `8201` | Canonical Site UI base URL used in legacy Work UI notices |
+| `SITE_UI_BASE_URL`   | derived from request host on port `8201` | Canonical Site UI base URL used in legacy Work UI notices and redirects |
+| `WORK_LEGACY_BROWSER_UI` | `false` | Set to `1`, `true`, `yes`, or `on` to render the old Work-served browser dashboards for local debugging |
 
 ---
 
@@ -66,7 +67,10 @@ The telemetry writer runs a pruner goroutine alongside the snapshot goroutine:
 The maintained operator dashboard is `site` `/ops/telemetry`.
 
 The legacy standalone dashboard remains available for debug and compatibility.
-Open `dashboard.html` from the `summary` repo in any browser:
+Work-served browser routes redirect to Site by default; set
+`WORK_LEGACY_BROWSER_UI=1` only when you need the old embedded dashboards for
+local debugging. You can also open `dashboard.html` from the `summary` repo in
+any browser:
 
 ```
 # Served via any static file server on nucbuntu:
