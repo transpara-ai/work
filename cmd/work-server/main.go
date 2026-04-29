@@ -8,11 +8,12 @@
 //	WORK_API_TOKEN            — bearer token for workspace-scoped external API; falls back to WORK_API_KEY if unset
 //	DATABASE_URL              — Postgres DSN (optional; defaults to in-memory)
 //	PORT                      — HTTP port to listen on (optional; defaults to 8080)
+//	SITE_UI_BASE_URL          — canonical Site UI base URL for legacy UI notices (optional; derived from request host)
 //	TELEMETRY_DASHBOARD_PATH  — path to dashboard.html on disk (optional; overrides the embedded copy for local dev)
 //
 // Endpoints:
 //
-//	GET  /                                      read-only dashboard (HTML, no auth required)
+//	GET  /                                      legacy read-only dashboard (HTML, no auth required)
 //	POST /tasks                                 create a task
 //	GET  /tasks                                 list tasks (?open=true, ?priority=high, ?assignee=<actor_id>)
 //	GET  /tasks/{id}                            get full task details (title, description, priority, status, assignee, blocked)
@@ -29,7 +30,7 @@
 //
 // Workspace-scoped routes (authenticated via WORK_API_TOKEN):
 //
-//	GET  /w/{workspace}                         workspace task dashboard (HTML, no auth required)
+//	GET  /w/{workspace}                         legacy workspace task dashboard (HTML, no auth required)
 //	POST /w/{workspace}/tasks                   create a task in the workspace
 //	GET  /w/{workspace}/tasks                   list tasks in the workspace
 //	POST /w/{workspace}/tasks/{id}/assign       assign a workspace task
@@ -47,7 +48,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"sort"
@@ -66,6 +70,11 @@ import (
 
 	"github.com/transpara-ai/work"
 	"github.com/transpara-ai/work/dashboard"
+)
+
+const (
+	legacyUIStatusHeader      = "X-Transpara-UI-Status"
+	legacyUIReplacementHeader = "X-Transpara-Replacement-UI"
 )
 
 // dashboardHTML is the read-only monitoring dashboard served at GET /.
@@ -795,6 +804,8 @@ type server struct {
 // telemetryDashboard handles GET /telemetry/ — serves the embedded dashboard HTML.
 // TELEMETRY_DASHBOARD_PATH overrides the embedded copy for local dev (read per request).
 func (sv *server) telemetryDashboard(w http.ResponseWriter, r *http.Request) {
+	replacement := siteUIURL(r, "/ops/telemetry")
+	markLegacyBrowserUI(w, replacement)
 	// Set a session cookie so the dashboard can poll without an Authorization
 	// header, avoiding Chrome Private-Network-Access preflight blocks.
 	http.SetCookie(w, &http.Cookie{
@@ -812,23 +823,26 @@ func (sv *server) telemetryDashboard(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: TELEMETRY_DASHBOARD_PATH=%s: %v\n", path, err)
 		} else {
-			w.Write(html)
+			w.Write([]byte(injectLegacyUINotice(string(html), replacement)))
 			return
 		}
 	}
-	w.Write(dashboard.HTML)
+	w.Write([]byte(injectLegacyUINotice(string(dashboard.HTML), replacement)))
 }
 
-// dashboard handles GET / — serves the read-only HTML monitoring dashboard.
+// dashboard handles GET / — serves the legacy read-only HTML monitoring dashboard.
 // No auth required; the API key is injected into the page so the browser's
 // fetch() calls can authenticate against GET /tasks.
 func (sv *server) dashboard(w http.ResponseWriter, r *http.Request) {
+	replacement := siteUIURL(r, "/ops/work")
+	markLegacyBrowserUI(w, replacement)
 	html := strings.ReplaceAll(dashboardHTML, "{{API_KEY}}", jsEscapeKey(sv.apiKey))
+	html = injectLegacyUINotice(html, replacement)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, html)
 }
 
-// workspaceDashboard handles GET /w/{workspace} — serves the interactive workspace task dashboard.
+// workspaceDashboard handles GET /w/{workspace} — serves the legacy interactive workspace task dashboard.
 // No auth required on the GET; the API token is injected into the page for browser fetch() calls.
 func (sv *server) workspaceDashboard(w http.ResponseWriter, r *http.Request) {
 	workspace := r.PathValue("workspace")
@@ -836,10 +850,62 @@ func (sv *server) workspaceDashboard(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "workspace is required")
 		return
 	}
+	replacement := siteUIURL(r, "/ops/work?workspace="+url.QueryEscape(workspace))
+	markLegacyBrowserUI(w, replacement)
 	html := strings.ReplaceAll(workspaceDashboardHTML, "{{WORKSPACE}}", jsEscapeKey(workspace))
 	html = strings.ReplaceAll(html, "{{API_TOKEN}}", jsEscapeKey(sv.apiToken))
+	html = injectLegacyUINotice(html, replacement)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, html)
+}
+
+func markLegacyBrowserUI(w http.ResponseWriter, replacement string) {
+	w.Header().Set(legacyUIStatusHeader, "legacy")
+	w.Header().Set(legacyUIReplacementHeader, replacement)
+}
+
+func injectLegacyUINotice(page, replacement string) string {
+	notice := legacyUINotice(replacement)
+	if strings.Contains(page, "<body>") {
+		return strings.Replace(page, "<body>", "<body>"+notice, 1)
+	}
+	return notice + page
+}
+
+func legacyUINotice(replacement string) string {
+	escaped := html.EscapeString(replacement)
+	return `<div role="status" style="border:1px solid #f59e0b;background:#451a03;color:#fed7aa;padding:10px 14px;margin:0 0 16px 0;border-radius:6px;font:14px system-ui,-apple-system,sans-serif">Legacy Work browser UI. Canonical operator UI lives in Site: <a style="color:#fde68a;text-decoration:underline" href="` + escaped + `">` + escaped + `</a>.</div>`
+}
+
+func siteUIURL(r *http.Request, path string) string {
+	if base := strings.TrimSpace(os.Getenv("SITE_UI_BASE_URL")); base != "" {
+		u, err := url.Parse(strings.TrimRight(base, "/"))
+		if err == nil {
+			ref, refErr := url.Parse(path)
+			if refErr == nil {
+				return u.ResolveReference(ref).String()
+			}
+			return u.String()
+		}
+	}
+	host := r.Host
+	if host == "" {
+		host = "localhost:8080"
+	}
+	name, _, err := net.SplitHostPort(host)
+	if err != nil {
+		name = host
+	}
+	if name == "" {
+		name = "localhost"
+	}
+	scheme := "http"
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
+		scheme = strings.Split(forwarded, ",")[0]
+	} else if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + name + ":8201" + path
 }
 
 // health handles GET /health — used by Fly.io and load balancers to check liveness.
