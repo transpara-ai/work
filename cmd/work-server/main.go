@@ -748,6 +748,7 @@ func run() error {
 	mux.HandleFunc("GET /telemetry/agents/{role}", srv.auth(srv.telemetryAgentDetail))
 	mux.HandleFunc("GET /telemetry/stream", srv.auth(srv.telemetryStream))
 	mux.HandleFunc("GET /telemetry/phases", srv.auth(srv.telemetryPhases))
+	mux.HandleFunc("GET /telemetry/pipeline/report", srv.auth(srv.telemetryPipelineReport))
 	mux.HandleFunc("POST /telemetry/phases/{phase}", srv.auth(srv.updatePhase))
 	mux.HandleFunc("GET /telemetry/health", srv.auth(srv.telemetryHealth))
 	// SSE endpoints accept Authorization header, ws_key cookie, OR ?key= query

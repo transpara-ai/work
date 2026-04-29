@@ -237,6 +237,59 @@ body {
 .phase-agent-dot.designed { background: var(--amber); }
 .phase-agent-dot.missing { background: var(--red); }
 
+/* Pipeline report (ops) */
+.pipeline-report { display: flex; flex-direction: column; gap: 0.875rem; }
+.pipeline-human-status {
+  background: rgba(59,130,246,0.08); border: 1px solid rgba(59,130,246,0.18);
+  border-radius: var(--radius-sm); padding: 0.625rem 0.75rem;
+  color: var(--text-head); font-size: 13px; line-height: 1.45;
+}
+.pipeline-human-status.blocked {
+  background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.25); color: var(--red);
+}
+.pipeline-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.5rem; }
+.pipeline-kpi {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 0.5rem 0.625rem; min-width: 0;
+}
+.pipeline-kpi-label {
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-dim); margin-bottom: 0.2rem;
+}
+.pipeline-kpi-val {
+  font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--text-head);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pipeline-stage-grid {
+  display: grid; grid-template-columns: repeat(8, minmax(72px, 1fr)); gap: 0.375rem;
+  overflow-x: auto; padding-bottom: 0.125rem;
+}
+.pipeline-stage {
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.45rem 0.5rem;
+  min-height: 50px; background: var(--bg); min-width: 72px;
+}
+.pipeline-stage.complete { border-color: rgba(34,197,94,0.3); background: rgba(34,197,94,0.06); }
+.pipeline-stage.running { border-color: rgba(59,130,246,0.35); background: rgba(59,130,246,0.08); }
+.pipeline-stage.blocked { border-color: rgba(239,68,68,0.35); background: rgba(239,68,68,0.08); }
+.pipeline-stage-name {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pipeline-stage-state { font-size: 10px; color: var(--text-dim); margin-top: 0.25rem; }
+.pipeline-phase-list { display: flex; flex-direction: column; border-top: 1px solid rgba(45,55,72,0.55); }
+.pipeline-phase-row {
+  display: grid; grid-template-columns: 130px 95px minmax(180px, 1fr) 180px 90px;
+  gap: 0.75rem; padding: 0.45rem 0; border-bottom: 1px solid rgba(45,55,72,0.35);
+  font-size: 11px; align-items: baseline;
+}
+.pipeline-phase-row:last-child { border-bottom: none; }
+.pipeline-phase-name, .pipeline-phase-outcome, .pipeline-phase-metric { font-family: var(--mono); }
+.pipeline-phase-name { color: var(--text-head); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pipeline-phase-outcome { color: var(--text-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pipeline-phase-summary { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pipeline-phase-ref { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pipeline-phase-metric { color: var(--text-dim); text-align: right; white-space: nowrap; }
+
 /* Agent grid (ops) */
 .agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.75rem; }
 .agent-card {
@@ -372,6 +425,7 @@ body {
 .evt-work    { background: rgba(34,197,94,0.15);   color: var(--green); }
 .evt-state   { background: rgba(100,116,139,0.15); color: var(--gray); }
 .evt-hive    { background: rgba(168,85,247,0.12);  color: var(--purple); }
+.evt-pipeline { background: rgba(20,184,166,0.12); color: #14b8a6; }
 .evt-default { background: rgba(100,116,139,0.1);  color: var(--text-sec); }
 .event-summary {
   color: var(--text-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
@@ -751,6 +805,9 @@ body.panel-open #app { margin-right: var(--panel-width); transition: margin-righ
   .agent-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
   .hive-grid  { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .gov-grid   { grid-template-columns: 1fr; }
+  .pipeline-stage-grid { grid-template-columns: repeat(4, minmax(72px, 1fr)); }
+  .pipeline-phase-row { grid-template-columns: 110px 1fr; }
+  .pipeline-phase-summary, .pipeline-phase-ref, .pipeline-phase-metric { grid-column: 1 / -1; text-align: left; }
 }
 @media (max-width: 768px) {
   :root { --panel-width: 100vw; }
@@ -826,6 +883,18 @@ body.panel-open #app { margin-right: var(--panel-width); transition: margin-righ
         <div class="section-body">
           <div class="ops-phase-timeline" id="ops-phase-timeline">
             <div class="data-empty">Awaiting telemetry data&hellip;</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head">
+          <span class="ops-section-label">Pipeline Report</span>
+          <span class="section-meta" id="pipeline-meta"></span>
+        </div>
+        <div class="section-body">
+          <div class="pipeline-report" id="pipeline-report">
+            <div class="data-empty">No pipeline cycle reported yet</div>
           </div>
         </div>
       </div>
@@ -1438,6 +1507,20 @@ body.panel-open #app { margin-right: var(--panel-width); transition: margin-righ
 
   function fmtCost(v) { return v == null ? "\u2014" : "$" + Number(v).toFixed(3); }
 
+  function fmtInt(v) {
+    if (v == null) return "\u2014";
+    return Number(v).toLocaleString();
+  }
+
+  function fmtDuration(secs) {
+    if (secs == null) return "\u2014";
+    var n = Number(secs);
+    if (!isFinite(n)) return "\u2014";
+    if (n < 60) return Math.round(n) + "s";
+    if (n < 3600) return Math.round(n / 60) + "m";
+    return (n / 3600).toFixed(1) + "h";
+  }
+
   function fmtDate(iso) {
     if (!iso) return "";
     try { return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); }
@@ -1463,6 +1546,7 @@ body.panel-open #app { margin-right: var(--panel-width); transition: margin-righ
     if (type.indexOf("work.task.")    === 0) return "evt-work";
     if (type.indexOf("agent.state.")  === 0) return "evt-state";
     if (type.indexOf("hive.")         === 0) return "evt-hive";
+    if (type.indexOf("pipeline.")     === 0) return "evt-pipeline";
     return "evt-default";
   }
 
@@ -1502,7 +1586,7 @@ body.panel-open #app { margin-right: var(--panel-width); transition: margin-righ
     CONN.state = "connecting";
     setConnStatus("", "Connecting\u2026");
 
-    var url = sseURL("/telemetry/sse", "hive.*,agent.*,phase.*,site.op.*");
+    var url = sseURL("/telemetry/sse", "hive.*,agent.*,phase.*,pipeline.*,site.op.*");
     var es;
     try {
       es = new EventSource(url, USE_COOKIE_AUTH ? { withCredentials: true } : {});
@@ -1635,6 +1719,8 @@ body.panel-open #app { margin-right: var(--panel-width); transition: margin-righ
     } else if (t.indexOf("phase.") === 0) {
       refreshOps();
       refreshArch();
+    } else if (t.indexOf("pipeline.") === 0) {
+      refreshOps();
     }
   }
 
@@ -1708,10 +1794,13 @@ body.panel-open #app { margin-right: var(--panel-width); transition: margin-righ
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       });
+    var pipelineP = fetch(API_BASE + "/telemetry/pipeline/report", opts)
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .catch(function () { return null; });
 
-    Promise.all([statusP, rolesP])
+    Promise.all([statusP, rolesP, pipelineP])
     .then(function (results) {
-      var data = results[0], roles = results[1];
+      var data = results[0], roles = results[1], pipeline = results[2];
       if (!data) return;
       if (roles) {
         var m = {};
@@ -1732,6 +1821,7 @@ body.panel-open #app { margin-right: var(--panel-width); transition: margin-righ
       lastAgents = data.agents || [];
       lastEvents = data.recent_events || [];
       renderOpsPhases(data.phases || [], lastAgents);
+      renderPipelineReport(pipeline ? pipeline.report : null);
       renderAgents(lastAgents);
       renderHive(data.hive || null, lastAgents);
       renderChainAlert(data.hive || null);
@@ -1966,6 +2056,78 @@ body.panel-open #app { margin-right: var(--panel-width); transition: margin-righ
       item.appendChild(info);
       container.appendChild(item);
     });
+  }
+
+  // ── OPS: Pipeline Report ───────────────────────────
+  function renderPipelineReport(report) {
+    var container = clearEl("pipeline-report");
+    var meta = document.getElementById("pipeline-meta");
+    meta.textContent = "";
+    if (!report) {
+      container.appendChild(el("div", { cls: "data-empty", text: "No instrumented pipeline cycle has reported yet" }));
+      return;
+    }
+
+    var status = (report.status || "unknown").toLowerCase();
+    meta.textContent = report.updated_at ? "updated " + relTime(report.updated_at) : "";
+
+    var human = el("div", { cls: "pipeline-human-status" + (status === "blocked" ? " blocked" : ""), text: report.human_status || "Pipeline status unavailable" });
+    container.appendChild(human);
+
+    var kpis = el("div", { cls: "pipeline-kpis" });
+    function addKpi(label, value, title) {
+      var box = el("div", { cls: "pipeline-kpi" });
+      box.appendChild(el("div", { cls: "pipeline-kpi-label", text: label }));
+      box.appendChild(el("div", { cls: "pipeline-kpi-val", text: value == null || value === "" ? "\u2014" : value, title: title || value }));
+      kpis.appendChild(box);
+    }
+    addKpi("Cycle", report.cycle_id || "\u2014", report.cycle_id || "");
+    addKpi("Status", status);
+    addKpi("Stage", report.current_stage || "\u2014");
+    addKpi("Phase", report.current_phase || "\u2014");
+    addKpi("Duration", fmtDuration(report.duration_secs));
+    addKpi("Cost", fmtCost(report.total_cost_usd));
+    addKpi("Tokens", fmtInt(report.total_tokens || 0));
+    addKpi("I/O Tokens", fmtInt(report.total_input_tokens || 0) + " in / " + fmtInt(report.total_output_tokens || 0) + " out");
+    addKpi("Open Board", fmtInt(report.open_board_items || 0));
+    container.appendChild(kpis);
+
+    var stages = ["intake", "discovery", "design", "emission", "validation", "review", "reporting", "audit"];
+    var seen = {};
+    var phases = Array.isArray(report.phases) ? report.phases : [];
+    phases.forEach(function (p) {
+      var st = (p.workflow_stage || "").toLowerCase();
+      if (!st) return;
+      var outcome = (p.outcome || "").toLowerCase();
+      seen[st] = outcome.indexOf("error") === -1 && outcome.indexOf("escalat") === -1 ? "complete" : "blocked";
+    });
+    var stageGrid = el("div", { cls: "pipeline-stage-grid" });
+    stages.forEach(function (name) {
+      var state = seen[name] || "idle";
+      if (name === (report.current_stage || "").toLowerCase()) {
+        if (status === "blocked") state = "blocked";
+        else if (status === "running") state = "running";
+      }
+      var cell = el("div", { cls: "pipeline-stage " + state });
+      cell.appendChild(el("div", { cls: "pipeline-stage-name", text: name, title: name }));
+      cell.appendChild(el("div", { cls: "pipeline-stage-state", text: state }));
+      stageGrid.appendChild(cell);
+    });
+    container.appendChild(stageGrid);
+
+    if (!phases.length) return;
+    var list = el("div", { cls: "pipeline-phase-list" });
+    phases.slice(-12).forEach(function (p) {
+      var row = el("div", { cls: "pipeline-phase-row" });
+      row.appendChild(el("div", { cls: "pipeline-phase-name", text: p.workflow_stage || p.phase || "\u2014", title: p.phase || "" }));
+      row.appendChild(el("div", { cls: "pipeline-phase-outcome", text: p.outcome || "\u2014", title: p.outcome || "" }));
+      row.appendChild(el("div", { cls: "pipeline-phase-summary", text: p.summary || "\u2014", title: p.summary || "" }));
+      var ref = [p.input_ref, p.output_ref].filter(function (v) { return v; }).join(" -> ");
+      row.appendChild(el("div", { cls: "pipeline-phase-ref", text: ref || "\u2014", title: ref || "" }));
+      row.appendChild(el("div", { cls: "pipeline-phase-metric", text: fmtDuration(p.duration_secs) + " / " + fmtCost(p.cost_usd) }));
+      list.appendChild(row);
+    });
+    container.appendChild(list);
   }
 
   // ── OPS: Agents ────────────────────────────────────
