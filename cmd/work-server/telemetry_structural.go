@@ -10,22 +10,22 @@ import (
 
 // telRole is the JSON shape for a role definition from telemetry_role_definitions.
 type telRole struct {
-	Role          string    `json:"role"`
-	Name          *string   `json:"name"`
-	Tier          *string   `json:"tier"`
-	Purpose       *string   `json:"purpose"`
-	Model         *string   `json:"model"`
-	CanOperate    *bool     `json:"can_operate"`
-	MaxIterations *int      `json:"max_iterations"`
-	WatchPatterns []string  `json:"watch_patterns"`
-	Phase         *int      `json:"phase"`
-	GraduatedAt   *string   `json:"graduated_at"`
-	Status        *string   `json:"status"`
-	HasPrompt     *bool     `json:"has_prompt"`
-	HasPersona    *bool     `json:"has_persona"`
-	Category      *string   `json:"category"`
-	DependsOn     []string  `json:"depends_on"`
-	Origin        *string   `json:"origin"`
+	Role          string     `json:"role"`
+	Name          *string    `json:"name"`
+	Tier          *string    `json:"tier"`
+	Purpose       *string    `json:"purpose"`
+	Model         *string    `json:"model"`
+	CanOperate    *bool      `json:"can_operate"`
+	MaxIterations *int       `json:"max_iterations"`
+	WatchPatterns []string   `json:"watch_patterns"`
+	Phase         *int       `json:"phase"`
+	GraduatedAt   *string    `json:"graduated_at"`
+	Status        *string    `json:"status"`
+	HasPrompt     *bool      `json:"has_prompt"`
+	HasPersona    *bool      `json:"has_persona"`
+	Category      *string    `json:"category"`
+	DependsOn     []string   `json:"depends_on"`
+	Origin        *string    `json:"origin"`
 	UpdatedAt     *time.Time `json:"updated_at"`
 }
 
@@ -48,14 +48,14 @@ type telLayer struct {
 
 // telPhaseEnriched is a phase with agent membership and per-agent status.
 type telPhaseEnriched struct {
-	Phase        int               `json:"phase"`
-	Label        string            `json:"label"`
-	Status       string            `json:"status"`
-	StartedAt    *time.Time        `json:"started_at"`
-	CompletedAt  *time.Time        `json:"completed_at"`
-	Notes        *string           `json:"notes"`
-	ExitCriteria *string           `json:"exit_criteria"`
-	Agents       []telPhaseAgent   `json:"agents"`
+	Phase        int             `json:"phase"`
+	Label        string          `json:"label"`
+	Status       string          `json:"status"`
+	StartedAt    *time.Time      `json:"started_at"`
+	CompletedAt  *time.Time      `json:"completed_at"`
+	Notes        *string         `json:"notes"`
+	ExitCriteria *string         `json:"exit_criteria"`
+	Agents       []telPhaseAgent `json:"agents"`
 }
 
 // telPhaseAgent is an agent within a phase, annotated with its role status.
@@ -475,6 +475,13 @@ func (sv *server) telemetryOverview(w http.ResponseWriter, r *http.Request) {
 		events = []telEvent{}
 	}
 	result["recent_events"] = events
+
+	pipelinePhases, err := sv.queryPipelinePhases(ctx, 100)
+	if err != nil && !isMissingTable(err) {
+		telemetryDBErr(w, err)
+		return
+	}
+	result["pipeline_report"] = buildPipelineReport(pipelinePhases)
 
 	// --- Structural data (new tables, may not exist yet) ---
 

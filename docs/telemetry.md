@@ -56,6 +56,7 @@ The telemetry writer runs a pruner goroutine alongside the snapshot goroutine:
 | `telemetry_agent_snapshots` | 24 hours               |
 | `telemetry_hive_snapshots`  | 7 days                 |
 | `telemetry_event_stream`    | Last 1,000 rows (ring) |
+| `telemetry_pipeline_phases` | Until explicitly pruned |
 | `telemetry_phases`          | Never pruned           |
 
 ---
@@ -92,6 +93,10 @@ All endpoints require `Authorization: Bearer <WORK_API_KEY>`.
 export API_KEY=<your WORK_API_KEY>
 BASE=http://localhost:8080
 ```
+
+For production workflow checks, replace `localhost` with the Linux host that
+runs the hive/work stack, usually `http://nucbuntu:8080`. The Windows machine is
+only the browser/client for UI testing.
 
 ### Full status snapshot
 
@@ -131,6 +136,22 @@ curl -s -H "Authorization: Bearer $API_KEY" $BASE/telemetry/phases | jq .
 ```bash
 curl -s -H "Authorization: Bearer $API_KEY" $BASE/telemetry/health | jq .
 ```
+
+### Pipeline status report
+
+```bash
+curl -s -H "Authorization: Bearer $API_KEY" $BASE/telemetry/pipeline/report | jq .
+```
+
+Returns the latest pipeline cycle as a human-readable status report plus
+structured phase rows. Each row includes:
+
+- `workflow_stage`: `intake`, `discovery`, `design`, `emission`, `validation`, `review`, `reporting`, or `audit`
+- `input_ref` and `output_ref`: stable references to what the phase consumed and emitted
+- `summary`: one-line operator status suitable for dashboards and standups
+- `board_open`, `cost_usd`, `input_tokens`, `output_tokens`, and `revise_count`
+
+`GET /telemetry/overview` also includes this report as `pipeline_report`.
 
 ---
 

@@ -33,15 +33,17 @@ with input fields instead of the live view.
 ### Finding the API URL and key
 
 The work-server runs on nucbuntu. The API URL is `http://nucbuntu:8080`
-(or whichever port is configured). The API key is set via the `API_KEY`
-environment variable in the work-server's Docker Compose configuration.
+(or whichever port is configured). The API key is set via the `WORK_API_KEY`
+environment variable in the work-server configuration.
 
 ### What it shows
 
-Five sections, all on one scrollable page:
+Six sections, all on one scrollable page:
 
 - **Connection indicator** — green pulsing dot when live, gray when stale, red on failure
 - **Expansion phases** — Phase 0–8 timeline with live status (complete / in_progress / blocked)
+- **Pipeline report** — Latest intake, discovery, design, emission, validation, review,
+  reporting, and audit cycle with a human-readable status line and phase handoff refs.
 - **Agent status** — Cards for each running agent (guardian, sysmon, allocator, strategist,
   planner, implementer). Click any card to expand and see the last LLM message.
 - **Hive health** — Active agents, chain length and integrity, event rate, daily cost vs cap
@@ -63,3 +65,7 @@ so cross-origin fetch from any of these origins will work.
 The dashboard polls `GET {api}/telemetry/status` every 10 seconds.
 If the hive is offline, the last known state is preserved with a stale indicator —
 no fake green lights.
+
+Operator clients can also poll `GET {api}/telemetry/pipeline/report` for a compact
+human status line and structured phase rows. Use the nucbuntu work-server URL from
+Windows, for example `http://nucbuntu:8080/telemetry/pipeline/report`.

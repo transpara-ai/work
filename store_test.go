@@ -125,6 +125,77 @@ func TestTaskStore_List(t *testing.T) {
 	}
 }
 
+func TestTaskStore_SupersedeDuplicateDirectChildren(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	parent, err := ts.Create(testActor, "Investigate refinery gaps", "", causes, testConv)
+	if err != nil {
+		t.Fatalf("Create parent: %v", err)
+	}
+	first, err := ts.Create(testActor, "Review current state", "", causes, testConv)
+	if err != nil {
+		t.Fatalf("Create first: %v", err)
+	}
+	second, err := ts.Create(testActor, "Review current state", "", causes, testConv)
+	if err != nil {
+		t.Fatalf("Create second: %v", err)
+	}
+	unique, err := ts.Create(testActor, "Identify KPI gaps", "", causes, testConv)
+	if err != nil {
+		t.Fatalf("Create unique: %v", err)
+	}
+
+	if err := ts.AddDependency(testActor, first.ID, parent.ID, causes, testConv); err != nil {
+		t.Fatalf("AddDependency first: %v", err)
+	}
+	if err := ts.AddDependency(testActor, first.ID, parent.ID, causes, testConv); err != nil {
+		t.Fatalf("AddDependency first duplicate edge: %v", err)
+	}
+	if err := ts.AddDependency(testActor, second.ID, parent.ID, causes, testConv); err != nil {
+		t.Fatalf("AddDependency second: %v", err)
+	}
+	if err := ts.AddDependency(testActor, unique.ID, parent.ID, causes, testConv); err != nil {
+		t.Fatalf("AddDependency unique: %v", err)
+	}
+
+	superseded, err := ts.SupersedeDuplicateDirectChildren(parent.ID, testActor, causes, testConv)
+	if err != nil {
+		t.Fatalf("SupersedeDuplicateDirectChildren: %v", err)
+	}
+	if len(superseded) != 1 {
+		t.Fatalf("superseded len = %d; want 1", len(superseded))
+	}
+	if superseded[0].TaskID != second.ID {
+		t.Errorf("superseded task = %s; want %s", superseded[0].TaskID.Value(), second.ID.Value())
+	}
+	if superseded[0].CanonicalID != first.ID {
+		t.Errorf("canonical task = %s; want %s", superseded[0].CanonicalID.Value(), first.ID.Value())
+	}
+
+	firstStatus, err := ts.GetStatus(first.ID)
+	if err != nil {
+		t.Fatalf("GetStatus first: %v", err)
+	}
+	if firstStatus == work.StatusCompleted {
+		t.Fatal("canonical child should remain open")
+	}
+	secondStatus, err := ts.GetStatus(second.ID)
+	if err != nil {
+		t.Fatalf("GetStatus second: %v", err)
+	}
+	if secondStatus != work.StatusCompleted {
+		t.Fatalf("duplicate child status = %q; want completed", secondStatus)
+	}
+	uniqueStatus, err := ts.GetStatus(unique.ID)
+	if err != nil {
+		t.Fatalf("GetStatus unique: %v", err)
+	}
+	if uniqueStatus == work.StatusCompleted {
+		t.Fatal("unique child should remain open")
+	}
+}
+
 func TestTaskStore_List_RespectsLimit(t *testing.T) {
 	s, causes := setupStore(t)
 	ts := newTaskStore(t, s)
