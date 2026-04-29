@@ -28,7 +28,11 @@ Runs inside the hive process, writes every `TELEMETRY_INTERVAL` (default 10s).
 **API** — `work/cmd/work-server`. Reads from the same `DATABASE_URL` pool
 the work-server already uses for task data. No new DB connection.
 
-**Dashboard** — `summary/dashboard.html`. Static file, served from
+**Canonical UI** — `site` `/ops/telemetry`. The work-server still serves its
+embedded dashboard at `/telemetry/` as a legacy/debug surface, but operator UI
+work should land in `site`.
+
+**Legacy dashboard** — `summary/dashboard.html`. Static file, served from
 nucbuntu or opened directly in a browser. Configured entirely via URL parameters.
 
 ---
@@ -39,6 +43,7 @@ nucbuntu or opened directly in a browser. Configured entirely via URL parameters
 |----------------------|---------|---------------------------------------------|
 | `DATABASE_URL`       | —       | Postgres DSN (required for telemetry reads) |
 | `TELEMETRY_INTERVAL` | `10s`   | Writer snapshot frequency (hive process)    |
+| `SITE_UI_BASE_URL`   | derived from request host on port `8201` | Canonical Site UI base URL used in legacy Work UI notices |
 
 ---
 
@@ -57,6 +62,9 @@ The telemetry writer runs a pruner goroutine alongside the snapshot goroutine:
 
 ## Dashboard
 
+The maintained operator dashboard is `site` `/ops/telemetry`.
+
+The legacy standalone dashboard remains available for debug and compatibility.
 Open `dashboard.html` from the `summary` repo in any browser:
 
 ```
