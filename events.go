@@ -46,6 +46,9 @@ var (
 	EventTypeTaskUnblocked       = types.MustEventType("work.task.unblocked")
 	EventTypeTaskArtifact        = types.MustEventType("work.task.artifact")
 	EventTypeTaskArtifactWaived  = types.MustEventType("work.task.artifact.waived")
+	EventTypePhaseGateDeclared   = types.MustEventType("work.phase.gate.declared")
+	EventTypePhaseGateApproved   = types.MustEventType("work.phase.gate.approved")
+	EventTypePhaseGateRejected   = types.MustEventType("work.phase.gate.rejected")
 )
 
 // allWorkEventTypes returns all work event types for registration.
@@ -54,6 +57,7 @@ func allWorkEventTypes() []types.EventType {
 		EventTypeTaskCreated, EventTypeTaskAssigned, EventTypeTaskCompleted,
 		EventTypeTaskDependencyAdded, EventTypeTaskPrioritySet, EventTypeTaskComment,
 		EventTypeTaskUnblocked, EventTypeTaskArtifact, EventTypeTaskArtifactWaived,
+		EventTypePhaseGateDeclared, EventTypePhaseGateApproved, EventTypePhaseGateRejected,
 	}
 }
 
@@ -165,6 +169,39 @@ type TaskArtifactWaivedContent struct {
 
 func (c TaskArtifactWaivedContent) EventTypeName() string { return "work.task.artifact.waived" }
 
+// PhaseGateDeclaredContent is emitted when a phase needs explicit approval.
+type PhaseGateDeclaredContent struct {
+	workContent
+	Phase      string        `json:"Phase"`
+	Title      string        `json:"Title"`
+	Criteria   []string      `json:"Criteria,omitempty"`
+	DeclaredBy types.ActorID `json:"DeclaredBy"`
+}
+
+func (c PhaseGateDeclaredContent) EventTypeName() string { return "work.phase.gate.declared" }
+
+// PhaseGateApprovedContent records approval for a declared phase gate.
+type PhaseGateApprovedContent struct {
+	workContent
+	GateID     types.EventID `json:"GateID"`
+	Phase      string        `json:"Phase,omitempty"`
+	ApprovedBy types.ActorID `json:"ApprovedBy"`
+	Summary    string        `json:"Summary,omitempty"`
+}
+
+func (c PhaseGateApprovedContent) EventTypeName() string { return "work.phase.gate.approved" }
+
+// PhaseGateRejectedContent records rejection for a declared phase gate.
+type PhaseGateRejectedContent struct {
+	workContent
+	GateID     types.EventID `json:"GateID"`
+	Phase      string        `json:"Phase,omitempty"`
+	RejectedBy types.ActorID `json:"RejectedBy"`
+	Reason     string        `json:"Reason,omitempty"`
+}
+
+func (c PhaseGateRejectedContent) EventTypeName() string { return "work.phase.gate.rejected" }
+
 // RegisterEventTypes registers work content unmarshalers for Postgres
 // deserialization. Call this before querying work events from the store.
 func RegisterEventTypes() {
@@ -177,6 +214,9 @@ func RegisterEventTypes() {
 	event.RegisterContentUnmarshaler("work.task.unblocked", event.Unmarshal[TaskUnblockedContent])
 	event.RegisterContentUnmarshaler("work.task.artifact", event.Unmarshal[TaskArtifactContent])
 	event.RegisterContentUnmarshaler("work.task.artifact.waived", event.Unmarshal[TaskArtifactWaivedContent])
+	event.RegisterContentUnmarshaler("work.phase.gate.declared", event.Unmarshal[PhaseGateDeclaredContent])
+	event.RegisterContentUnmarshaler("work.phase.gate.approved", event.Unmarshal[PhaseGateApprovedContent])
+	event.RegisterContentUnmarshaler("work.phase.gate.rejected", event.Unmarshal[PhaseGateRejectedContent])
 }
 
 // RegisterWithRegistry registers all work event types with the given registry
