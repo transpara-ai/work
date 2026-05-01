@@ -708,15 +708,17 @@ func run() error {
 	signer := deriveSignerFromID(humanID)
 
 	ts := work.NewTaskStore(s, factory, signer)
+	phaseGates := work.NewPhaseGateStore(s, factory, signer)
 
 	srv := &server{
-		ts:       ts,
-		store:    s,
-		humanID:  humanID,
-		apiKey:   apiKey,
-		apiToken: apiToken,
-		pool:     pool,
-		fanout:   newEventFanout(),
+		ts:         ts,
+		phaseGates: phaseGates,
+		store:      s,
+		humanID:    humanID,
+		apiKey:     apiKey,
+		apiToken:   apiToken,
+		pool:       pool,
+		fanout:     newEventFanout(),
 	}
 
 	// Tail hive's telemetry_event_stream and republish to SSE subscribers.
@@ -740,6 +742,10 @@ func run() error {
 	mux.HandleFunc("POST /tasks/{id}/artifacts", srv.auth(srv.addArtifact))
 	mux.HandleFunc("GET /tasks/{id}/artifacts", srv.auth(srv.listArtifacts))
 	mux.HandleFunc("POST /tasks/{id}/waive-artifact", srv.auth(srv.waiveArtifact))
+	mux.HandleFunc("POST /phase-gates", srv.auth(srv.declarePhaseGate))
+	mux.HandleFunc("GET /phase-gates", srv.auth(srv.listPhaseGates))
+	mux.HandleFunc("POST /phase-gates/{id}/approve", srv.auth(srv.approvePhaseGate))
+	mux.HandleFunc("POST /phase-gates/{id}/reject", srv.auth(srv.rejectPhaseGate))
 
 	// Telemetry routes — reads from hive-postgres via the shared pool.
 	mux.HandleFunc("GET /telemetry/status", srv.auth(srv.telemetryStatus))
@@ -789,12 +795,13 @@ func run() error {
 
 // server holds shared dependencies for HTTP handlers.
 type server struct {
-	ts       *work.TaskStore
-	store    store.Store
-	humanID  types.ActorID
-	apiKey   string
-	apiToken string
-	pool     *pgxpool.Pool // nil when running in-memory; telemetry handlers check this
+	ts         *work.TaskStore
+	phaseGates *work.PhaseGateStore
+	store      store.Store
+	humanID    types.ActorID
+	apiKey     string
+	apiToken   string
+	pool       *pgxpool.Pool // nil when running in-memory; telemetry handlers check this
 
 	// fanout broadcasts bus-sourced events to SSE subscribers. A background
 	// goroutine (runEventPoller) tails hive's telemetry_event_stream at 500ms
@@ -1108,6 +1115,124 @@ func (sv *server) listTasks(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": items})
+}
+
+func (sv *server) declarePhaseGate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Phase    string   `json:"phase"`
+		Title    string   `json:"title"`
+		Criteria []string `json:"criteria"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	causes, err := sv.currentCauses()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "get causes: "+err.Error())
+		return
+	}
+	convID, err := newConversationID()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "conversation id: "+err.Error())
+		return
+	}
+	gate, err := sv.phaseGates.Declare(sv.humanID, body.Phase, body.Title, body.Criteria, causes, convID)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "declare phase gate: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, phaseGateResponse(gate))
+}
+
+func (sv *server) listPhaseGates(w http.ResponseWriter, r *http.Request) {
+	gates, err := sv.phaseGates.List(100)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "list phase gates: "+err.Error())
+		return
+	}
+	items := make([]map[string]any, 0, len(gates))
+	for _, gate := range gates {
+		items = append(items, phaseGateResponse(gate))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"gates": items})
+}
+
+func (sv *server) approvePhaseGate(w http.ResponseWriter, r *http.Request) {
+	gateID, ok := parsePhaseGateID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Summary string `json:"summary"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	causes, err := sv.currentCauses()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "get causes: "+err.Error())
+		return
+	}
+	convID, err := newConversationID()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "conversation id: "+err.Error())
+		return
+	}
+	if err := sv.phaseGates.Approve(sv.humanID, gateID, body.Summary, causes, convID); err != nil {
+		writeErr(w, http.StatusBadRequest, "approve phase gate: "+err.Error())
+		return
+	}
+	gate, _, _ := sv.phaseGates.Get(gateID)
+	writeJSON(w, http.StatusOK, phaseGateResponse(gate))
+}
+
+func (sv *server) rejectPhaseGate(w http.ResponseWriter, r *http.Request) {
+	gateID, ok := parsePhaseGateID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	causes, err := sv.currentCauses()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "get causes: "+err.Error())
+		return
+	}
+	convID, err := newConversationID()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "conversation id: "+err.Error())
+		return
+	}
+	if err := sv.phaseGates.Reject(sv.humanID, gateID, body.Reason, causes, convID); err != nil {
+		writeErr(w, http.StatusBadRequest, "reject phase gate: "+err.Error())
+		return
+	}
+	gate, _, _ := sv.phaseGates.Get(gateID)
+	writeJSON(w, http.StatusOK, phaseGateResponse(gate))
+}
+
+func phaseGateResponse(gate work.PhaseGateState) map[string]any {
+	return map[string]any{
+		"id":          gate.ID.Value(),
+		"phase":       gate.Phase,
+		"title":       gate.Title,
+		"criteria":    gate.Criteria,
+		"status":      string(gate.Status),
+		"declared_by": gate.DeclaredBy.Value(),
+		"approved_by": gate.ApprovedBy.Value(),
+		"rejected_by": gate.RejectedBy.Value(),
+		"summary":     gate.Summary,
+		"reason":      gate.Reason,
+		"declared_at": gate.DeclaredAt.Format(time.RFC3339Nano),
+		"updated_at":  gate.UpdatedAt.Format(time.RFC3339Nano),
+	}
 }
 
 // getTaskStatus handles GET /tasks/{id}/status
@@ -1684,6 +1809,20 @@ func parseTaskID(w http.ResponseWriter, r *http.Request) (types.EventID, bool) {
 		return types.EventID{}, false
 	}
 	return taskID, true
+}
+
+func parsePhaseGateID(w http.ResponseWriter, r *http.Request) (types.EventID, bool) {
+	idStr := r.PathValue("id")
+	if idStr == "" {
+		writeErr(w, http.StatusBadRequest, "phase gate id is required")
+		return types.EventID{}, false
+	}
+	gateID, err := types.NewEventID(idStr)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid phase gate id: "+err.Error())
+		return types.EventID{}, false
+	}
+	return gateID, true
 }
 
 // writeJSON writes a JSON response with the given status code.
