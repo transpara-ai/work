@@ -20,7 +20,20 @@ const (
 
 	// DefaultPriority is the priority assigned when none is specified at creation.
 	DefaultPriority = PriorityMedium
+
+	// GateDefinitionOfDone is the task artifact label for the concrete completion contract.
+	GateDefinitionOfDone = "definition_of_done"
+	// GateAcceptanceCriteria is the task artifact label for user-visible pass/fail criteria.
+	GateAcceptanceCriteria = "acceptance_criteria"
+	// GateTestPlan is the task artifact label for executable verification steps.
+	GateTestPlan = "test_plan"
 )
+
+// RequiredReadinessGateLabels returns the artifact labels that must exist before
+// implementation work can be assigned. The returned slice is safe to mutate.
+func RequiredReadinessGateLabels() []string {
+	return []string{GateDefinitionOfDone, GateAcceptanceCriteria, GateTestPlan}
+}
 
 // Work Graph event types — Layer 1 of the thirteen-product roadmap.
 var (

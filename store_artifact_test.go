@@ -141,6 +141,86 @@ func TestTaskStore_ListArtifacts_FiltersByTask(t *testing.T) {
 	}
 }
 
+func TestTaskStore_Readiness_MissingRequiredGates(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	task, err := ts.Create(testActor, "Implement feature", "", causes, testConv)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := ts.Readiness(task.ID)
+	if err != nil {
+		t.Fatalf("Readiness: %v", err)
+	}
+	if got.Ready {
+		t.Fatal("Ready = true; want false")
+	}
+	want := work.RequiredReadinessGateLabels()
+	if len(got.MissingGates) != len(want) {
+		t.Fatalf("MissingGates = %#v; want %#v", got.MissingGates, want)
+	}
+	for i := range want {
+		if got.MissingGates[i] != want[i] {
+			t.Fatalf("MissingGates = %#v; want %#v", got.MissingGates, want)
+		}
+	}
+}
+
+func TestTaskStore_Readiness_ReadyWithRequiredGateArtifacts(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	task, err := ts.Create(testActor, "Implement feature", "", causes, testConv)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	for _, label := range work.RequiredReadinessGateLabels() {
+		if err := ts.AddArtifact(testActor, task.ID, label, "text/markdown", "gate body", causes, testConv); err != nil {
+			t.Fatalf("AddArtifact %s: %v", label, err)
+		}
+	}
+
+	got, err := ts.Readiness(task.ID)
+	if err != nil {
+		t.Fatalf("Readiness: %v", err)
+	}
+	if !got.Ready {
+		t.Fatalf("Ready = false; missing %#v", got.MissingGates)
+	}
+	if len(got.PresentGates) != len(work.RequiredReadinessGateLabels()) {
+		t.Fatalf("PresentGates = %#v", got.PresentGates)
+	}
+}
+
+func TestTaskStore_ListSummariesIncludesReadiness(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	task, err := ts.Create(testActor, "Ready task", "", causes, testConv)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for _, label := range work.RequiredReadinessGateLabels() {
+		if err := ts.AddArtifact(testActor, task.ID, label, "text/markdown", "gate body", causes, testConv); err != nil {
+			t.Fatalf("AddArtifact %s: %v", label, err)
+		}
+	}
+
+	summaries, err := ts.ListSummaries(10)
+	if err != nil {
+		t.Fatalf("ListSummaries: %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("len(summaries) = %d; want 1", len(summaries))
+	}
+	if !summaries[0].Ready {
+		t.Fatalf("summary Ready = false; missing %#v", summaries[0].MissingGates)
+	}
+}
+
 func TestTaskStore_WaiveArtifact(t *testing.T) {
 	s, causes := setupStore(t)
 	ts := newTaskStore(t, s)
