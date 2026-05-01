@@ -1103,6 +1103,8 @@ func (sv *server) listTasks(w http.ResponseWriter, r *http.Request) {
 			"blocked":        s.Blocked,
 			"artifact_count": s.ArtifactCount,
 			"waived":         s.Waived,
+			"ready":          s.Ready,
+			"missing_gates":  s.MissingGates,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": items})
@@ -1472,6 +1474,11 @@ func (sv *server) getTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "check waiver: "+err.Error())
 		return
 	}
+	readiness, err := sv.ts.Readiness(taskID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "check readiness: "+err.Error())
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":             taskID.Value(),
@@ -1484,6 +1491,8 @@ func (sv *server) getTask(w http.ResponseWriter, r *http.Request) {
 		"blocked":        blocked,
 		"artifact_count": len(artifacts),
 		"waived":         hasWaiver,
+		"ready":          readiness.Ready,
+		"missing_gates":  readiness.MissingGates,
 	})
 }
 
@@ -1641,6 +1650,8 @@ func (sv *server) listWorkspaceTasks(w http.ResponseWriter, r *http.Request) {
 			"blocked":        s.Blocked,
 			"artifact_count": s.ArtifactCount,
 			"waived":         s.Waived,
+			"ready":          s.Ready,
+			"missing_gates":  s.MissingGates,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"workspace": workspace, "tasks": items})

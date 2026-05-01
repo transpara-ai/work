@@ -49,6 +49,8 @@ type TaskSummary struct {
 	Blocked       bool
 	ArtifactCount int
 	Waived        bool
+	Ready         bool
+	MissingGates  []string
 }
 
 // ArtifactEvent holds the data from a work.task.artifact event.
@@ -87,6 +89,14 @@ type SupersededTask struct {
 	TaskID      types.EventID
 	TaskTitle   string
 	CanonicalID types.EventID
+}
+
+// TaskReadiness is the replayed readiness gate state for a task.
+type TaskReadiness struct {
+	TaskID       types.EventID
+	Ready        bool
+	PresentGates []string
+	MissingGates []string
 }
 
 // TaskStore creates and queries tasks as auditable events on the shared graph.
@@ -815,15 +825,23 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 		}
 	}
 
-	// Scan 5: artifact events → count per task.
+	// Scan 5: artifact events → count and readiness labels per task.
 	artifactPage, err := ts.store.ByType(EventTypeTaskArtifact, 1000, types.None[types.Cursor]())
 	if err != nil {
 		return nil, fmt.Errorf("fetch artifact events: %w", err)
 	}
 	artifactCount := make(map[types.EventID]int)
+	gatesByTask := make(map[types.EventID]map[string]bool)
 	for _, ev := range artifactPage.Items() {
 		if c, ok := ev.Content().(TaskArtifactContent); ok {
 			artifactCount[c.TaskID]++
+			label := normalizeGateLabel(c.Label)
+			if isRequiredGateLabel(label) {
+				if gatesByTask[c.TaskID] == nil {
+					gatesByTask[c.TaskID] = make(map[string]bool)
+				}
+				gatesByTask[c.TaskID][label] = true
+			}
 		}
 	}
 
@@ -847,6 +865,7 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 		} else if _, assigned := assigneeMap[t.ID]; assigned {
 			status = StatusAssigned
 		}
+		missing := missingRequiredGates(gatesByTask[t.ID])
 		summaries = append(summaries, TaskSummary{
 			Task:          t,
 			Status:        status,
@@ -854,6 +873,8 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 			Blocked:       blockedMap[t.ID] && !unblockedMap[t.ID],
 			ArtifactCount: artifactCount[t.ID],
 			Waived:        waivedMap[t.ID],
+			Ready:         len(missing) == 0,
+			MissingGates:  missing,
 		})
 	}
 	return summaries, nil
@@ -999,6 +1020,70 @@ func (ts *TaskStore) ListArtifacts(taskID types.EventID) ([]ArtifactEvent, error
 		})
 	}
 	return artifacts, nil
+}
+
+// Readiness reconstructs whether a task has the required implementation gates.
+// Gates are represented as task artifacts with labels from RequiredReadinessGateLabels.
+func (ts *TaskStore) Readiness(taskID types.EventID) (TaskReadiness, error) {
+	page, err := ts.store.ByType(EventTypeTaskArtifact, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return TaskReadiness{}, fmt.Errorf("fetch artifact events: %w", err)
+	}
+	present := make(map[string]bool)
+	for _, ev := range page.Items() {
+		c, ok := ev.Content().(TaskArtifactContent)
+		if !ok || c.TaskID != taskID {
+			continue
+		}
+		label := normalizeGateLabel(c.Label)
+		if isRequiredGateLabel(label) {
+			present[label] = true
+		}
+	}
+	missing := missingRequiredGates(present)
+	out := TaskReadiness{
+		TaskID:       taskID,
+		Ready:        len(missing) == 0,
+		PresentGates: presentRequiredGates(present),
+		MissingGates: missing,
+	}
+	return out, nil
+}
+
+func normalizeGateLabel(label string) string {
+	label = strings.ToLower(strings.TrimSpace(label))
+	label = strings.ReplaceAll(label, "-", "_")
+	label = strings.ReplaceAll(label, " ", "_")
+	return label
+}
+
+func isRequiredGateLabel(label string) bool {
+	for _, required := range RequiredReadinessGateLabels() {
+		if label == required {
+			return true
+		}
+	}
+	return false
+}
+
+func missingRequiredGates(present map[string]bool) []string {
+	missing := make([]string, 0)
+	for _, required := range RequiredReadinessGateLabels() {
+		if !present[required] {
+			missing = append(missing, required)
+		}
+	}
+	return missing
+}
+
+func presentRequiredGates(present map[string]bool) []string {
+	out := make([]string, 0)
+	for _, required := range RequiredReadinessGateLabels() {
+		if present[required] {
+			out = append(out, required)
+		}
+	}
+	return out
 }
 
 // GetArtifactBody returns the body of a work.task.artifact event by its event ID.
