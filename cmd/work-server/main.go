@@ -27,6 +27,7 @@
 //	POST /tasks/{id}/artifacts                  attach an artifact (body: {"label":"...", "media_type":"...", "body":"..."})
 //	GET  /tasks/{id}/artifacts                  list artifacts for a task
 //	POST /tasks/{id}/waive-artifact             waive the artifact requirement (body: {"reason":"..."})
+//	POST /tasks/{id}/fact-requirements          require a Phase 3 EventGraph fact for readiness
 //
 // Workspace-scoped routes (authenticated via WORK_API_TOKEN):
 //
@@ -39,6 +40,7 @@
 //	POST /w/{workspace}/tasks/{id}/artifacts    attach an artifact to a workspace task
 //	GET  /w/{workspace}/tasks/{id}/artifacts    list artifacts for a workspace task
 //	POST /w/{workspace}/tasks/{id}/waive-artifact  waive artifact requirement for a workspace task
+//	POST /w/{workspace}/tasks/{id}/fact-requirements  require a Phase 3 EventGraph fact for readiness
 package main
 
 import (
@@ -742,6 +744,7 @@ func run() error {
 	mux.HandleFunc("POST /tasks/{id}/artifacts", srv.auth(srv.addArtifact))
 	mux.HandleFunc("GET /tasks/{id}/artifacts", srv.auth(srv.listArtifacts))
 	mux.HandleFunc("POST /tasks/{id}/waive-artifact", srv.auth(srv.waiveArtifact))
+	mux.HandleFunc("POST /tasks/{id}/fact-requirements", srv.auth(srv.addFactRequirement))
 	mux.HandleFunc("POST /phase-gates", srv.auth(srv.declarePhaseGate))
 	mux.HandleFunc("GET /phase-gates", srv.auth(srv.listPhaseGates))
 	mux.HandleFunc("POST /phase-gates/{id}/approve", srv.auth(srv.approvePhaseGate))
@@ -779,6 +782,7 @@ func run() error {
 	mux.HandleFunc("POST /w/{workspace}/tasks/{id}/artifacts", srv.tokenAuth(srv.addArtifact))
 	mux.HandleFunc("GET /w/{workspace}/tasks/{id}/artifacts", srv.tokenAuth(srv.listArtifacts))
 	mux.HandleFunc("POST /w/{workspace}/tasks/{id}/waive-artifact", srv.tokenAuth(srv.waiveArtifact))
+	mux.HandleFunc("POST /w/{workspace}/tasks/{id}/fact-requirements", srv.tokenAuth(srv.addFactRequirement))
 
 	addr := ":" + port
 	fmt.Fprintf(os.Stderr, "work-server listening on %s\n", addr)
@@ -1112,6 +1116,7 @@ func (sv *server) listTasks(w http.ResponseWriter, r *http.Request) {
 			"waived":         s.Waived,
 			"ready":          s.Ready,
 			"missing_gates":  s.MissingGates,
+			"missing_facts":  s.MissingFacts,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": items})
@@ -1540,6 +1545,57 @@ func (sv *server) waiveArtifact(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// addFactRequirement handles POST /tasks/{id}/fact-requirements.
+// Body: {"event_type":"authority.decision.recorded", "event_id":"optional-uuid-v7", "reason":"..."}
+func (sv *server) addFactRequirement(w http.ResponseWriter, r *http.Request) {
+	taskID, ok := parseTaskID(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		EventType string `json:"event_type"`
+		EventID   string `json:"event_id"`
+		Reason    string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	requiredType, err := types.NewEventType(body.EventType)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid event_type: "+err.Error())
+		return
+	}
+	var requiredID types.EventID
+	if body.EventID != "" {
+		requiredID, err = types.NewEventID(body.EventID)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid event_id: "+err.Error())
+			return
+		}
+	}
+	causes, err := sv.currentCauses()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "get causes: "+err.Error())
+		return
+	}
+	convID, err := newConversationID()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "conversation id: "+err.Error())
+		return
+	}
+	if err := sv.ts.AddFactRequirement(sv.humanID, taskID, requiredType, requiredID, body.Reason, causes, convID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "add fact requirement: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"task_id":    taskID.Value(),
+		"event_type": requiredType.Value(),
+		"event_id":   requiredID.Value(),
+		"status":     "required",
+	})
+}
+
 // getTask handles GET /tasks/{id}
 // Returns full task details: title, description, priority, status, assignee, blocked.
 func (sv *server) getTask(w http.ResponseWriter, r *http.Request) {
@@ -1618,6 +1674,8 @@ func (sv *server) getTask(w http.ResponseWriter, r *http.Request) {
 		"waived":         hasWaiver,
 		"ready":          readiness.Ready,
 		"missing_gates":  readiness.MissingGates,
+		"present_facts":  readiness.PresentFacts,
+		"missing_facts":  readiness.MissingFacts,
 	})
 }
 
@@ -1648,6 +1706,7 @@ func (sv *server) getTaskEvents(w http.ResponseWriter, r *http.Request) {
 		work.EventTypeTaskUnblocked,
 		work.EventTypeTaskArtifact,
 		work.EventTypeTaskArtifactWaived,
+		work.EventTypeTaskFactRequired,
 	} {
 		page, err := sv.store.ByType(et, 1000, types.None[types.Cursor]())
 		if err != nil {
@@ -1696,6 +1755,8 @@ func taskIDFromContent(content any) types.EventID {
 	case work.TaskArtifactContent:
 		return c.TaskID
 	case work.TaskArtifactWaivedContent:
+		return c.TaskID
+	case work.TaskFactRequiredContent:
 		return c.TaskID
 	}
 	return types.EventID{}
@@ -1777,6 +1838,7 @@ func (sv *server) listWorkspaceTasks(w http.ResponseWriter, r *http.Request) {
 			"waived":         s.Waived,
 			"ready":          s.Ready,
 			"missing_gates":  s.MissingGates,
+			"missing_facts":  s.MissingFacts,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"workspace": workspace, "tasks": items})
