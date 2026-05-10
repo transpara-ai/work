@@ -46,6 +46,7 @@ var (
 	EventTypeTaskUnblocked       = types.MustEventType("work.task.unblocked")
 	EventTypeTaskArtifact        = types.MustEventType("work.task.artifact")
 	EventTypeTaskArtifactWaived  = types.MustEventType("work.task.artifact.waived")
+	EventTypeTaskFactRequired    = types.MustEventType("work.task.fact.required")
 	EventTypePhaseGateDeclared   = types.MustEventType("work.phase.gate.declared")
 	EventTypePhaseGateApproved   = types.MustEventType("work.phase.gate.approved")
 	EventTypePhaseGateRejected   = types.MustEventType("work.phase.gate.rejected")
@@ -57,7 +58,8 @@ func allWorkEventTypes() []types.EventType {
 		EventTypeTaskCreated, EventTypeTaskAssigned, EventTypeTaskCompleted,
 		EventTypeTaskDependencyAdded, EventTypeTaskPrioritySet, EventTypeTaskComment,
 		EventTypeTaskUnblocked, EventTypeTaskArtifact, EventTypeTaskArtifactWaived,
-		EventTypePhaseGateDeclared, EventTypePhaseGateApproved, EventTypePhaseGateRejected,
+		EventTypeTaskFactRequired, EventTypePhaseGateDeclared, EventTypePhaseGateApproved,
+		EventTypePhaseGateRejected,
 	}
 }
 
@@ -169,6 +171,19 @@ type TaskArtifactWaivedContent struct {
 
 func (c TaskArtifactWaivedContent) EventTypeName() string { return "work.task.artifact.waived" }
 
+// TaskFactRequiredContent records a readiness prerequisite on an external
+// EventGraph fact. Work replays the requirement but does not decide authority.
+type TaskFactRequiredContent struct {
+	workContent
+	TaskID            types.EventID   `json:"TaskID"`
+	RequiredEventType types.EventType `json:"RequiredEventType"`
+	RequiredEventID   types.EventID   `json:"RequiredEventID,omitempty"`
+	Reason            string          `json:"Reason,omitempty"`
+	RequiredBy        types.ActorID   `json:"RequiredBy"`
+}
+
+func (c TaskFactRequiredContent) EventTypeName() string { return "work.task.fact.required" }
+
 // PhaseGateDeclaredContent is emitted when a phase needs explicit approval.
 type PhaseGateDeclaredContent struct {
 	workContent
@@ -214,6 +229,7 @@ func RegisterEventTypes() {
 	event.RegisterContentUnmarshaler("work.task.unblocked", event.Unmarshal[TaskUnblockedContent])
 	event.RegisterContentUnmarshaler("work.task.artifact", event.Unmarshal[TaskArtifactContent])
 	event.RegisterContentUnmarshaler("work.task.artifact.waived", event.Unmarshal[TaskArtifactWaivedContent])
+	event.RegisterContentUnmarshaler("work.task.fact.required", event.Unmarshal[TaskFactRequiredContent])
 	event.RegisterContentUnmarshaler("work.phase.gate.declared", event.Unmarshal[PhaseGateDeclaredContent])
 	event.RegisterContentUnmarshaler("work.phase.gate.approved", event.Unmarshal[PhaseGateApprovedContent])
 	event.RegisterContentUnmarshaler("work.phase.gate.rejected", event.Unmarshal[PhaseGateRejectedContent])

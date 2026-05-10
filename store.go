@@ -51,6 +51,7 @@ type TaskSummary struct {
 	Waived        bool
 	Ready         bool
 	MissingGates  []string
+	MissingFacts  []string
 }
 
 // ArtifactEvent holds the data from a work.task.artifact event.
@@ -97,6 +98,21 @@ type TaskReadiness struct {
 	Ready        bool
 	PresentGates []string
 	MissingGates []string
+	PresentFacts []string
+	MissingFacts []string
+}
+
+// FactRequirement is a task readiness prerequisite satisfied by an existing
+// EventGraph fact of the required type, optionally pinned to an exact event ID.
+type FactRequirement struct {
+	ID                types.EventID
+	TaskID            types.EventID
+	RequiredEventType types.EventType
+	RequiredEventID   types.EventID
+	Reason            string
+	RequiredBy        types.ActorID
+	Timestamp         time.Time
+	Satisfied         bool
 }
 
 // TaskStore creates and queries tasks as auditable events on the shared graph.
@@ -866,6 +882,10 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 			status = StatusAssigned
 		}
 		missing := missingRequiredGates(gatesByTask[t.ID])
+		_, missingFacts, err := ts.factReadiness(t.ID)
+		if err != nil {
+			return nil, err
+		}
 		summaries = append(summaries, TaskSummary{
 			Task:          t,
 			Status:        status,
@@ -873,8 +893,9 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 			Blocked:       blockedMap[t.ID] && !unblockedMap[t.ID],
 			ArtifactCount: artifactCount[t.ID],
 			Waived:        waivedMap[t.ID],
-			Ready:         len(missing) == 0,
+			Ready:         len(missing) == 0 && len(missingFacts) == 0,
 			MissingGates:  missing,
+			MissingFacts:  missingFacts,
 		})
 	}
 	return summaries, nil
@@ -997,6 +1018,68 @@ func (ts *TaskStore) WaiveArtifact(
 	return nil
 }
 
+// AddFactRequirement records that a task is not ready until a Phase 3
+// lifecycle, authority, key, trust, decision, or audit fact exists.
+func (ts *TaskStore) AddFactRequirement(
+	source types.ActorID,
+	taskID types.EventID,
+	requiredEventType types.EventType,
+	requiredEventID types.EventID,
+	reason string,
+	causes []types.EventID,
+	convID types.ConversationID,
+) error {
+	if requiredEventType.Value() == "" {
+		return fmt.Errorf("required event type is required")
+	}
+	content := TaskFactRequiredContent{
+		TaskID:            taskID,
+		RequiredEventType: requiredEventType,
+		RequiredEventID:   requiredEventID,
+		Reason:            strings.TrimSpace(reason),
+		RequiredBy:        source,
+	}
+	ev, err := ts.factory.Create(EventTypeTaskFactRequired, source, content, causes, convID, ts.store, ts.signer)
+	if err != nil {
+		return fmt.Errorf("create fact requirement event: %w", err)
+	}
+	if _, err := ts.store.Append(ev); err != nil {
+		return fmt.Errorf("append fact requirement event: %w", err)
+	}
+	return nil
+}
+
+// ListFactRequirements returns task readiness fact requirements with their
+// current satisfaction state derived from the shared EventGraph store.
+func (ts *TaskStore) ListFactRequirements(taskID types.EventID) ([]FactRequirement, error) {
+	page, err := ts.store.ByType(EventTypeTaskFactRequired, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return nil, fmt.Errorf("fetch fact requirement events: %w", err)
+	}
+	requirements := make([]FactRequirement, 0)
+	for _, ev := range page.Items() {
+		c, ok := ev.Content().(TaskFactRequiredContent)
+		if !ok || c.TaskID != taskID {
+			continue
+		}
+		satisfied, err := ts.factRequirementSatisfied(c)
+		if err != nil {
+			return nil, err
+		}
+		requirements = append(requirements, FactRequirement{
+			ID:                ev.ID(),
+			TaskID:            c.TaskID,
+			RequiredEventType: c.RequiredEventType,
+			RequiredEventID:   c.RequiredEventID,
+			Reason:            c.Reason,
+			RequiredBy:        c.RequiredBy,
+			Timestamp:         ev.Timestamp().Value(),
+			Satisfied:         satisfied,
+		})
+	}
+	return requirements, nil
+}
+
 // ListArtifacts returns all artifacts for the given task in chronological order.
 func (ts *TaskStore) ListArtifacts(taskID types.EventID) ([]ArtifactEvent, error) {
 	page, err := ts.store.ByType(EventTypeTaskArtifact, 1000, types.None[types.Cursor]())
@@ -1022,8 +1105,8 @@ func (ts *TaskStore) ListArtifacts(taskID types.EventID) ([]ArtifactEvent, error
 	return artifacts, nil
 }
 
-// Readiness reconstructs whether a task has the required implementation gates.
-// Gates are represented as task artifacts with labels from RequiredReadinessGateLabels.
+// Readiness reconstructs whether a task has the required implementation gates
+// and any declared Phase 3 fact prerequisites.
 func (ts *TaskStore) Readiness(taskID types.EventID) (TaskReadiness, error) {
 	page, err := ts.store.ByType(EventTypeTaskArtifact, 1000, types.None[types.Cursor]())
 	if err != nil {
@@ -1041,13 +1124,64 @@ func (ts *TaskStore) Readiness(taskID types.EventID) (TaskReadiness, error) {
 		}
 	}
 	missing := missingRequiredGates(present)
+	presentFacts, missingFacts, err := ts.factReadiness(taskID)
+	if err != nil {
+		return TaskReadiness{}, err
+	}
 	out := TaskReadiness{
 		TaskID:       taskID,
-		Ready:        len(missing) == 0,
+		Ready:        len(missing) == 0 && len(missingFacts) == 0,
 		PresentGates: presentRequiredGates(present),
 		MissingGates: missing,
+		PresentFacts: presentFacts,
+		MissingFacts: missingFacts,
 	}
 	return out, nil
+}
+
+func (ts *TaskStore) factReadiness(taskID types.EventID) ([]string, []string, error) {
+	requirements, err := ts.ListFactRequirements(taskID)
+	if err != nil {
+		return nil, nil, err
+	}
+	present := make([]string, 0)
+	missing := make([]string, 0)
+	for _, req := range requirements {
+		label := factRequirementLabel(req)
+		if req.Satisfied {
+			present = append(present, label)
+			continue
+		}
+		missing = append(missing, label)
+	}
+	return present, missing, nil
+}
+
+func (ts *TaskStore) factRequirementSatisfied(req TaskFactRequiredContent) (bool, error) {
+	if !req.RequiredEventID.IsZero() {
+		ev, err := ts.store.Get(req.RequiredEventID)
+		if err != nil {
+			return false, nil
+		}
+		return ev.Type() == req.RequiredEventType, nil
+	}
+	descendants, err := ts.store.Descendants(req.TaskID, 1000)
+	if err != nil {
+		return false, fmt.Errorf("fetch task descendants: %w", err)
+	}
+	for _, ev := range descendants {
+		if ev.Type() == req.RequiredEventType {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func factRequirementLabel(req FactRequirement) string {
+	if req.RequiredEventID.IsZero() {
+		return req.RequiredEventType.Value()
+	}
+	return req.RequiredEventType.Value() + "#" + req.RequiredEventID.Value()
 }
 
 func normalizeGateLabel(label string) string {
