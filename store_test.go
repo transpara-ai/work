@@ -173,26 +173,98 @@ func TestTaskStore_SupersedeDuplicateDirectChildren(t *testing.T) {
 		t.Errorf("canonical task = %s; want %s", superseded[0].CanonicalID.Value(), first.ID.Value())
 	}
 
-	firstStatus, err := ts.GetStatus(first.ID)
+	firstStatus, err := ts.GetCompatibilityStatus(first.ID)
 	if err != nil {
 		t.Fatalf("GetStatus first: %v", err)
 	}
-	if firstStatus == work.StatusCompleted {
+	if firstStatus == work.LegacyStatusCompleted {
 		t.Fatal("canonical child should remain open")
 	}
-	secondStatus, err := ts.GetStatus(second.ID)
+	secondStatus, err := ts.GetCompatibilityStatus(second.ID)
 	if err != nil {
 		t.Fatalf("GetStatus second: %v", err)
 	}
-	if secondStatus != work.StatusCompleted {
+	if secondStatus != work.LegacyStatusCompleted {
 		t.Fatalf("duplicate child status = %q; want completed", secondStatus)
 	}
-	uniqueStatus, err := ts.GetStatus(unique.ID)
+	uniqueStatus, err := ts.GetCompatibilityStatus(unique.ID)
 	if err != nil {
 		t.Fatalf("GetStatus unique: %v", err)
 	}
-	if uniqueStatus == work.StatusCompleted {
+	if uniqueStatus == work.LegacyStatusCompleted {
 		t.Fatal("unique child should remain open")
+	}
+}
+
+func TestTaskStore_SupersedeDuplicateDirectChildrenSkipsCanonicalTerminalChildren(t *testing.T) {
+	for _, terminal := range []work.TaskStatus{work.StatusCertified, work.StatusRejected, work.StatusSuperseded} {
+		t.Run(string(terminal), func(t *testing.T) {
+			s, causes := setupStore(t)
+			ts := newTaskStore(t, s)
+
+			parent, err := ts.Create(testActor, "Investigate terminal duplicates", "", causes, testConv)
+			if err != nil {
+				t.Fatalf("Create parent: %v", err)
+			}
+			canonical, err := ts.Create(testActor, "Review terminal state", "", causes, testConv)
+			if err != nil {
+				t.Fatalf("Create canonical: %v", err)
+			}
+			duplicate, err := ts.Create(testActor, "Review terminal state", "", causes, testConv)
+			if err != nil {
+				t.Fatalf("Create duplicate: %v", err)
+			}
+			if err := ts.AddDependency(testActor, canonical.ID, parent.ID, causes, testConv); err != nil {
+				t.Fatalf("AddDependency canonical: %v", err)
+			}
+			if err := ts.AddDependency(testActor, duplicate.ID, parent.ID, causes, testConv); err != nil {
+				t.Fatalf("AddDependency duplicate: %v", err)
+			}
+
+			switch terminal {
+			case work.StatusCertified:
+				for _, state := range []work.TaskStatus{work.StatusReady, work.StatusRunning, work.StatusVerified, work.StatusCertified} {
+					if err := ts.TransitionTask(testActor, duplicate.ID, state, "advance", nil, causes, testConv); err != nil {
+						t.Fatalf("TransitionTask to %s: %v", state, err)
+					}
+				}
+			case work.StatusRejected:
+				for _, state := range []work.TaskStatus{work.StatusReady, work.StatusRunning, work.StatusVerified} {
+					if err := ts.TransitionTask(testActor, duplicate.ID, state, "advance", nil, causes, testConv); err != nil {
+						t.Fatalf("TransitionTask to %s: %v", state, err)
+					}
+				}
+				if err := ts.RejectTask(testActor, duplicate.ID, "not accepted", nil, causes, testConv); err != nil {
+					t.Fatalf("RejectTask: %v", err)
+				}
+			case work.StatusSuperseded:
+				if err := ts.SupersedeTask(testActor, duplicate.ID, "tsk_canonical_terminal_duplicate", "duplicate", nil, causes, testConv); err != nil {
+					t.Fatalf("SupersedeTask: %v", err)
+				}
+			}
+
+			superseded, err := ts.SupersedeDuplicateDirectChildren(parent.ID, testActor, causes, testConv)
+			if err != nil {
+				t.Fatalf("SupersedeDuplicateDirectChildren: %v", err)
+			}
+			if len(superseded) != 0 {
+				t.Fatalf("superseded len = %d; want 0", len(superseded))
+			}
+			legacyStatus, err := ts.GetCompatibilityStatus(duplicate.ID)
+			if err != nil {
+				t.Fatalf("GetCompatibilityStatus duplicate: %v", err)
+			}
+			if legacyStatus == work.LegacyStatusCompleted {
+				t.Fatal("canonically terminal duplicate child should not be legacy-completed")
+			}
+			status, err := ts.GetStatus(duplicate.ID)
+			if err != nil {
+				t.Fatalf("GetStatus duplicate: %v", err)
+			}
+			if status != terminal {
+				t.Fatalf("canonical status = %q; want %q", status, terminal)
+			}
+		})
 	}
 }
 
@@ -298,12 +370,12 @@ func TestTaskStore_GetStatus_Pending(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	status, err := ts.GetStatus(task.ID)
+	status, err := ts.GetCompatibilityStatus(task.ID)
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
-	if status != work.StatusPending {
-		t.Errorf("status = %q; want %q", status, work.StatusPending)
+	if status != work.LegacyStatusPending {
+		t.Errorf("status = %q; want %q", status, work.LegacyStatusPending)
 	}
 }
 
@@ -319,12 +391,12 @@ func TestTaskStore_GetStatus_Assigned(t *testing.T) {
 		t.Fatalf("Assign: %v", err)
 	}
 
-	status, err := ts.GetStatus(task.ID)
+	status, err := ts.GetCompatibilityStatus(task.ID)
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
-	if status != work.StatusAssigned {
-		t.Errorf("status = %q; want %q", status, work.StatusAssigned)
+	if status != work.LegacyStatusAssigned {
+		t.Errorf("status = %q; want %q", status, work.LegacyStatusAssigned)
 	}
 }
 
@@ -341,12 +413,12 @@ func TestTaskStore_GetStatus_Completed(t *testing.T) {
 	}
 	completeWithArtifact(t, ts, testActor, task.ID, "done", causes, testConv)
 
-	status, err := ts.GetStatus(task.ID)
+	status, err := ts.GetCompatibilityStatus(task.ID)
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
-	if status != work.StatusCompleted {
-		t.Errorf("status = %q; want %q", status, work.StatusCompleted)
+	if status != work.LegacyStatusCompleted {
+		t.Errorf("status = %q; want %q", status, work.LegacyStatusCompleted)
 	}
 }
 

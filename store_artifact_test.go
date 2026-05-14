@@ -286,12 +286,12 @@ func TestTaskStore_Complete_WithArtifact(t *testing.T) {
 		t.Fatalf("Complete: %v", err)
 	}
 
-	status, err := ts.GetStatus(task.ID)
+	status, err := ts.GetCompatibilityStatus(task.ID)
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
-	if status != work.StatusCompleted {
-		t.Errorf("status = %q; want %q", status, work.StatusCompleted)
+	if status != work.LegacyStatusCompleted {
+		t.Errorf("status = %q; want %q", status, work.LegacyStatusCompleted)
 	}
 }
 
@@ -312,12 +312,12 @@ func TestTaskStore_Complete_WithWaiver(t *testing.T) {
 		t.Fatalf("Complete: %v", err)
 	}
 
-	status, err := ts.GetStatus(task.ID)
+	status, err := ts.GetCompatibilityStatus(task.ID)
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
-	if status != work.StatusCompleted {
-		t.Errorf("status = %q; want %q", status, work.StatusCompleted)
+	if status != work.LegacyStatusCompleted {
+		t.Errorf("status = %q; want %q", status, work.LegacyStatusCompleted)
 	}
 }
 
