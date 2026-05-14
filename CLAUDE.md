@@ -39,6 +39,8 @@ State is never mutated. All state changes are appended as typed events:
 
 `TaskSummary` (task + computed status/assignee/blocked flag) is derived by replaying events. The `TaskStore` interface has methods for both raw `Task` and computed `TaskSummary`.
 
+Canonical v3.9 task lifecycle state is exposed through `TaskStatus`/`GetStatus` and uses only the Dark Factory v3.9 names (`created`, `ready`, `running`, `blocked`, `failed`, `repair_required`, `repair_running`, `repaired`, `verification_running`, `verified`, `certified`, `rejected`, `superseded`, `policy_blocked`). Legacy Work flow names (`pending`, `assigned`, `completed`) are compatibility-only via `LegacyTaskStatus`, `ProjectLegacyTask`, `GetCompatibilityStatus`, and the REST `legacy_status` field.
+
 ### Blocked state
 
 A task is blocked if it has unresolved dependencies (incomplete dependency tasks), unless explicitly unblocked via `UnblockTask`. `IsBlocked(taskID)` computes this at query time.

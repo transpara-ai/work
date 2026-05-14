@@ -541,12 +541,12 @@ async function refresh() {
           artifactCell = '<span class="art-badge art-has">' + t.artifact_count + ' artifact' + (t.artifact_count === 1 ? '' : 's') + '</span>';
         } else if (t.waived) {
           artifactCell = '<span class="art-badge art-waived">waived</span>';
-        } else if (t.status === "completed") {
+        } else if (t.legacy_status === "completed") {
           artifactCell = '<span class="art-none">\u2014</span>';
         } else {
           artifactCell = '<span class="art-none">\u2014</span>';
         }
-        const isCompleted = t.status === "completed";
+        const isCompleted = t.legacy_status === "completed";
         let actions = "";
         if (!isCompleted) {
           actions += '<button class="btn btn-assign" onclick="assignTask(\'' + esc(t.id) + '\')">' + (t.assignee ? 'Reassign' : 'Assign') + '</button>';
@@ -1068,7 +1068,7 @@ func (sv *server) listTasks(w http.ResponseWriter, r *http.Request) {
 	if openOnly {
 		filtered := make([]work.TaskSummary, 0, len(summaries))
 		for _, s := range summaries {
-			if s.Status != work.StatusCompleted && !s.Blocked {
+			if s.LegacyStatus != work.LegacyStatusCompleted && !s.Blocked {
 				filtered = append(filtered, s)
 			}
 		}
@@ -1110,6 +1110,7 @@ func (sv *server) listTasks(w http.ResponseWriter, r *http.Request) {
 			"priority":       string(s.Task.Priority),
 			"created_by":     s.Task.CreatedBy.Value(),
 			"status":         string(s.Status),
+			"legacy_status":  string(s.LegacyStatus),
 			"assignee":       s.Assignee.Value(),
 			"blocked":        s.Blocked,
 			"artifact_count": s.ArtifactCount,
@@ -1373,8 +1374,9 @@ func (sv *server) completeTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"task_id": taskID.Value(),
-		"status":  "completed",
+		"task_id":       taskID.Value(),
+		"status":        string(work.StatusCreated),
+		"legacy_status": "completed",
 	})
 }
 
@@ -1832,6 +1834,7 @@ func (sv *server) listWorkspaceTasks(w http.ResponseWriter, r *http.Request) {
 			"workspace":      s.Task.Workspace,
 			"created_by":     s.Task.CreatedBy.Value(),
 			"status":         string(s.Status),
+			"legacy_status":  string(s.LegacyStatus),
 			"assignee":       s.Assignee.Value(),
 			"blocked":        s.Blocked,
 			"artifact_count": s.ArtifactCount,

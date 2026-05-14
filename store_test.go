@@ -173,25 +173,25 @@ func TestTaskStore_SupersedeDuplicateDirectChildren(t *testing.T) {
 		t.Errorf("canonical task = %s; want %s", superseded[0].CanonicalID.Value(), first.ID.Value())
 	}
 
-	firstStatus, err := ts.GetStatus(first.ID)
+	firstStatus, err := ts.GetCompatibilityStatus(first.ID)
 	if err != nil {
 		t.Fatalf("GetStatus first: %v", err)
 	}
-	if firstStatus == work.StatusCompleted {
+	if firstStatus == work.LegacyStatusCompleted {
 		t.Fatal("canonical child should remain open")
 	}
-	secondStatus, err := ts.GetStatus(second.ID)
+	secondStatus, err := ts.GetCompatibilityStatus(second.ID)
 	if err != nil {
 		t.Fatalf("GetStatus second: %v", err)
 	}
-	if secondStatus != work.StatusCompleted {
+	if secondStatus != work.LegacyStatusCompleted {
 		t.Fatalf("duplicate child status = %q; want completed", secondStatus)
 	}
-	uniqueStatus, err := ts.GetStatus(unique.ID)
+	uniqueStatus, err := ts.GetCompatibilityStatus(unique.ID)
 	if err != nil {
 		t.Fatalf("GetStatus unique: %v", err)
 	}
-	if uniqueStatus == work.StatusCompleted {
+	if uniqueStatus == work.LegacyStatusCompleted {
 		t.Fatal("unique child should remain open")
 	}
 }
@@ -298,12 +298,12 @@ func TestTaskStore_GetStatus_Pending(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	status, err := ts.GetStatus(task.ID)
+	status, err := ts.GetCompatibilityStatus(task.ID)
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
-	if status != work.StatusPending {
-		t.Errorf("status = %q; want %q", status, work.StatusPending)
+	if status != work.LegacyStatusPending {
+		t.Errorf("status = %q; want %q", status, work.LegacyStatusPending)
 	}
 }
 
@@ -319,12 +319,12 @@ func TestTaskStore_GetStatus_Assigned(t *testing.T) {
 		t.Fatalf("Assign: %v", err)
 	}
 
-	status, err := ts.GetStatus(task.ID)
+	status, err := ts.GetCompatibilityStatus(task.ID)
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
-	if status != work.StatusAssigned {
-		t.Errorf("status = %q; want %q", status, work.StatusAssigned)
+	if status != work.LegacyStatusAssigned {
+		t.Errorf("status = %q; want %q", status, work.LegacyStatusAssigned)
 	}
 }
 
@@ -341,12 +341,12 @@ func TestTaskStore_GetStatus_Completed(t *testing.T) {
 	}
 	completeWithArtifact(t, ts, testActor, task.ID, "done", causes, testConv)
 
-	status, err := ts.GetStatus(task.ID)
+	status, err := ts.GetCompatibilityStatus(task.ID)
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
-	if status != work.StatusCompleted {
-		t.Errorf("status = %q; want %q", status, work.StatusCompleted)
+	if status != work.LegacyStatusCompleted {
+		t.Errorf("status = %q; want %q", status, work.LegacyStatusCompleted)
 	}
 }
 

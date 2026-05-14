@@ -22,34 +22,50 @@ var ErrArtifactRequired = errors.New("task has no artifacts; attach an artifact 
 // transition is not allowed from the current replayed state.
 var ErrInvalidLifecycleTransition = errors.New("invalid task lifecycle transition")
 
-// TaskStatus represents the current lifecycle state of a task.
+// TaskStatus represents the canonical Dark Factory v3.9 lifecycle state of a task.
 type TaskStatus string
 
 const (
-	// StatusPending means the task has been created but not yet assigned.
-	StatusPending TaskStatus = "pending"
+	// StatusCreated means the task record exists and has not entered scheduling.
+	StatusCreated TaskStatus = "created"
 	// StatusReady means the task is unblocked and has enough Work evidence to be scheduled.
 	StatusReady TaskStatus = "ready"
-	// StatusAssigned means the task has been assigned to an actor but not yet completed.
-	StatusAssigned TaskStatus = "assigned"
 	// StatusRunning means runtime or human production work is in progress.
 	StatusRunning TaskStatus = "running"
 	// StatusBlocked means dependency or evidence prerequisites block the task.
 	StatusBlocked TaskStatus = "blocked"
-	// StatusPolicyBlocked means policy denied or paused the task.
-	StatusPolicyBlocked TaskStatus = "policy_blocked"
-	// StatusVerifying means verification evidence is being gathered.
-	StatusVerifying TaskStatus = "verifying"
 	// StatusFailed means task verification or execution failed.
 	StatusFailed TaskStatus = "failed"
-	// StatusRepairing means a repair attempt is active.
-	StatusRepairing TaskStatus = "repairing"
-	// StatusCompleted means the task has been marked complete.
-	StatusCompleted TaskStatus = "completed"
+	// StatusRepairRequired means a failure needs an explicit repair attempt.
+	StatusRepairRequired TaskStatus = "repair_required"
+	// StatusRepairRunning means a repair attempt is active.
+	StatusRepairRunning TaskStatus = "repair_running"
+	// StatusRepaired means repair output exists and is ready for verification.
+	StatusRepaired TaskStatus = "repaired"
+	// StatusVerificationRunning means verification evidence is being gathered.
+	StatusVerificationRunning TaskStatus = "verification_running"
+	// StatusVerified means verification passed.
+	StatusVerified TaskStatus = "verified"
+	// StatusCertified means the task has terminal certification evidence.
+	StatusCertified TaskStatus = "certified"
 	// StatusRejected means the task was explicitly rejected.
 	StatusRejected TaskStatus = "rejected"
 	// StatusSuperseded means the task was replaced by another canonical task record.
 	StatusSuperseded TaskStatus = "superseded"
+	// StatusPolicyBlocked means policy denied or paused the task.
+	StatusPolicyBlocked TaskStatus = "policy_blocked"
+)
+
+// LegacyTaskStatus is the compatibility-only projection for pre-v3.9 Work
+// events. These names are not canonical v3.9 TaskStatus values.
+type LegacyTaskStatus string
+
+const (
+	LegacyStatusPending   LegacyTaskStatus = "pending"
+	LegacyStatusAssigned  LegacyTaskStatus = "assigned"
+	LegacyStatusCompleted LegacyTaskStatus = "completed"
+	LegacyStatusBlocked   LegacyTaskStatus = "blocked"
+	LegacyStatusReady     LegacyTaskStatus = "ready"
 )
 
 // Task represents a work item derived from a work.task.created event.
@@ -75,6 +91,7 @@ type Task struct {
 type TaskSummary struct {
 	Task
 	Status        TaskStatus
+	LegacyStatus  LegacyTaskStatus
 	Assignee      types.ActorID // zero value if unassigned
 	Blocked       bool
 	ArtifactCount int
@@ -134,6 +151,16 @@ type TaskProjection struct {
 	FailureRepair       FailureRepairReferences
 	SupersededBy        string
 	LastTransitionEvent types.EventID
+}
+
+// LegacyTaskProjection replays historical Work events without promoting
+// pending/assigned/completed into the canonical v3.9 lifecycle.
+type LegacyTaskProjection struct {
+	TaskID   types.EventID
+	Status   LegacyTaskStatus
+	Assignee types.ActorID
+	Blocked  bool
+	Ready    bool
 }
 
 // ArtifactEvent holds the data from a work.task.artifact event.
@@ -657,13 +684,14 @@ func (ts *TaskStore) AttachFailureRepairReferences(
 	return nil
 }
 
-// GetStatus reconstructs the current status of a task by scanning
-// explicit v3.9 lifecycle events first, then legacy created/assigned/completed,
-// dependency blocked, and readiness evidence as compatibility mappings.
+// GetStatus reconstructs the current canonical v3.9 status of a task by
+// scanning explicit lifecycle events. Legacy Work events are exposed through
+// ProjectLegacyTask and GetCompatibilityStatus instead of being promoted into
+// canonical v3.9 lifecycle state.
 func (ts *TaskStore) GetStatus(taskID types.EventID) (TaskStatus, error) {
 	transitionPage, err := ts.store.ByType(EventTypeTaskLifecycleTransitioned, 1000, types.None[types.Cursor]())
 	if err != nil {
-		return StatusPending, fmt.Errorf("fetch lifecycle transition events: %w", err)
+		return StatusCreated, fmt.Errorf("fetch lifecycle transition events: %w", err)
 	}
 	for _, ev := range transitionPage.Items() {
 		c, ok := ev.Content().(TaskLifecycleTransitionContent)
@@ -672,44 +700,82 @@ func (ts *TaskStore) GetStatus(taskID types.EventID) (TaskStatus, error) {
 		}
 	}
 
-	// Check for completed event first.
+	return StatusCreated, nil
+}
+
+// GetCompatibilityStatus returns the legacy Work task status projection for
+// callers that still depend on pending/assigned/completed operational flow.
+func (ts *TaskStore) GetCompatibilityStatus(taskID types.EventID) (LegacyTaskStatus, error) {
+	projection, err := ts.ProjectLegacyTask(taskID)
+	if err != nil {
+		return "", err
+	}
+	return projection.Status, nil
+}
+
+// ProjectLegacyTask reconstructs pre-v3.9 Work task state without changing the
+// canonical v3.9 lifecycle. It keeps old created/assigned/completed events
+// replayable as an operational compatibility view.
+func (ts *TaskStore) ProjectLegacyTask(taskID types.EventID) (LegacyTaskProjection, error) {
+	assignee, err := ts.projectAssignee(taskID)
+	if err != nil {
+		return LegacyTaskProjection{}, err
+	}
+	readiness, err := ts.Readiness(taskID)
+	if err != nil {
+		return LegacyTaskProjection{}, err
+	}
 	completedPage, err := ts.store.ByType(EventTypeTaskCompleted, 1000, types.None[types.Cursor]())
 	if err != nil {
-		return StatusPending, fmt.Errorf("fetch completed events: %w", err)
+		return LegacyTaskProjection{}, fmt.Errorf("fetch completed events: %w", err)
 	}
 	for _, ev := range completedPage.Items() {
 		c, ok := ev.Content().(TaskCompletedContent)
 		if ok && c.TaskID == taskID {
-			return StatusCompleted, nil
+			return LegacyTaskProjection{
+				TaskID:   taskID,
+				Status:   LegacyStatusCompleted,
+				Assignee: assignee,
+				Ready:    readiness.Ready,
+			}, nil
 		}
 	}
 
 	blocked, err := ts.IsBlocked(taskID)
 	if err != nil {
-		return StatusPending, err
+		return LegacyTaskProjection{}, err
 	}
 	if blocked {
-		return StatusBlocked, nil
+		return LegacyTaskProjection{
+			TaskID:   taskID,
+			Status:   LegacyStatusBlocked,
+			Assignee: assignee,
+			Blocked:  true,
+			Ready:    readiness.Ready,
+		}, nil
 	}
 
-	// Check for assigned event.
-	assignedPage, err := ts.store.ByType(EventTypeTaskAssigned, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return StatusPending, fmt.Errorf("fetch assigned events: %w", err)
-	}
-	for _, ev := range assignedPage.Items() {
-		c, ok := ev.Content().(TaskAssignedContent)
-		if ok && c.TaskID == taskID {
-			return StatusAssigned, nil
-		}
+	if !assignee.IsZero() {
+		return LegacyTaskProjection{
+			TaskID:   taskID,
+			Status:   LegacyStatusAssigned,
+			Assignee: assignee,
+			Ready:    readiness.Ready,
+		}, nil
 	}
 
-	readiness, err := ts.Readiness(taskID)
-	if err == nil && readiness.Ready {
-		return StatusReady, nil
+	if readiness.Ready {
+		return LegacyTaskProjection{
+			TaskID: taskID,
+			Status: LegacyStatusReady,
+			Ready:  true,
+		}, nil
 	}
 
-	return StatusPending, nil
+	return LegacyTaskProjection{
+		TaskID: taskID,
+		Status: LegacyStatusPending,
+	}, nil
 }
 
 // AddDependency records a work.task.dependency.added event, declaring that taskID
@@ -853,11 +919,11 @@ func (ts *TaskStore) SupersedeDuplicateDirectChildren(
 		if canonical.ID == child.ID {
 			continue
 		}
-		status, err := ts.GetStatus(child.ID)
+		status, err := ts.GetCompatibilityStatus(child.ID)
 		if err != nil {
 			return superseded, fmt.Errorf("get duplicate status: %w", err)
 		}
-		if status == StatusCompleted {
+		if status == LegacyStatusCompleted {
 			continue
 		}
 		body := fmt.Sprintf("Superseded duplicate child task. Canonical task: %s (%s). Parent task: %s.", canonical.ID.Value(), canonical.Title, parentID.Value())
@@ -1220,6 +1286,10 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 		if err != nil {
 			return nil, err
 		}
+		legacyStatus, err := ts.GetCompatibilityStatus(t.ID)
+		if err != nil {
+			return nil, err
+		}
 		missing := missingRequiredGates(gatesByTask[t.ID])
 		_, missingFacts, err := ts.factReadiness(t.ID)
 		if err != nil {
@@ -1228,6 +1298,7 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 		summaries = append(summaries, TaskSummary{
 			Task:          t,
 			Status:        status,
+			LegacyStatus:  legacyStatus,
 			Assignee:      assigneeMap[t.ID],
 			Blocked:       blockedMap[t.ID] && !unblockedMap[t.ID],
 			ArtifactCount: artifactCount[t.ID],
@@ -1316,7 +1387,7 @@ func (ts *TaskStore) ProjectTask(taskID types.EventID) (TaskProjection, error) {
 		Status:              status,
 		Assignee:            assignee,
 		Blocked:             blocked || status == StatusBlocked || status == StatusPolicyBlocked,
-		Ready:               status == StatusReady || (readiness.Ready && status == StatusRepairing),
+		Ready:               status == StatusReady || (readiness.Ready && status == StatusRepaired),
 		Linkage:             linkage,
 		Verification:        verification,
 		FailureRepair:       failureRepair,
@@ -1781,8 +1852,9 @@ func isRiskClass(value string) bool {
 
 func isKnownTaskStatus(status TaskStatus) bool {
 	switch status {
-	case StatusPending, StatusReady, StatusAssigned, StatusRunning, StatusBlocked, StatusPolicyBlocked,
-		StatusVerifying, StatusFailed, StatusRepairing, StatusCompleted, StatusRejected, StatusSuperseded:
+	case StatusCreated, StatusReady, StatusRunning, StatusBlocked, StatusFailed, StatusRepairRequired,
+		StatusRepairRunning, StatusRepaired, StatusVerificationRunning, StatusVerified, StatusCertified,
+		StatusRejected, StatusSuperseded, StatusPolicyBlocked:
 		return true
 	default:
 		return false
@@ -1793,28 +1865,35 @@ func canTransitionTask(from, to TaskStatus) bool {
 	if from == to {
 		return false
 	}
-	if from == StatusCompleted || from == StatusRejected || from == StatusSuperseded {
+	if from == StatusCertified || from == StatusRejected || from == StatusSuperseded {
 		return false
 	}
+	if to == StatusSuperseded {
+		return isKnownTaskStatus(from)
+	}
 	switch from {
-	case StatusPending:
-		return to == StatusReady || to == StatusAssigned || to == StatusBlocked || to == StatusPolicyBlocked || to == StatusRejected || to == StatusSuperseded
+	case StatusCreated:
+		return to == StatusReady
 	case StatusReady:
-		return to == StatusAssigned || to == StatusRunning || to == StatusBlocked || to == StatusPolicyBlocked || to == StatusRejected || to == StatusSuperseded
-	case StatusAssigned:
-		return to == StatusRunning || to == StatusBlocked || to == StatusPolicyBlocked || to == StatusVerifying || to == StatusRejected || to == StatusSuperseded
+		return to == StatusRunning
 	case StatusRunning:
-		return to == StatusVerifying || to == StatusFailed || to == StatusBlocked || to == StatusPolicyBlocked || to == StatusCompleted || to == StatusRejected || to == StatusSuperseded
+		return to == StatusVerified || to == StatusFailed || to == StatusBlocked || to == StatusPolicyBlocked
 	case StatusBlocked:
-		return to == StatusReady || to == StatusAssigned || to == StatusRunning || to == StatusPolicyBlocked || to == StatusRejected || to == StatusSuperseded
-	case StatusPolicyBlocked:
-		return to == StatusReady || to == StatusBlocked || to == StatusRejected || to == StatusSuperseded
-	case StatusVerifying:
-		return to == StatusCompleted || to == StatusFailed || to == StatusRepairing || to == StatusRejected || to == StatusSuperseded
+		return to == StatusReady
 	case StatusFailed:
-		return to == StatusRepairing || to == StatusRejected || to == StatusSuperseded
-	case StatusRepairing:
-		return to == StatusVerifying || to == StatusFailed || to == StatusPolicyBlocked || to == StatusRejected || to == StatusSuperseded
+		return to == StatusRepairRequired
+	case StatusRepairRequired:
+		return to == StatusRepairRunning
+	case StatusRepairRunning:
+		return to == StatusRepaired
+	case StatusRepaired:
+		return to == StatusVerificationRunning
+	case StatusVerificationRunning:
+		return to == StatusVerified || to == StatusRejected
+	case StatusVerified:
+		return to == StatusCertified || to == StatusRejected
+	case StatusPolicyBlocked:
+		return false
 	default:
 		return false
 	}
