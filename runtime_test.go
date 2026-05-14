@@ -174,6 +174,57 @@ func TestRuntimeBroker_DeniedFileAndPathTraversalBlocked(t *testing.T) {
 	}
 }
 
+func TestRuntimeBroker_ChecksumDeniedFileBlocked(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	task := createRuntimeTask(t, ts, causes)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("do not read"), 0o644); err != nil {
+		t.Fatalf("seed secret.txt: %v", err)
+	}
+	envelope := runtimeEnvelope(task.ID, dir,
+		work.RuntimeCommand{Name: "checksum_file", Args: []string{"secret.txt"}},
+	)
+	envelope.ExpectedOutputs = nil
+	run, err := ts.RunLocalRuntime(testActor, envelope, causes, testConv)
+	if err != nil {
+		t.Fatalf("RunLocalRuntime: %v", err)
+	}
+	if run.Result.Result.Status != work.RuntimeStatusPolicyBlocked {
+		t.Fatalf("status = %q; want policy_blocked", run.Result.Result.Status)
+	}
+	if len(run.Result.Result.Artifacts) != 0 {
+		t.Fatalf("artifacts = %#v; want none for denied file", run.Result.Result.Artifacts)
+	}
+}
+
+func TestRuntimeBroker_DirectoryAllowAndDenyPolicies(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	task := createRuntimeTask(t, ts, causes)
+	dir := t.TempDir()
+	envelope := runtimeEnvelope(task.ID, dir,
+		work.RuntimeCommand{Name: "write_file", Args: []string{"logs/out.txt", "allowed"}},
+		work.RuntimeCommand{Name: "write_file", Args: []string{"logs/private/secret.txt", "denied"}},
+	)
+	envelope.AllowedFiles = []string{"logs/"}
+	envelope.DeniedFiles = []string{"logs/private/"}
+	envelope.ExpectedOutputs = nil
+	run, err := ts.RunLocalRuntime(testActor, envelope, causes, testConv)
+	if err != nil {
+		t.Fatalf("RunLocalRuntime: %v", err)
+	}
+	if run.Result.Result.Status != work.RuntimeStatusPolicyBlocked {
+		t.Fatalf("status = %q; want policy_blocked", run.Result.Result.Status)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "logs", "out.txt")); err != nil || string(got) != "allowed" {
+		t.Fatalf("logs/out.txt = %q, %v; want allowed", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "logs", "private", "secret.txt")); !os.IsNotExist(err) {
+		t.Fatalf("logs/private/secret.txt side effect exists or unexpected stat err: %v", err)
+	}
+}
+
 func TestRuntimeBroker_NetworkAndSecretsPolicyBlockSimulatedAttempts(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -196,6 +247,56 @@ func TestRuntimeBroker_NetworkAndSecretsPolicyBlockSimulatedAttempts(t *testing.
 				t.Fatalf("status = %q; want policy_blocked", run.Result.Result.Status)
 			}
 		})
+	}
+}
+
+func TestRuntimeBroker_MaxFilesChangedBlockedBeforeSideEffect(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	task := createRuntimeTask(t, ts, causes)
+	dir := t.TempDir()
+	envelope := runtimeEnvelope(task.ID, dir,
+		work.RuntimeCommand{Name: "write_file", Args: []string{"out.txt", "first"}},
+		work.RuntimeCommand{Name: "write_file", Args: []string{"copy.txt", "second"}},
+	)
+	envelope.ResourceLimits.MaxFilesChanged = 1
+	envelope.ExpectedOutputs = nil
+	run, err := ts.RunLocalRuntime(testActor, envelope, causes, testConv)
+	if err != nil {
+		t.Fatalf("RunLocalRuntime: %v", err)
+	}
+	if run.Result.Result.Status != work.RuntimeStatusPolicyBlocked {
+		t.Fatalf("status = %q; want policy_blocked", run.Result.Result.Status)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "out.txt")); err != nil || string(got) != "first" {
+		t.Fatalf("out.txt = %q, %v; want first", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "copy.txt")); !os.IsNotExist(err) {
+		t.Fatalf("copy.txt side effect exists or unexpected stat err: %v", err)
+	}
+	if len(run.Result.Result.ChangedFiles) != 1 || run.Result.Result.ChangedFiles[0].Path != "out.txt" {
+		t.Fatalf("changed files = %#v; want evidence for out.txt only", run.Result.Result.ChangedFiles)
+	}
+}
+
+func TestRuntimeBroker_MaxOutputBytesBlockedBeforeWriteSideEffect(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	task := createRuntimeTask(t, ts, causes)
+	dir := t.TempDir()
+	envelope := runtimeEnvelope(task.ID, dir,
+		work.RuntimeCommand{Name: "write_file", Args: []string{"out.txt", "too large"}},
+	)
+	envelope.ResourceLimits.MaxOutputBytes = 3
+	run, err := ts.RunLocalRuntime(testActor, envelope, causes, testConv)
+	if err != nil {
+		t.Fatalf("RunLocalRuntime: %v", err)
+	}
+	if run.Result.Result.Status != work.RuntimeStatusPolicyBlocked {
+		t.Fatalf("status = %q; want policy_blocked", run.Result.Result.Status)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out.txt")); !os.IsNotExist(err) {
+		t.Fatalf("out.txt side effect exists or unexpected stat err: %v", err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -84,12 +85,12 @@ type RuntimeFileArtifact struct {
 
 // RuntimeCommandLog records one deterministic operation decision and output.
 type RuntimeCommandLog struct {
-	Index  int    `json:"Index"`
-	Name   string `json:"Name"`
+	Index  int      `json:"Index"`
+	Name   string   `json:"Name"`
 	Args   []string `json:"Args,omitempty"`
-	Status string `json:"Status"`
-	Output string `json:"Output,omitempty"`
-	Error  string `json:"Error,omitempty"`
+	Status string   `json:"Status"`
+	Output string   `json:"Output,omitempty"`
+	Error  string   `json:"Error,omitempty"`
 }
 
 // RuntimeResult records the append-only result evidence for a runtime attempt.
@@ -114,8 +115,8 @@ type RuntimeResult struct {
 // RuntimeEnvelopeRecordedContent is the event content for a RuntimeEnvelope.
 type RuntimeEnvelopeRecordedContent struct {
 	workContent
-	Envelope RuntimeEnvelope `json:"Envelope"`
-	RecordedBy types.ActorID `json:"RecordedBy"`
+	Envelope   RuntimeEnvelope `json:"Envelope"`
+	RecordedBy types.ActorID   `json:"RecordedBy"`
 }
 
 func (c RuntimeEnvelopeRecordedContent) EventTypeName() string {
@@ -279,15 +280,31 @@ func executeLocalDeterministic(envelopeID types.EventID, envelope RuntimeEnvelop
 			entry.Status = string(RuntimeStatusTimedOut)
 			entry.Error = ErrRuntimeTimedOut.Error()
 			result.CommandLog = append(result.CommandLog, entry)
-			finishRuntimeResult(&result, RuntimeStatusTimedOut, 124, ErrRuntimeTimedOut.Error())
+			finishRuntimeResultWithChanged(&result, RuntimeStatusTimedOut, 124, ErrRuntimeTimedOut.Error(), changed)
 			return result
 		}
 		if err := checkRuntimeCommandPolicy(envelope, cmd.Name); err != nil {
 			entry.Status = string(RuntimeStatusPolicyBlocked)
 			entry.Error = err.Error()
 			result.CommandLog = append(result.CommandLog, entry)
-			finishRuntimeResult(&result, RuntimeStatusPolicyBlocked, 126, err.Error())
+			finishRuntimeResultWithChanged(&result, RuntimeStatusPolicyBlocked, 126, err.Error(), changed)
 			return result
+		}
+		if path, ok, err := runtimeCommandChangedFile(envelope, cmd); err != nil {
+			entry.Status = string(RuntimeStatusPolicyBlocked)
+			entry.Error = err.Error()
+			result.CommandLog = append(result.CommandLog, entry)
+			finishRuntimeResultWithChanged(&result, RuntimeStatusPolicyBlocked, 126, err.Error(), changed)
+			return result
+		} else if ok && envelope.ResourceLimits.MaxFilesChanged > 0 {
+			if _, alreadyChanged := changed[path]; !alreadyChanged && len(changed) >= envelope.ResourceLimits.MaxFilesChanged {
+				err := fmt.Errorf("%w: max files changed limit %d exceeded", ErrRuntimePolicyBlocked, envelope.ResourceLimits.MaxFilesChanged)
+				entry.Status = string(RuntimeStatusPolicyBlocked)
+				entry.Error = err.Error()
+				result.CommandLog = append(result.CommandLog, entry)
+				finishRuntimeResultWithChanged(&result, RuntimeStatusPolicyBlocked, 126, err.Error(), changed)
+				return result
+			}
 		}
 		output, files, err := executeRuntimeCommand(envelope, cmd, deadline)
 		entry.Output = output
@@ -296,18 +313,25 @@ func executeLocalDeterministic(envelopeID types.EventID, envelope RuntimeEnvelop
 			if errors.Is(err, ErrRuntimePolicyBlocked) {
 				entry.Status = string(RuntimeStatusPolicyBlocked)
 				result.CommandLog = append(result.CommandLog, entry)
-				finishRuntimeResult(&result, RuntimeStatusPolicyBlocked, 126, err.Error())
+				finishRuntimeResultWithChanged(&result, RuntimeStatusPolicyBlocked, 126, err.Error(), changed)
 				return result
 			}
 			if errors.Is(err, ErrRuntimeTimedOut) {
 				entry.Status = string(RuntimeStatusTimedOut)
 				result.CommandLog = append(result.CommandLog, entry)
-				finishRuntimeResult(&result, RuntimeStatusTimedOut, 124, err.Error())
+				finishRuntimeResultWithChanged(&result, RuntimeStatusTimedOut, 124, err.Error(), changed)
 				return result
 			}
 			entry.Status = string(RuntimeStatusFailed)
 			result.CommandLog = append(result.CommandLog, entry)
-			finishRuntimeResult(&result, RuntimeStatusFailed, 1, err.Error())
+			finishRuntimeResultWithChanged(&result, RuntimeStatusFailed, 1, err.Error(), changed)
+			return result
+		}
+		if err := checkRuntimeOutputLimit(envelope, output); err != nil {
+			entry.Status = string(RuntimeStatusPolicyBlocked)
+			entry.Error = err.Error()
+			result.CommandLog = append(result.CommandLog, entry)
+			finishRuntimeResultWithChanged(&result, RuntimeStatusPolicyBlocked, 126, err.Error(), changed)
 			return result
 		}
 		entry.Status = string(RuntimeStatusSucceeded)
@@ -318,15 +342,15 @@ func executeLocalDeterministic(envelopeID types.EventID, envelope RuntimeEnvelop
 	}
 
 	for _, path := range envelope.ExpectedOutputs {
-		artifact, err := captureRuntimeFile(envelope.WorkingDirectory, path)
+		artifact, err := captureRuntimeArtifact(envelope, path)
 		if err != nil {
 			result.ValidationErrors = append(result.ValidationErrors, fmt.Sprintf("expected output %q missing: %v", path, err))
 			continue
 		}
 		result.Artifacts = append(result.Artifacts, artifact)
 	}
-	for _, artifact := range changed {
-		result.ChangedFiles = append(result.ChangedFiles, artifact)
+	for _, path := range sortedRuntimeArtifactPaths(changed) {
+		result.ChangedFiles = append(result.ChangedFiles, changed[path])
 	}
 	if len(result.ValidationErrors) > 0 {
 		finishRuntimeResult(&result, RuntimeStatusValidationFailed, 2, strings.Join(result.ValidationErrors, "; "))
@@ -345,6 +369,11 @@ func finishRuntimeResult(result *RuntimeResult, status RuntimeStatus, exitCode i
 	result.PolicyBlocked = status == RuntimeStatusPolicyBlocked
 }
 
+func finishRuntimeResultWithChanged(result *RuntimeResult, status RuntimeStatus, exitCode int, message string, changed map[string]RuntimeFileArtifact) {
+	appendChangedRuntimeFiles(result, changed)
+	finishRuntimeResult(result, status, exitCode, message)
+}
+
 func executeRuntimeCommand(envelope RuntimeEnvelope, cmd RuntimeCommand, deadline time.Time) (string, []RuntimeFileArtifact, error) {
 	switch cmd.Name {
 	case "write_file":
@@ -355,13 +384,16 @@ func executeRuntimeCommand(envelope RuntimeEnvelope, cmd RuntimeCommand, deadlin
 		if err != nil {
 			return "", nil, err
 		}
+		if err := checkRuntimeBytesLimit(envelope, int64(len(cmd.Args[1]))); err != nil {
+			return "", nil, err
+		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return "", nil, err
 		}
 		if err := os.WriteFile(path, []byte(cmd.Args[1]), 0o644); err != nil {
 			return "", nil, err
 		}
-		artifact, err := captureRuntimeFile(envelope.WorkingDirectory, cmd.Args[0])
+		artifact, err := captureRuntimeArtifact(envelope, cmd.Args[0])
 		return "", []RuntimeFileArtifact{artifact}, err
 	case "append_file":
 		if len(cmd.Args) != 2 {
@@ -369,6 +401,13 @@ func executeRuntimeCommand(envelope RuntimeEnvelope, cmd RuntimeCommand, deadlin
 		}
 		path, err := resolveRuntimePath(envelope, cmd.Args[0])
 		if err != nil {
+			return "", nil, err
+		}
+		currentSize, err := runtimeFileSize(path)
+		if err != nil {
+			return "", nil, err
+		}
+		if err := checkRuntimeBytesLimit(envelope, currentSize+int64(len(cmd.Args[1]))); err != nil {
 			return "", nil, err
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -385,7 +424,7 @@ func executeRuntimeCommand(envelope RuntimeEnvelope, cmd RuntimeCommand, deadlin
 		if err := f.Close(); err != nil {
 			return "", nil, err
 		}
-		artifact, err := captureRuntimeFile(envelope.WorkingDirectory, cmd.Args[0])
+		artifact, err := captureRuntimeArtifact(envelope, cmd.Args[0])
 		return "", []RuntimeFileArtifact{artifact}, err
 	case "copy_file":
 		if len(cmd.Args) != 2 {
@@ -397,6 +436,13 @@ func executeRuntimeCommand(envelope RuntimeEnvelope, cmd RuntimeCommand, deadlin
 		}
 		dst, err := resolveRuntimePath(envelope, cmd.Args[1])
 		if err != nil {
+			return "", nil, err
+		}
+		srcSize, err := runtimeFileSize(src)
+		if err != nil {
+			return "", nil, err
+		}
+		if err := checkRuntimeBytesLimit(envelope, srcSize); err != nil {
 			return "", nil, err
 		}
 		in, err := os.Open(src)
@@ -418,13 +464,13 @@ func executeRuntimeCommand(envelope RuntimeEnvelope, cmd RuntimeCommand, deadlin
 		if err := out.Close(); err != nil {
 			return "", nil, err
 		}
-		artifact, err := captureRuntimeFile(envelope.WorkingDirectory, cmd.Args[1])
+		artifact, err := captureRuntimeArtifact(envelope, cmd.Args[1])
 		return "", []RuntimeFileArtifact{artifact}, err
 	case "checksum_file":
 		if len(cmd.Args) != 1 {
 			return "", nil, fmt.Errorf("checksum_file requires path")
 		}
-		artifact, err := captureRuntimeFile(envelope.WorkingDirectory, cmd.Args[0])
+		artifact, err := captureRuntimeArtifact(envelope, cmd.Args[0])
 		if err != nil {
 			return "", nil, err
 		}
@@ -474,6 +520,32 @@ func checkRuntimeCommandPolicy(envelope RuntimeEnvelope, name string) error {
 	return nil
 }
 
+func runtimeCommandChangedFile(envelope RuntimeEnvelope, cmd RuntimeCommand) (string, bool, error) {
+	var rel string
+	switch cmd.Name {
+	case "write_file", "append_file":
+		if len(cmd.Args) < 1 {
+			return "", false, nil
+		}
+		rel = cmd.Args[0]
+	case "copy_file":
+		if len(cmd.Args) < 2 {
+			return "", false, nil
+		}
+		rel = cmd.Args[1]
+	default:
+		return "", false, nil
+	}
+	if _, err := resolveRuntimePath(envelope, rel); err != nil {
+		return "", false, err
+	}
+	clean, err := cleanRuntimeRelativePath(rel)
+	if err != nil {
+		return "", false, err
+	}
+	return clean, true, nil
+}
+
 func resolveRuntimePath(envelope RuntimeEnvelope, rel string) (string, error) {
 	clean, err := cleanRuntimeRelativePath(rel)
 	if err != nil {
@@ -519,12 +591,15 @@ func cleanRuntimeRelativePath(path string) (string, error) {
 	return clean, nil
 }
 
-func captureRuntimeFile(root, rel string) (RuntimeFileArtifact, error) {
+func captureRuntimeArtifact(envelope RuntimeEnvelope, rel string) (RuntimeFileArtifact, error) {
+	full, err := resolveRuntimePath(envelope, rel)
+	if err != nil {
+		return RuntimeFileArtifact{}, err
+	}
 	clean, err := cleanRuntimeRelativePath(rel)
 	if err != nil {
 		return RuntimeFileArtifact{}, err
 	}
-	full := filepath.Join(root, filepath.FromSlash(clean))
 	f, err := os.Open(full)
 	if err != nil {
 		return RuntimeFileArtifact{}, err
@@ -541,9 +616,46 @@ func captureRuntimeFile(root, rel string) (RuntimeFileArtifact, error) {
 	return RuntimeFileArtifact{Path: clean, Size: info.Size(), SHA256: hex.EncodeToString(h.Sum(nil))}, nil
 }
 
+func runtimeFileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
+func checkRuntimeBytesLimit(envelope RuntimeEnvelope, size int64) error {
+	if envelope.ResourceLimits.MaxOutputBytes <= 0 || size <= envelope.ResourceLimits.MaxOutputBytes {
+		return nil
+	}
+	return fmt.Errorf("%w: max output bytes limit %d exceeded", ErrRuntimePolicyBlocked, envelope.ResourceLimits.MaxOutputBytes)
+}
+
+func checkRuntimeOutputLimit(envelope RuntimeEnvelope, output string) error {
+	return checkRuntimeBytesLimit(envelope, int64(len(output)))
+}
+
+func sortedRuntimeArtifactPaths(artifacts map[string]RuntimeFileArtifact) []string {
+	paths := make([]string, 0, len(artifacts))
+	for path := range artifacts {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func appendChangedRuntimeFiles(result *RuntimeResult, changed map[string]RuntimeFileArtifact) {
+	for _, path := range sortedRuntimeArtifactPaths(changed) {
+		result.ChangedFiles = append(result.ChangedFiles, changed[path])
+	}
+}
+
 func pathAllowed(path string, allowed []string) bool {
 	for _, candidate := range allowed {
-		candidate = filepath.ToSlash(filepath.Clean(strings.TrimSpace(candidate)))
+		candidate = cleanRuntimePolicyPath(candidate)
 		if candidate == path || strings.HasSuffix(candidate, "/") && strings.HasPrefix(path, candidate) {
 			return true
 		}
@@ -553,12 +665,20 @@ func pathAllowed(path string, allowed []string) bool {
 
 func pathDenied(path string, denied []string) bool {
 	for _, candidate := range denied {
-		candidate = filepath.ToSlash(filepath.Clean(strings.TrimSpace(candidate)))
+		candidate = cleanRuntimePolicyPath(candidate)
 		if candidate == path || strings.HasSuffix(candidate, "/") && strings.HasPrefix(path, candidate) {
 			return true
 		}
 	}
 	return false
+}
+
+func cleanRuntimePolicyPath(path string) string {
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	if strings.HasSuffix(path, "/") {
+		return filepath.ToSlash(filepath.Clean(strings.TrimSuffix(path, "/"))) + "/"
+	}
+	return filepath.ToSlash(filepath.Clean(path))
 }
 
 func stringIn(value string, values []string) bool {
