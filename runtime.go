@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/transpara-ai/eventgraph/go/pkg/event"
 	"github.com/transpara-ai/eventgraph/go/pkg/types"
 )
 
@@ -152,16 +151,8 @@ type RuntimeRun struct {
 	Result   RuntimeResultRecord
 }
 
-func ensureRuntimeEventTypesRegistered(registry *event.EventTypeRegistry) {
-	registry.Register(EventTypeRuntimeEnvelopeRecorded, nil)
-	registry.Register(EventTypeRuntimeResultRecorded, nil)
-	event.RegisterContentUnmarshaler("work.runtime.envelope.recorded", event.Unmarshal[RuntimeEnvelopeRecordedContent])
-	event.RegisterContentUnmarshaler("work.runtime.result.recorded", event.Unmarshal[RuntimeResultRecordedContent])
-}
-
 // RecordRuntimeEnvelope appends the deterministic runtime policy envelope.
 func (ts *TaskStore) RecordRuntimeEnvelope(source types.ActorID, envelope RuntimeEnvelope, causes []types.EventID, convID types.ConversationID) (RuntimeEnvelopeRecord, error) {
-	ensureRuntimeEventTypesRegistered(ts.factory.Registry)
 	envelope = normalizeRuntimeEnvelope(envelope)
 	if err := validateRuntimeEnvelope(envelope); err != nil {
 		return RuntimeEnvelopeRecord{}, err
@@ -180,7 +171,6 @@ func (ts *TaskStore) RecordRuntimeEnvelope(source types.ActorID, envelope Runtim
 
 // RecordRuntimeResult appends deterministic runtime result evidence.
 func (ts *TaskStore) RecordRuntimeResult(source types.ActorID, result RuntimeResult, causes []types.EventID, convID types.ConversationID) (RuntimeResultRecord, error) {
-	ensureRuntimeEventTypesRegistered(ts.factory.Registry)
 	content := RuntimeResultRecordedContent{Result: result, RecordedBy: source}
 	ev, err := ts.factory.Create(EventTypeRuntimeResultRecorded, source, content, causes, convID, ts.store, ts.signer)
 	if err != nil {
@@ -206,8 +196,16 @@ func (ts *TaskStore) RunLocalRuntime(source types.ActorID, envelope RuntimeEnvel
 		return RuntimeRun{}, err
 	}
 	if result.Status == RuntimeStatusPolicyBlocked {
-		if current, err := ts.GetStatus(result.TaskID); err == nil && current == StatusRunning {
-			_ = ts.TransitionTask(source, result.TaskID, StatusPolicyBlocked, "runtime policy blocked", []string{resultRecord.ID.Value()}, []types.EventID{resultRecord.ID}, convID)
+		current, err := ts.GetStatus(result.TaskID)
+		if err != nil {
+			return RuntimeRun{Envelope: envelopeRecord, Result: resultRecord}, fmt.Errorf("get task status for runtime policy block: %w", err)
+		}
+		if current == StatusRunning {
+			if err := ts.TransitionTask(source, result.TaskID, StatusPolicyBlocked, "runtime policy blocked", []string{resultRecord.ID.Value()}, []types.EventID{resultRecord.ID}, convID); err != nil {
+				return RuntimeRun{Envelope: envelopeRecord, Result: resultRecord}, fmt.Errorf("transition task to policy_blocked after runtime result %s: %w", resultRecord.ID.Value(), err)
+			}
+		} else {
+			// Runtime evidence is append-only; lifecycle is only driven from an active running task.
 		}
 	}
 	return RuntimeRun{Envelope: envelopeRecord, Result: resultRecord}, nil

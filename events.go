@@ -65,6 +65,7 @@ func allWorkEventTypes() []types.EventType {
 		EventTypeTaskFactRequired, EventTypeTaskLifecycleTransitioned, EventTypeTaskLinked,
 		EventTypeTaskVerificationAttached, EventTypeTaskFailureRepairAttached,
 		EventTypePhaseGateDeclared, EventTypePhaseGateApproved, EventTypePhaseGateRejected,
+		EventTypeRuntimeEnvelopeRecorded, EventTypeRuntimeResultRecorded,
 	}
 }
 
@@ -309,6 +310,8 @@ func RegisterEventTypes() {
 	event.RegisterContentUnmarshaler("work.phase.gate.declared", event.Unmarshal[PhaseGateDeclaredContent])
 	event.RegisterContentUnmarshaler("work.phase.gate.approved", event.Unmarshal[PhaseGateApprovedContent])
 	event.RegisterContentUnmarshaler("work.phase.gate.rejected", event.Unmarshal[PhaseGateRejectedContent])
+	event.RegisterContentUnmarshaler("work.runtime.envelope.recorded", event.Unmarshal[RuntimeEnvelopeRecordedContent])
+	event.RegisterContentUnmarshaler("work.runtime.result.recorded", event.Unmarshal[RuntimeResultRecordedContent])
 }
 
 // RegisterWithRegistry registers all work event types with the given registry

@@ -1,10 +1,14 @@
 package work_test
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/transpara-ai/eventgraph/go/pkg/event"
 	"github.com/transpara-ai/eventgraph/go/pkg/store"
 	"github.com/transpara-ai/eventgraph/go/pkg/types"
 	"github.com/transpara-ai/work"
@@ -64,6 +68,18 @@ func hasChangedFile(files []work.RuntimeFileArtifact, path string) bool {
 		}
 	}
 	return false
+}
+
+type failLifecycleAppendStore struct {
+	store.Store
+	err error
+}
+
+func (s failLifecycleAppendStore) Append(ev event.Event) (event.Event, error) {
+	if ev.Type() == work.EventTypeTaskLifecycleTransitioned {
+		return event.Event{}, s.err
+	}
+	return s.Store.Append(ev)
 }
 
 func TestRuntimeBroker_RecordsEnvelopeAndResultAllowedCommandArtifactsAndCommandLog(t *testing.T) {
@@ -359,6 +375,46 @@ func TestRuntimeBroker_ResultReplayProjectionRebuildsFromAppendOnlyEvents(t *tes
 	}
 }
 
+func TestRuntimeBroker_RegisterWithRegistryIncludesRuntimeEventTypes(t *testing.T) {
+	registry := event.DefaultRegistry()
+	work.RegisterWithRegistry(registry)
+	if !registry.IsRegistered(work.EventTypeRuntimeEnvelopeRecorded) {
+		t.Fatal("runtime envelope event type is not registered")
+	}
+	if !registry.IsRegistered(work.EventTypeRuntimeResultRecorded) {
+		t.Fatal("runtime result event type is not registered")
+	}
+}
+
+func TestRuntimeBroker_RegisterEventTypesUnmarshalsRuntimeResult(t *testing.T) {
+	work.RegisterEventTypes()
+	taskID := types.MustEventID("019462a0-0000-7000-8000-000000000001")
+	envelopeID := types.MustEventID("019462a0-0000-7000-8000-000000000002")
+	raw, err := json.Marshal(work.RuntimeResultRecordedContent{
+		Result: work.RuntimeResult{
+			EnvelopeID: envelopeID,
+			TaskID:     taskID,
+			Worker:     "local_deterministic",
+			Status:     work.RuntimeStatusPolicyBlocked,
+		},
+		RecordedBy: testActor,
+	})
+	if err != nil {
+		t.Fatalf("marshal runtime result content: %v", err)
+	}
+	content, err := event.UnmarshalContent("work.runtime.result.recorded", raw)
+	if err != nil {
+		t.Fatalf("UnmarshalContent runtime result: %v", err)
+	}
+	runtimeContent, ok := content.(work.RuntimeResultRecordedContent)
+	if !ok {
+		t.Fatalf("content type = %T; want RuntimeResultRecordedContent", content)
+	}
+	if runtimeContent.Result.TaskID != taskID || runtimeContent.Result.Status != work.RuntimeStatusPolicyBlocked {
+		t.Fatalf("runtime content = %#v; want projected task policy block", runtimeContent.Result)
+	}
+}
+
 func TestRuntimeBroker_UnsupportedExternalRuntimeIsRejected(t *testing.T) {
 	s, causes := setupStore(t)
 	ts := newTaskStore(t, s)
@@ -373,6 +429,48 @@ func TestRuntimeBroker_UnsupportedExternalRuntimeIsRejected(t *testing.T) {
 	envelopeCount, resultCount := countRuntimeEvents(t, s)
 	if envelopeCount != 0 || resultCount != 0 {
 		t.Fatalf("runtime events envelopes=%d results=%d; want none for invalid worker", envelopeCount, resultCount)
+	}
+}
+
+func TestRuntimeBroker_PolicyBlockedLifecycleTransitionErrorIsReturnedAfterEvidence(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	task := createRuntimeTask(t, ts, causes)
+	for _, state := range []work.TaskStatus{work.StatusReady, work.StatusRunning} {
+		if err := ts.TransitionTask(testActor, task.ID, state, "prepare runtime", nil, causes, testConv); err != nil {
+			t.Fatalf("TransitionTask to %s: %v", state, err)
+		}
+	}
+
+	injected := errors.New("injected lifecycle append failure")
+	registry := event.DefaultRegistry()
+	work.RegisterWithRegistry(registry)
+	failingTS := work.NewTaskStore(failLifecycleAppendStore{Store: s, err: injected}, event.NewEventFactory(registry), testSigner{})
+	run, err := failingTS.RunLocalRuntime(testActor, runtimeEnvelope(task.ID, t.TempDir(),
+		work.RuntimeCommand{Name: "secret_attempt"},
+	), causes, testConv)
+	if !errors.Is(err, injected) {
+		t.Fatalf("RunLocalRuntime error = %v; want injected lifecycle append failure", err)
+	}
+	if !strings.Contains(err.Error(), "transition task to policy_blocked") {
+		t.Fatalf("RunLocalRuntime error = %q; want lifecycle transition context", err)
+	}
+	if run.Envelope.ID.IsZero() || run.Result.ID.IsZero() {
+		t.Fatalf("RunLocalRuntime returned run = %#v; want recorded evidence IDs despite lifecycle error", run)
+	}
+	if run.Result.Result.Status != work.RuntimeStatusPolicyBlocked {
+		t.Fatalf("runtime status = %q; want policy_blocked", run.Result.Result.Status)
+	}
+	envelopeCount, resultCount := countRuntimeEvents(t, s)
+	if envelopeCount != 1 || resultCount != 1 {
+		t.Fatalf("runtime events envelopes=%d results=%d; want recorded evidence 1,1", envelopeCount, resultCount)
+	}
+	status, statusErr := ts.GetStatus(task.ID)
+	if statusErr != nil {
+		t.Fatalf("GetStatus after failed transition: %v", statusErr)
+	}
+	if status != work.StatusRunning {
+		t.Fatalf("task status = %q; want running after failed lifecycle transition", status)
 	}
 }
 
