@@ -37,19 +37,23 @@ func RequiredReadinessGateLabels() []string {
 
 // Work Graph event types — Layer 1 of the thirteen-product roadmap.
 var (
-	EventTypeTaskCreated         = types.MustEventType("work.task.created")
-	EventTypeTaskAssigned        = types.MustEventType("work.task.assigned")
-	EventTypeTaskCompleted       = types.MustEventType("work.task.completed")
-	EventTypeTaskDependencyAdded = types.MustEventType("work.task.dependency.added")
-	EventTypeTaskPrioritySet     = types.MustEventType("work.task.priority.set")
-	EventTypeTaskComment         = types.MustEventType("work.task.comment")
-	EventTypeTaskUnblocked       = types.MustEventType("work.task.unblocked")
-	EventTypeTaskArtifact        = types.MustEventType("work.task.artifact")
-	EventTypeTaskArtifactWaived  = types.MustEventType("work.task.artifact.waived")
-	EventTypeTaskFactRequired    = types.MustEventType("work.task.fact.required")
-	EventTypePhaseGateDeclared   = types.MustEventType("work.phase.gate.declared")
-	EventTypePhaseGateApproved   = types.MustEventType("work.phase.gate.approved")
-	EventTypePhaseGateRejected   = types.MustEventType("work.phase.gate.rejected")
+	EventTypeTaskCreated               = types.MustEventType("work.task.created")
+	EventTypeTaskAssigned              = types.MustEventType("work.task.assigned")
+	EventTypeTaskCompleted             = types.MustEventType("work.task.completed")
+	EventTypeTaskDependencyAdded       = types.MustEventType("work.task.dependency.added")
+	EventTypeTaskPrioritySet           = types.MustEventType("work.task.priority.set")
+	EventTypeTaskComment               = types.MustEventType("work.task.comment")
+	EventTypeTaskUnblocked             = types.MustEventType("work.task.unblocked")
+	EventTypeTaskArtifact              = types.MustEventType("work.task.artifact")
+	EventTypeTaskArtifactWaived        = types.MustEventType("work.task.artifact.waived")
+	EventTypeTaskFactRequired          = types.MustEventType("work.task.fact.required")
+	EventTypeTaskLifecycleTransitioned = types.MustEventType("work.task.lifecycle.transitioned")
+	EventTypeTaskLinked                = types.MustEventType("work.task.linked")
+	EventTypeTaskVerificationAttached  = types.MustEventType("work.task.verification.attached")
+	EventTypeTaskFailureRepairAttached = types.MustEventType("work.task.failure.repair.attached")
+	EventTypePhaseGateDeclared         = types.MustEventType("work.phase.gate.declared")
+	EventTypePhaseGateApproved         = types.MustEventType("work.phase.gate.approved")
+	EventTypePhaseGateRejected         = types.MustEventType("work.phase.gate.rejected")
 )
 
 // allWorkEventTypes returns all work event types for registration.
@@ -58,8 +62,9 @@ func allWorkEventTypes() []types.EventType {
 		EventTypeTaskCreated, EventTypeTaskAssigned, EventTypeTaskCompleted,
 		EventTypeTaskDependencyAdded, EventTypeTaskPrioritySet, EventTypeTaskComment,
 		EventTypeTaskUnblocked, EventTypeTaskArtifact, EventTypeTaskArtifactWaived,
-		EventTypeTaskFactRequired, EventTypePhaseGateDeclared, EventTypePhaseGateApproved,
-		EventTypePhaseGateRejected,
+		EventTypeTaskFactRequired, EventTypeTaskLifecycleTransitioned, EventTypeTaskLinked,
+		EventTypeTaskVerificationAttached, EventTypeTaskFailureRepairAttached,
+		EventTypePhaseGateDeclared, EventTypePhaseGateApproved, EventTypePhaseGateRejected,
 	}
 }
 
@@ -74,11 +79,18 @@ func (workContent) Accept(event.EventContentVisitor) {}
 // TaskCreatedContent is emitted when a new task is created.
 type TaskCreatedContent struct {
 	workContent
-	Title       string        `json:"Title"`
-	Description string        `json:"Description,omitempty"`
-	CreatedBy   types.ActorID `json:"CreatedBy"`
-	Priority    TaskPriority  `json:"Priority,omitempty"`
-	Workspace   string        `json:"Workspace,omitempty"`
+	Title                  string        `json:"Title"`
+	Description            string        `json:"Description,omitempty"`
+	CreatedBy              types.ActorID `json:"CreatedBy"`
+	Priority               TaskPriority  `json:"Priority,omitempty"`
+	Workspace              string        `json:"Workspace,omitempty"`
+	CanonicalTaskID        string        `json:"CanonicalTaskID,omitempty"`
+	FactoryOrderID         string        `json:"FactoryOrderID,omitempty"`
+	RequirementIDs         []string      `json:"RequirementIDs,omitempty"`
+	AcceptanceCriterionIDs []string      `json:"AcceptanceCriterionIDs,omitempty"`
+	Cell                   string        `json:"Cell,omitempty"`
+	RiskClass              string        `json:"RiskClass,omitempty"`
+	ExpectedOutputs        []string      `json:"ExpectedOutputs,omitempty"`
 }
 
 func (c TaskCreatedContent) EventTypeName() string { return "work.task.created" }
@@ -184,6 +196,66 @@ type TaskFactRequiredContent struct {
 
 func (c TaskFactRequiredContent) EventTypeName() string { return "work.task.fact.required" }
 
+// TaskLifecycleTransitionContent records an explicit v3.9 Task lifecycle move.
+type TaskLifecycleTransitionContent struct {
+	workContent
+	TaskID       types.EventID `json:"TaskID"`
+	FromState    TaskStatus    `json:"FromState"`
+	ToState      TaskStatus    `json:"ToState"`
+	Reason       string        `json:"Reason,omitempty"`
+	EvidenceRefs []string      `json:"EvidenceRefs,omitempty"`
+	SupersededBy string        `json:"SupersededBy,omitempty"`
+	ChangedBy    types.ActorID `json:"ChangedBy"`
+}
+
+func (c TaskLifecycleTransitionContent) EventTypeName() string {
+	return "work.task.lifecycle.transitioned"
+}
+
+// TaskLinkedContent attaches v3.9 Tier 0 product lineage references to a Work task.
+type TaskLinkedContent struct {
+	workContent
+	TaskID                 types.EventID `json:"TaskID"`
+	CanonicalTaskID        string        `json:"CanonicalTaskID,omitempty"`
+	FactoryOrderID         string        `json:"FactoryOrderID,omitempty"`
+	RequirementIDs         []string      `json:"RequirementIDs,omitempty"`
+	AcceptanceCriterionIDs []string      `json:"AcceptanceCriterionIDs,omitempty"`
+	LinkedBy               types.ActorID `json:"LinkedBy"`
+}
+
+func (c TaskLinkedContent) EventTypeName() string { return "work.task.linked" }
+
+// TaskVerificationAttachedContent attaches v3.9 verification evidence refs to a task.
+type TaskVerificationAttachedContent struct {
+	workContent
+	TaskID        types.EventID `json:"TaskID"`
+	TestCaseIDs   []string      `json:"TestCaseIDs,omitempty"`
+	TestRunIDs    []string      `json:"TestRunIDs,omitempty"`
+	GateResultIDs []string      `json:"GateResultIDs,omitempty"`
+	WaiverIDs     []string      `json:"WaiverIDs,omitempty"`
+	Summary       string        `json:"Summary,omitempty"`
+	AttachedBy    types.ActorID `json:"AttachedBy"`
+}
+
+func (c TaskVerificationAttachedContent) EventTypeName() string {
+	return "work.task.verification.attached"
+}
+
+// TaskFailureRepairAttachedContent attaches v3.9 failure and repair refs to a task.
+type TaskFailureRepairAttachedContent struct {
+	workContent
+	TaskID           types.EventID `json:"TaskID"`
+	FailureIDs       []string      `json:"FailureIDs,omitempty"`
+	RepairAttemptIDs []string      `json:"RepairAttemptIDs,omitempty"`
+	WaiverIDs        []string      `json:"WaiverIDs,omitempty"`
+	Summary          string        `json:"Summary,omitempty"`
+	AttachedBy       types.ActorID `json:"AttachedBy"`
+}
+
+func (c TaskFailureRepairAttachedContent) EventTypeName() string {
+	return "work.task.failure.repair.attached"
+}
+
 // PhaseGateDeclaredContent is emitted when a phase needs explicit approval.
 type PhaseGateDeclaredContent struct {
 	workContent
@@ -230,6 +302,10 @@ func RegisterEventTypes() {
 	event.RegisterContentUnmarshaler("work.task.artifact", event.Unmarshal[TaskArtifactContent])
 	event.RegisterContentUnmarshaler("work.task.artifact.waived", event.Unmarshal[TaskArtifactWaivedContent])
 	event.RegisterContentUnmarshaler("work.task.fact.required", event.Unmarshal[TaskFactRequiredContent])
+	event.RegisterContentUnmarshaler("work.task.lifecycle.transitioned", event.Unmarshal[TaskLifecycleTransitionContent])
+	event.RegisterContentUnmarshaler("work.task.linked", event.Unmarshal[TaskLinkedContent])
+	event.RegisterContentUnmarshaler("work.task.verification.attached", event.Unmarshal[TaskVerificationAttachedContent])
+	event.RegisterContentUnmarshaler("work.task.failure.repair.attached", event.Unmarshal[TaskFailureRepairAttachedContent])
 	event.RegisterContentUnmarshaler("work.phase.gate.declared", event.Unmarshal[PhaseGateDeclaredContent])
 	event.RegisterContentUnmarshaler("work.phase.gate.approved", event.Unmarshal[PhaseGateApprovedContent])
 	event.RegisterContentUnmarshaler("work.phase.gate.rejected", event.Unmarshal[PhaseGateRejectedContent])

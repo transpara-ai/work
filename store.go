@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode"
 
+	v39 "github.com/transpara-ai/eventgraph/go/pkg/darkfactory/v39"
 	"github.com/transpara-ai/eventgraph/go/pkg/event"
 	"github.com/transpara-ai/eventgraph/go/pkg/store"
 	"github.com/transpara-ai/eventgraph/go/pkg/types"
@@ -17,26 +18,55 @@ import (
 // artifact nor an artifact waiver. Callers can check with errors.Is.
 var ErrArtifactRequired = errors.New("task has no artifacts; attach an artifact or waive the requirement")
 
+// ErrInvalidLifecycleTransition is returned when a requested v3.9 task state
+// transition is not allowed from the current replayed state.
+var ErrInvalidLifecycleTransition = errors.New("invalid task lifecycle transition")
+
 // TaskStatus represents the current lifecycle state of a task.
 type TaskStatus string
 
 const (
 	// StatusPending means the task has been created but not yet assigned.
 	StatusPending TaskStatus = "pending"
+	// StatusReady means the task is unblocked and has enough Work evidence to be scheduled.
+	StatusReady TaskStatus = "ready"
 	// StatusAssigned means the task has been assigned to an actor but not yet completed.
 	StatusAssigned TaskStatus = "assigned"
+	// StatusRunning means runtime or human production work is in progress.
+	StatusRunning TaskStatus = "running"
+	// StatusBlocked means dependency or evidence prerequisites block the task.
+	StatusBlocked TaskStatus = "blocked"
+	// StatusPolicyBlocked means policy denied or paused the task.
+	StatusPolicyBlocked TaskStatus = "policy_blocked"
+	// StatusVerifying means verification evidence is being gathered.
+	StatusVerifying TaskStatus = "verifying"
+	// StatusFailed means task verification or execution failed.
+	StatusFailed TaskStatus = "failed"
+	// StatusRepairing means a repair attempt is active.
+	StatusRepairing TaskStatus = "repairing"
 	// StatusCompleted means the task has been marked complete.
 	StatusCompleted TaskStatus = "completed"
+	// StatusRejected means the task was explicitly rejected.
+	StatusRejected TaskStatus = "rejected"
+	// StatusSuperseded means the task was replaced by another canonical task record.
+	StatusSuperseded TaskStatus = "superseded"
 )
 
 // Task represents a work item derived from a work.task.created event.
 type Task struct {
-	ID          types.EventID
-	Title       string
-	Description string
-	CreatedBy   types.ActorID
-	Priority    TaskPriority
-	Workspace   string
+	ID                     types.EventID
+	Title                  string
+	Description            string
+	CreatedBy              types.ActorID
+	Priority               TaskPriority
+	Workspace              string
+	CanonicalTaskID        string
+	FactoryOrderID         string
+	RequirementIDs         []string
+	AcceptanceCriterionIDs []string
+	Cell                   string
+	RiskClass              string
+	ExpectedOutputs        []string
 }
 
 // TaskSummary extends Task with computed state fields for efficient list views.
@@ -52,6 +82,58 @@ type TaskSummary struct {
 	Ready         bool
 	MissingGates  []string
 	MissingFacts  []string
+}
+
+// TaskCreateOptions carries v3.9 Tier 0 lineage and scheduling metadata for a task.
+type TaskCreateOptions struct {
+	Title                  string
+	Description            string
+	Workspace              string
+	Priority               TaskPriority
+	CanonicalTaskID        string
+	FactoryOrderID         string
+	RequirementIDs         []string
+	AcceptanceCriterionIDs []string
+	Cell                   string
+	RiskClass              string
+	ExpectedOutputs        []string
+}
+
+// TaskLinkage is the replayed FactoryOrder -> Requirement -> AcceptanceCriterion -> Task linkage.
+type TaskLinkage struct {
+	CanonicalTaskID        string
+	FactoryOrderID         string
+	RequirementIDs         []string
+	AcceptanceCriterionIDs []string
+}
+
+// VerificationEvidence is the replayed verification evidence attached to a task.
+type VerificationEvidence struct {
+	TestCaseIDs   []string
+	TestRunIDs    []string
+	GateResultIDs []string
+	WaiverIDs     []string
+}
+
+// FailureRepairReferences is the replayed failure/repair evidence attached to a task.
+type FailureRepairReferences struct {
+	FailureIDs       []string
+	RepairAttemptIDs []string
+	WaiverIDs        []string
+}
+
+// TaskProjection is the v3.9 replayed operational view of a Work task.
+type TaskProjection struct {
+	Task
+	Status              TaskStatus
+	Assignee            types.ActorID
+	Blocked             bool
+	Ready               bool
+	Linkage             TaskLinkage
+	Verification        VerificationEvidence
+	FailureRepair       FailureRepairReferences
+	SupersededBy        string
+	LastTransitionEvent types.EventID
 }
 
 // ArtifactEvent holds the data from a work.task.artifact event.
@@ -137,18 +219,53 @@ func (ts *TaskStore) Create(
 	convID types.ConversationID,
 	priority ...TaskPriority,
 ) (Task, error) {
+	return ts.create(source, TaskCreateOptions{
+		Title:       title,
+		Description: description,
+		Priority:    firstPriority(priority),
+	}, causes, convID)
+}
+
+// CreateV39 records a Work task with v3.9 Tier 0 lineage references.
+func (ts *TaskStore) CreateV39(
+	source types.ActorID,
+	opts TaskCreateOptions,
+	causes []types.EventID,
+	convID types.ConversationID,
+) (Task, error) {
+	return ts.create(source, opts, causes, convID)
+}
+
+func (ts *TaskStore) create(
+	source types.ActorID,
+	opts TaskCreateOptions,
+	causes []types.EventID,
+	convID types.ConversationID,
+) (Task, error) {
+	title := opts.Title
 	if title == "" {
 		return Task{}, fmt.Errorf("title is required")
 	}
-	p := DefaultPriority
-	if len(priority) > 0 && priority[0] != "" {
-		p = priority[0]
+	if err := validateTaskCreateOptions(opts); err != nil {
+		return Task{}, err
+	}
+	p := opts.Priority
+	if p == "" {
+		p = DefaultPriority
 	}
 	content := TaskCreatedContent{
-		Title:       title,
-		Description: description,
-		CreatedBy:   source,
-		Priority:    p,
+		Title:                  title,
+		Description:            opts.Description,
+		CreatedBy:              source,
+		Priority:               p,
+		Workspace:              opts.Workspace,
+		CanonicalTaskID:        opts.CanonicalTaskID,
+		FactoryOrderID:         opts.FactoryOrderID,
+		RequirementIDs:         cloneStrings(opts.RequirementIDs),
+		AcceptanceCriterionIDs: cloneStrings(opts.AcceptanceCriterionIDs),
+		Cell:                   opts.Cell,
+		RiskClass:              opts.RiskClass,
+		ExpectedOutputs:        cloneStrings(opts.ExpectedOutputs),
 	}
 	ev, err := ts.factory.Create(EventTypeTaskCreated, source, content, causes, convID, ts.store, ts.signer)
 	if err != nil {
@@ -159,11 +276,19 @@ func (ts *TaskStore) Create(
 		return Task{}, fmt.Errorf("append task event: %w", err)
 	}
 	return Task{
-		ID:          stored.ID(),
-		Title:       title,
-		Description: description,
-		CreatedBy:   source,
-		Priority:    p,
+		ID:                     stored.ID(),
+		Title:                  title,
+		Description:            opts.Description,
+		CreatedBy:              source,
+		Priority:               p,
+		Workspace:              opts.Workspace,
+		CanonicalTaskID:        opts.CanonicalTaskID,
+		FactoryOrderID:         opts.FactoryOrderID,
+		RequirementIDs:         cloneStrings(opts.RequirementIDs),
+		AcceptanceCriterionIDs: cloneStrings(opts.AcceptanceCriterionIDs),
+		Cell:                   opts.Cell,
+		RiskClass:              opts.RiskClass,
+		ExpectedOutputs:        cloneStrings(opts.ExpectedOutputs),
 	}, nil
 }
 
@@ -187,12 +312,19 @@ func (ts *TaskStore) List(limit int) ([]Task, error) {
 			p = DefaultPriority
 		}
 		tasks = append(tasks, Task{
-			ID:          ev.ID(),
-			Title:       c.Title,
-			Description: c.Description,
-			CreatedBy:   c.CreatedBy,
-			Priority:    p,
-			Workspace:   c.Workspace,
+			ID:                     ev.ID(),
+			Title:                  c.Title,
+			Description:            c.Description,
+			CreatedBy:              c.CreatedBy,
+			Priority:               p,
+			Workspace:              c.Workspace,
+			CanonicalTaskID:        c.CanonicalTaskID,
+			FactoryOrderID:         c.FactoryOrderID,
+			RequirementIDs:         cloneStrings(c.RequirementIDs),
+			AcceptanceCriterionIDs: cloneStrings(c.AcceptanceCriterionIDs),
+			Cell:                   c.Cell,
+			RiskClass:              c.RiskClass,
+			ExpectedOutputs:        cloneStrings(c.ExpectedOutputs),
 		})
 	}
 	return tasks, nil
@@ -208,36 +340,12 @@ func (ts *TaskStore) CreateInWorkspace(
 	convID types.ConversationID,
 	priority ...TaskPriority,
 ) (Task, error) {
-	if title == "" {
-		return Task{}, fmt.Errorf("title is required")
-	}
-	p := DefaultPriority
-	if len(priority) > 0 && priority[0] != "" {
-		p = priority[0]
-	}
-	content := TaskCreatedContent{
+	return ts.create(source, TaskCreateOptions{
 		Title:       title,
 		Description: description,
-		CreatedBy:   source,
-		Priority:    p,
 		Workspace:   workspace,
-	}
-	ev, err := ts.factory.Create(EventTypeTaskCreated, source, content, causes, convID, ts.store, ts.signer)
-	if err != nil {
-		return Task{}, fmt.Errorf("create task event: %w", err)
-	}
-	stored, err := ts.store.Append(ev)
-	if err != nil {
-		return Task{}, fmt.Errorf("append task event: %w", err)
-	}
-	return Task{
-		ID:          stored.ID(),
-		Title:       title,
-		Description: description,
-		CreatedBy:   source,
-		Priority:    p,
-		Workspace:   workspace,
-	}, nil
+		Priority:    firstPriority(priority),
+	}, causes, convID)
 }
 
 // ListByWorkspace returns up to limit tasks whose Workspace field matches the given workspace.
@@ -261,12 +369,19 @@ func (ts *TaskStore) ListByWorkspace(workspace string, limit int) ([]Task, error
 			p = DefaultPriority
 		}
 		tasks = append(tasks, Task{
-			ID:          ev.ID(),
-			Title:       c.Title,
-			Description: c.Description,
-			CreatedBy:   c.CreatedBy,
-			Priority:    p,
-			Workspace:   c.Workspace,
+			ID:                     ev.ID(),
+			Title:                  c.Title,
+			Description:            c.Description,
+			CreatedBy:              c.CreatedBy,
+			Priority:               p,
+			Workspace:              c.Workspace,
+			CanonicalTaskID:        c.CanonicalTaskID,
+			FactoryOrderID:         c.FactoryOrderID,
+			RequirementIDs:         cloneStrings(c.RequirementIDs),
+			AcceptanceCriterionIDs: cloneStrings(c.AcceptanceCriterionIDs),
+			Cell:                   c.Cell,
+			RiskClass:              c.RiskClass,
+			ExpectedOutputs:        cloneStrings(c.ExpectedOutputs),
 		})
 		if len(tasks) >= limit {
 			break
@@ -354,11 +469,209 @@ func (ts *TaskStore) Complete(
 	return nil
 }
 
+// TransitionTask records a v3.9 lifecycle transition after validating it
+// against the current replayed Work projection.
+func (ts *TaskStore) TransitionTask(
+	source types.ActorID,
+	taskID types.EventID,
+	to TaskStatus,
+	reason string,
+	evidenceRefs []string,
+	causes []types.EventID,
+	convID types.ConversationID,
+) error {
+	return ts.transitionTask(source, taskID, "", to, reason, evidenceRefs, "", causes, convID)
+}
+
+// RejectTask records a terminal rejected lifecycle state.
+func (ts *TaskStore) RejectTask(
+	source types.ActorID,
+	taskID types.EventID,
+	reason string,
+	evidenceRefs []string,
+	causes []types.EventID,
+	convID types.ConversationID,
+) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("rejection reason is required")
+	}
+	return ts.transitionTask(source, taskID, "", StatusRejected, reason, evidenceRefs, "", causes, convID)
+}
+
+// SupersedeTask records a terminal superseded lifecycle state and the canonical replacement.
+func (ts *TaskStore) SupersedeTask(
+	source types.ActorID,
+	taskID types.EventID,
+	supersededBy string,
+	reason string,
+	evidenceRefs []string,
+	causes []types.EventID,
+	convID types.ConversationID,
+) error {
+	if strings.TrimSpace(supersededBy) == "" {
+		return fmt.Errorf("superseded_by is required")
+	}
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("supersession reason is required")
+	}
+	return ts.transitionTask(source, taskID, "", StatusSuperseded, reason, evidenceRefs, supersededBy, causes, convID)
+}
+
+func (ts *TaskStore) transitionTask(
+	source types.ActorID,
+	taskID types.EventID,
+	from TaskStatus,
+	to TaskStatus,
+	reason string,
+	evidenceRefs []string,
+	supersededBy string,
+	causes []types.EventID,
+	convID types.ConversationID,
+) error {
+	if !isKnownTaskStatus(to) {
+		return fmt.Errorf("%w: unknown target state %q", ErrInvalidLifecycleTransition, to)
+	}
+	current, err := ts.GetStatus(taskID)
+	if err != nil {
+		return err
+	}
+	if from != "" && from != current {
+		return fmt.Errorf("%w: current state %q does not match requested from_state %q", ErrInvalidLifecycleTransition, current, from)
+	}
+	if !canTransitionTask(current, to) {
+		return fmt.Errorf("%w: %s -> %s", ErrInvalidLifecycleTransition, current, to)
+	}
+	content := TaskLifecycleTransitionContent{
+		TaskID:       taskID,
+		FromState:    current,
+		ToState:      to,
+		Reason:       strings.TrimSpace(reason),
+		EvidenceRefs: cloneStrings(evidenceRefs),
+		SupersededBy: strings.TrimSpace(supersededBy),
+		ChangedBy:    source,
+	}
+	ev, err := ts.factory.Create(EventTypeTaskLifecycleTransitioned, source, content, causes, convID, ts.store, ts.signer)
+	if err != nil {
+		return fmt.Errorf("create lifecycle transition event: %w", err)
+	}
+	if _, err := ts.store.Append(ev); err != nil {
+		return fmt.Errorf("append lifecycle transition event: %w", err)
+	}
+	return nil
+}
+
+// LinkTask attaches FactoryOrder, Requirement, AcceptanceCriterion, and
+// canonical Task record references to an existing Work task.
+func (ts *TaskStore) LinkTask(
+	source types.ActorID,
+	taskID types.EventID,
+	linkage TaskLinkage,
+	causes []types.EventID,
+	convID types.ConversationID,
+) error {
+	if err := validateTaskLinkage(linkage); err != nil {
+		return err
+	}
+	content := TaskLinkedContent{
+		TaskID:                 taskID,
+		CanonicalTaskID:        strings.TrimSpace(linkage.CanonicalTaskID),
+		FactoryOrderID:         strings.TrimSpace(linkage.FactoryOrderID),
+		RequirementIDs:         cloneStrings(linkage.RequirementIDs),
+		AcceptanceCriterionIDs: cloneStrings(linkage.AcceptanceCriterionIDs),
+		LinkedBy:               source,
+	}
+	ev, err := ts.factory.Create(EventTypeTaskLinked, source, content, causes, convID, ts.store, ts.signer)
+	if err != nil {
+		return fmt.Errorf("create task link event: %w", err)
+	}
+	if _, err := ts.store.Append(ev); err != nil {
+		return fmt.Errorf("append task link event: %w", err)
+	}
+	return nil
+}
+
+// AttachVerificationEvidence attaches TestCase, TestRun, GateResult, and Waiver refs.
+func (ts *TaskStore) AttachVerificationEvidence(
+	source types.ActorID,
+	taskID types.EventID,
+	evidence VerificationEvidence,
+	summary string,
+	causes []types.EventID,
+	convID types.ConversationID,
+) error {
+	if len(evidence.TestCaseIDs) == 0 && len(evidence.TestRunIDs) == 0 && len(evidence.GateResultIDs) == 0 && len(evidence.WaiverIDs) == 0 {
+		return fmt.Errorf("at least one verification evidence reference is required")
+	}
+	if err := validateVerificationEvidence(evidence); err != nil {
+		return err
+	}
+	content := TaskVerificationAttachedContent{
+		TaskID:        taskID,
+		TestCaseIDs:   cloneStrings(evidence.TestCaseIDs),
+		TestRunIDs:    cloneStrings(evidence.TestRunIDs),
+		GateResultIDs: cloneStrings(evidence.GateResultIDs),
+		WaiverIDs:     cloneStrings(evidence.WaiverIDs),
+		Summary:       strings.TrimSpace(summary),
+		AttachedBy:    source,
+	}
+	ev, err := ts.factory.Create(EventTypeTaskVerificationAttached, source, content, causes, convID, ts.store, ts.signer)
+	if err != nil {
+		return fmt.Errorf("create verification evidence event: %w", err)
+	}
+	if _, err := ts.store.Append(ev); err != nil {
+		return fmt.Errorf("append verification evidence event: %w", err)
+	}
+	return nil
+}
+
+// AttachFailureRepairReferences attaches Failure, RepairAttempt, and Waiver refs.
+func (ts *TaskStore) AttachFailureRepairReferences(
+	source types.ActorID,
+	taskID types.EventID,
+	refs FailureRepairReferences,
+	summary string,
+	causes []types.EventID,
+	convID types.ConversationID,
+) error {
+	if len(refs.FailureIDs) == 0 && len(refs.RepairAttemptIDs) == 0 && len(refs.WaiverIDs) == 0 {
+		return fmt.Errorf("at least one failure, repair, or waiver reference is required")
+	}
+	if err := validateFailureRepairReferences(refs); err != nil {
+		return err
+	}
+	content := TaskFailureRepairAttachedContent{
+		TaskID:           taskID,
+		FailureIDs:       cloneStrings(refs.FailureIDs),
+		RepairAttemptIDs: cloneStrings(refs.RepairAttemptIDs),
+		WaiverIDs:        cloneStrings(refs.WaiverIDs),
+		Summary:          strings.TrimSpace(summary),
+		AttachedBy:       source,
+	}
+	ev, err := ts.factory.Create(EventTypeTaskFailureRepairAttached, source, content, causes, convID, ts.store, ts.signer)
+	if err != nil {
+		return fmt.Errorf("create failure repair event: %w", err)
+	}
+	if _, err := ts.store.Append(ev); err != nil {
+		return fmt.Errorf("append failure repair event: %w", err)
+	}
+	return nil
+}
+
 // GetStatus reconstructs the current status of a task by scanning
-// work.task.completed and work.task.assigned events for the given task ID.
-// Returns StatusCompleted if a completed event exists, StatusAssigned if an
-// assigned event exists, and StatusPending otherwise.
+// explicit v3.9 lifecycle events first, then legacy created/assigned/completed,
+// dependency blocked, and readiness evidence as compatibility mappings.
 func (ts *TaskStore) GetStatus(taskID types.EventID) (TaskStatus, error) {
+	transitionPage, err := ts.store.ByType(EventTypeTaskLifecycleTransitioned, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return StatusPending, fmt.Errorf("fetch lifecycle transition events: %w", err)
+	}
+	for _, ev := range transitionPage.Items() {
+		c, ok := ev.Content().(TaskLifecycleTransitionContent)
+		if ok && c.TaskID == taskID {
+			return c.ToState, nil
+		}
+	}
+
 	// Check for completed event first.
 	completedPage, err := ts.store.ByType(EventTypeTaskCompleted, 1000, types.None[types.Cursor]())
 	if err != nil {
@@ -371,6 +684,14 @@ func (ts *TaskStore) GetStatus(taskID types.EventID) (TaskStatus, error) {
 		}
 	}
 
+	blocked, err := ts.IsBlocked(taskID)
+	if err != nil {
+		return StatusPending, err
+	}
+	if blocked {
+		return StatusBlocked, nil
+	}
+
 	// Check for assigned event.
 	assignedPage, err := ts.store.ByType(EventTypeTaskAssigned, 1000, types.None[types.Cursor]())
 	if err != nil {
@@ -381,6 +702,11 @@ func (ts *TaskStore) GetStatus(taskID types.EventID) (TaskStatus, error) {
 		if ok && c.TaskID == taskID {
 			return StatusAssigned, nil
 		}
+	}
+
+	readiness, err := ts.Readiness(taskID)
+	if err == nil && readiness.Ready {
+		return StatusReady, nil
 	}
 
 	return StatusPending, nil
@@ -461,12 +787,19 @@ func (ts *TaskStore) DirectChildren(parentID types.EventID) ([]ChildTask, error)
 		}
 		children = append(children, ChildTask{
 			Task: Task{
-				ID:          created.ID(),
-				Title:       cc.Title,
-				Description: cc.Description,
-				CreatedBy:   cc.CreatedBy,
-				Priority:    p,
-				Workspace:   cc.Workspace,
+				ID:                     created.ID(),
+				Title:                  cc.Title,
+				Description:            cc.Description,
+				CreatedBy:              cc.CreatedBy,
+				Priority:               p,
+				Workspace:              cc.Workspace,
+				CanonicalTaskID:        cc.CanonicalTaskID,
+				FactoryOrderID:         cc.FactoryOrderID,
+				RequirementIDs:         cloneStrings(cc.RequirementIDs),
+				AcceptanceCriterionIDs: cloneStrings(cc.AcceptanceCriterionIDs),
+				Cell:                   cc.Cell,
+				RiskClass:              cc.RiskClass,
+				ExpectedOutputs:        cloneStrings(cc.ExpectedOutputs),
 			},
 			ParentID:            parentID,
 			DependencyEventID:   ev.ID(),
@@ -717,11 +1050,19 @@ func (ts *TaskStore) GetByAssignee(assignee types.ActorID) ([]Task, error) {
 			cp = DefaultPriority
 		}
 		tasks = append(tasks, Task{
-			ID:          created.ID(),
-			Title:       cc.Title,
-			Description: cc.Description,
-			CreatedBy:   cc.CreatedBy,
-			Priority:    cp,
+			ID:                     created.ID(),
+			Title:                  cc.Title,
+			Description:            cc.Description,
+			CreatedBy:              cc.CreatedBy,
+			Priority:               cp,
+			Workspace:              cc.Workspace,
+			CanonicalTaskID:        cc.CanonicalTaskID,
+			FactoryOrderID:         cc.FactoryOrderID,
+			RequirementIDs:         cloneStrings(cc.RequirementIDs),
+			AcceptanceCriterionIDs: cloneStrings(cc.AcceptanceCriterionIDs),
+			Cell:                   cc.Cell,
+			RiskClass:              cc.RiskClass,
+			ExpectedOutputs:        cloneStrings(cc.ExpectedOutputs),
 		})
 	}
 	return tasks, nil
@@ -875,11 +1216,9 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 
 	summaries := make([]TaskSummary, 0, len(tasks))
 	for _, t := range tasks {
-		status := StatusPending
-		if completedIDs[t.ID] {
-			status = StatusCompleted
-		} else if _, assigned := assigneeMap[t.ID]; assigned {
-			status = StatusAssigned
+		status, err := ts.GetStatus(t.ID)
+		if err != nil {
+			return nil, err
 		}
 		missing := missingRequiredGates(gatesByTask[t.ID])
 		_, missingFacts, err := ts.factReadiness(t.ID)
@@ -909,6 +1248,81 @@ func (ts *TaskStore) ListSummaries(limit int) ([]TaskSummary, error) {
 		return nil, err
 	}
 	return ts.batchStatus(tasks)
+}
+
+// ProjectTask rebuilds the v3.9 Work projection for a task from append-only events.
+func (ts *TaskStore) ProjectTask(taskID types.EventID) (TaskProjection, error) {
+	ev, err := ts.store.Get(taskID)
+	if err != nil {
+		return TaskProjection{}, fmt.Errorf("get task event: %w", err)
+	}
+	created, ok := ev.Content().(TaskCreatedContent)
+	if !ok {
+		return TaskProjection{}, fmt.Errorf("event %s is not a work task", taskID.Value())
+	}
+	p := created.Priority
+	if p == "" {
+		p = DefaultPriority
+	}
+	task := Task{
+		ID:                     ev.ID(),
+		Title:                  created.Title,
+		Description:            created.Description,
+		CreatedBy:              created.CreatedBy,
+		Priority:               p,
+		Workspace:              created.Workspace,
+		CanonicalTaskID:        created.CanonicalTaskID,
+		FactoryOrderID:         created.FactoryOrderID,
+		RequirementIDs:         cloneStrings(created.RequirementIDs),
+		AcceptanceCriterionIDs: cloneStrings(created.AcceptanceCriterionIDs),
+		Cell:                   created.Cell,
+		RiskClass:              created.RiskClass,
+		ExpectedOutputs:        cloneStrings(created.ExpectedOutputs),
+	}
+	status, err := ts.GetStatus(taskID)
+	if err != nil {
+		return TaskProjection{}, err
+	}
+	readiness, err := ts.Readiness(taskID)
+	if err != nil {
+		return TaskProjection{}, err
+	}
+	blocked, err := ts.IsBlocked(taskID)
+	if err != nil {
+		return TaskProjection{}, err
+	}
+	linkage, err := ts.projectLinkage(taskID, task)
+	if err != nil {
+		return TaskProjection{}, err
+	}
+	verification, err := ts.projectVerification(taskID)
+	if err != nil {
+		return TaskProjection{}, err
+	}
+	failureRepair, err := ts.projectFailureRepair(taskID)
+	if err != nil {
+		return TaskProjection{}, err
+	}
+	assignee, err := ts.projectAssignee(taskID)
+	if err != nil {
+		return TaskProjection{}, err
+	}
+	lastTransition, supersededBy, err := ts.projectLatestTransition(taskID)
+	if err != nil {
+		return TaskProjection{}, err
+	}
+	return TaskProjection{
+		Task:                task,
+		Status:              status,
+		Assignee:            assignee,
+		Blocked:             blocked || status == StatusBlocked || status == StatusPolicyBlocked,
+		Ready:               status == StatusReady || (readiness.Ready && status == StatusRepairing),
+		Linkage:             linkage,
+		Verification:        verification,
+		FailureRepair:       failureRepair,
+		SupersededBy:        supersededBy,
+		LastTransitionEvent: lastTransition,
+	}, nil
 }
 
 // AddComment records a work.task.comment event on the graph, attaching a
@@ -1233,6 +1647,292 @@ func (ts *TaskStore) GetArtifactBody(artifactID types.EventID) (string, bool) {
 		return "", false
 	}
 	return c.Body, true
+}
+
+func firstPriority(priority []TaskPriority) TaskPriority {
+	if len(priority) == 0 {
+		return DefaultPriority
+	}
+	return priority[0]
+}
+
+func cloneStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func validateTaskCreateOptions(opts TaskCreateOptions) error {
+	linkage := TaskLinkage{
+		CanonicalTaskID:        opts.CanonicalTaskID,
+		FactoryOrderID:         opts.FactoryOrderID,
+		RequirementIDs:         opts.RequirementIDs,
+		AcceptanceCriterionIDs: opts.AcceptanceCriterionIDs,
+	}
+	if linkage.CanonicalTaskID == "" && linkage.FactoryOrderID == "" && len(linkage.RequirementIDs) == 0 && len(linkage.AcceptanceCriterionIDs) == 0 {
+		return nil
+	}
+	if err := validateTaskLinkage(linkage); err != nil {
+		return err
+	}
+	if strings.TrimSpace(opts.Cell) == "" {
+		return fmt.Errorf("cell is required for v3.9 task linkage")
+	}
+	if strings.TrimSpace(opts.RiskClass) == "" {
+		return fmt.Errorf("risk_class is required for v3.9 task linkage")
+	}
+	if !isRiskClass(opts.RiskClass) {
+		return fmt.Errorf("risk_class must be one of low, medium, high, critical")
+	}
+	return nil
+}
+
+func validateTaskLinkage(linkage TaskLinkage) error {
+	if strings.TrimSpace(linkage.CanonicalTaskID) != "" {
+		if err := validateV39Reference(v39.TypeTask, "canonical_task_id", strings.TrimSpace(linkage.CanonicalTaskID)); err != nil {
+			return err
+		}
+	}
+	if err := validateV39Reference(v39.TypeFactoryOrder, "factory_order_id", strings.TrimSpace(linkage.FactoryOrderID)); err != nil {
+		return err
+	}
+	if len(linkage.RequirementIDs) == 0 {
+		return fmt.Errorf("at least one requirement_id is required")
+	}
+	if len(linkage.AcceptanceCriterionIDs) == 0 {
+		return fmt.Errorf("at least one acceptance_criterion_id is required")
+	}
+	if err := validateV39References(v39.TypeRequirement, "requirement_ids", linkage.RequirementIDs); err != nil {
+		return err
+	}
+	return validateV39References(v39.TypeAcceptanceCriterion, "acceptance_criterion_ids", linkage.AcceptanceCriterionIDs)
+}
+
+func validateVerificationEvidence(evidence VerificationEvidence) error {
+	if err := validateV39References(v39.TypeTestCase, "test_case_ids", evidence.TestCaseIDs); err != nil {
+		return err
+	}
+	if err := validateV39References(v39.TypeTestRun, "test_run_ids", evidence.TestRunIDs); err != nil {
+		return err
+	}
+	if err := validateV39References(v39.TypeGateResult, "gate_result_ids", evidence.GateResultIDs); err != nil {
+		return err
+	}
+	return validateV39References(v39.TypeWaiver, "waiver_ids", evidence.WaiverIDs)
+}
+
+func validateFailureRepairReferences(refs FailureRepairReferences) error {
+	if err := validateV39References(v39.TypeFailure, "failure_ids", refs.FailureIDs); err != nil {
+		return err
+	}
+	if err := validateV39References(v39.TypeRepairAttempt, "repair_attempt_ids", refs.RepairAttemptIDs); err != nil {
+		return err
+	}
+	return validateV39References(v39.TypeWaiver, "waiver_ids", refs.WaiverIDs)
+}
+
+func validateV39References(recordType, field string, values []string) error {
+	for _, value := range values {
+		if err := validateV39Reference(recordType, field, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateV39Reference(recordType, field, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("%s is required", field)
+	}
+	prefixByType := map[string]string{
+		v39.TypeFactoryOrder:        "fo_",
+		v39.TypeRequirement:         "req_",
+		v39.TypeAcceptanceCriterion: "ac_",
+		v39.TypeTask:                "tsk_",
+		v39.TypeTestCase:            "tc_",
+		v39.TypeTestRun:             "tr_",
+		v39.TypeGateResult:          "gate_",
+		v39.TypeFailure:             "fail_",
+		v39.TypeRepairAttempt:       "rep_",
+	}
+	if prefix := prefixByType[recordType]; prefix != "" && !strings.HasPrefix(value, prefix) {
+		return fmt.Errorf("%s %q must reference %s with prefix %q", field, value, recordType, prefix)
+	}
+	return nil
+}
+
+func isRiskClass(value string) bool {
+	switch value {
+	case "low", "medium", "high", "critical":
+		return true
+	default:
+		return false
+	}
+}
+
+func isKnownTaskStatus(status TaskStatus) bool {
+	switch status {
+	case StatusPending, StatusReady, StatusAssigned, StatusRunning, StatusBlocked, StatusPolicyBlocked,
+		StatusVerifying, StatusFailed, StatusRepairing, StatusCompleted, StatusRejected, StatusSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+func canTransitionTask(from, to TaskStatus) bool {
+	if from == to {
+		return false
+	}
+	if from == StatusCompleted || from == StatusRejected || from == StatusSuperseded {
+		return false
+	}
+	switch from {
+	case StatusPending:
+		return to == StatusReady || to == StatusAssigned || to == StatusBlocked || to == StatusPolicyBlocked || to == StatusRejected || to == StatusSuperseded
+	case StatusReady:
+		return to == StatusAssigned || to == StatusRunning || to == StatusBlocked || to == StatusPolicyBlocked || to == StatusRejected || to == StatusSuperseded
+	case StatusAssigned:
+		return to == StatusRunning || to == StatusBlocked || to == StatusPolicyBlocked || to == StatusVerifying || to == StatusRejected || to == StatusSuperseded
+	case StatusRunning:
+		return to == StatusVerifying || to == StatusFailed || to == StatusBlocked || to == StatusPolicyBlocked || to == StatusCompleted || to == StatusRejected || to == StatusSuperseded
+	case StatusBlocked:
+		return to == StatusReady || to == StatusAssigned || to == StatusRunning || to == StatusPolicyBlocked || to == StatusRejected || to == StatusSuperseded
+	case StatusPolicyBlocked:
+		return to == StatusReady || to == StatusBlocked || to == StatusRejected || to == StatusSuperseded
+	case StatusVerifying:
+		return to == StatusCompleted || to == StatusFailed || to == StatusRepairing || to == StatusRejected || to == StatusSuperseded
+	case StatusFailed:
+		return to == StatusRepairing || to == StatusRejected || to == StatusSuperseded
+	case StatusRepairing:
+		return to == StatusVerifying || to == StatusFailed || to == StatusPolicyBlocked || to == StatusRejected || to == StatusSuperseded
+	default:
+		return false
+	}
+}
+
+func (ts *TaskStore) projectAssignee(taskID types.EventID) (types.ActorID, error) {
+	page, err := ts.store.ByType(EventTypeTaskAssigned, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return types.ActorID{}, fmt.Errorf("fetch assigned events: %w", err)
+	}
+	for _, ev := range page.Items() {
+		if c, ok := ev.Content().(TaskAssignedContent); ok && c.TaskID == taskID {
+			return c.AssignedTo, nil
+		}
+	}
+	return types.ActorID{}, nil
+}
+
+func (ts *TaskStore) projectLatestTransition(taskID types.EventID) (types.EventID, string, error) {
+	page, err := ts.store.ByType(EventTypeTaskLifecycleTransitioned, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return types.EventID{}, "", fmt.Errorf("fetch lifecycle transition events: %w", err)
+	}
+	for _, ev := range page.Items() {
+		if c, ok := ev.Content().(TaskLifecycleTransitionContent); ok && c.TaskID == taskID {
+			return ev.ID(), c.SupersededBy, nil
+		}
+	}
+	return types.EventID{}, "", nil
+}
+
+func (ts *TaskStore) projectLinkage(taskID types.EventID, task Task) (TaskLinkage, error) {
+	linkage := TaskLinkage{
+		CanonicalTaskID:        task.CanonicalTaskID,
+		FactoryOrderID:         task.FactoryOrderID,
+		RequirementIDs:         cloneStrings(task.RequirementIDs),
+		AcceptanceCriterionIDs: cloneStrings(task.AcceptanceCriterionIDs),
+	}
+	page, err := ts.store.ByType(EventTypeTaskLinked, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return TaskLinkage{}, fmt.Errorf("fetch task link events: %w", err)
+	}
+	for _, ev := range page.Items() {
+		c, ok := ev.Content().(TaskLinkedContent)
+		if !ok || c.TaskID != taskID {
+			continue
+		}
+		if c.CanonicalTaskID != "" {
+			linkage.CanonicalTaskID = c.CanonicalTaskID
+		}
+		if c.FactoryOrderID != "" {
+			linkage.FactoryOrderID = c.FactoryOrderID
+		}
+		if len(c.RequirementIDs) > 0 {
+			linkage.RequirementIDs = cloneStrings(c.RequirementIDs)
+		}
+		if len(c.AcceptanceCriterionIDs) > 0 {
+			linkage.AcceptanceCriterionIDs = cloneStrings(c.AcceptanceCriterionIDs)
+		}
+		break
+	}
+	return linkage, nil
+}
+
+func (ts *TaskStore) projectVerification(taskID types.EventID) (VerificationEvidence, error) {
+	page, err := ts.store.ByType(EventTypeTaskVerificationAttached, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return VerificationEvidence{}, fmt.Errorf("fetch verification evidence events: %w", err)
+	}
+	var out VerificationEvidence
+	seenTestCases := map[string]bool{}
+	seenTestRuns := map[string]bool{}
+	seenGateResults := map[string]bool{}
+	seenWaivers := map[string]bool{}
+	for _, ev := range page.Items() {
+		c, ok := ev.Content().(TaskVerificationAttachedContent)
+		if !ok || c.TaskID != taskID {
+			continue
+		}
+		out.TestCaseIDs = appendUniqueStrings(out.TestCaseIDs, c.TestCaseIDs, seenTestCases)
+		out.TestRunIDs = appendUniqueStrings(out.TestRunIDs, c.TestRunIDs, seenTestRuns)
+		out.GateResultIDs = appendUniqueStrings(out.GateResultIDs, c.GateResultIDs, seenGateResults)
+		out.WaiverIDs = appendUniqueStrings(out.WaiverIDs, c.WaiverIDs, seenWaivers)
+	}
+	return out, nil
+}
+
+func (ts *TaskStore) projectFailureRepair(taskID types.EventID) (FailureRepairReferences, error) {
+	page, err := ts.store.ByType(EventTypeTaskFailureRepairAttached, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return FailureRepairReferences{}, fmt.Errorf("fetch failure repair events: %w", err)
+	}
+	var out FailureRepairReferences
+	seenFailures := map[string]bool{}
+	seenRepairs := map[string]bool{}
+	seenWaivers := map[string]bool{}
+	for _, ev := range page.Items() {
+		c, ok := ev.Content().(TaskFailureRepairAttachedContent)
+		if !ok || c.TaskID != taskID {
+			continue
+		}
+		out.FailureIDs = appendUniqueStrings(out.FailureIDs, c.FailureIDs, seenFailures)
+		out.RepairAttemptIDs = appendUniqueStrings(out.RepairAttemptIDs, c.RepairAttemptIDs, seenRepairs)
+		out.WaiverIDs = appendUniqueStrings(out.WaiverIDs, c.WaiverIDs, seenWaivers)
+	}
+	return out, nil
+}
+
+func appendUniqueStrings(dst []string, src []string, seen map[string]bool) []string {
+	for _, value := range src {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		dst = append(dst, value)
+	}
+	return dst
 }
 
 // HasWaiver returns true if a work.task.artifact.waived event exists for the task.
