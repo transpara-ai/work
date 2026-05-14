@@ -1068,7 +1068,7 @@ func (sv *server) listTasks(w http.ResponseWriter, r *http.Request) {
 	if openOnly {
 		filtered := make([]work.TaskSummary, 0, len(summaries))
 		for _, s := range summaries {
-			if s.LegacyStatus != work.LegacyStatusCompleted && !s.Blocked {
+			if s.LegacyStatus != work.LegacyStatusCompleted && !isTerminalTaskStatus(s.Status) && !s.Blocked {
 				filtered = append(filtered, s)
 			}
 		}
@@ -1121,6 +1121,15 @@ func (sv *server) listTasks(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": items})
+}
+
+func isTerminalTaskStatus(status work.TaskStatus) bool {
+	switch status {
+	case work.StatusCertified, work.StatusRejected, work.StatusSuperseded:
+		return true
+	default:
+		return false
+	}
 }
 
 func (sv *server) declarePhaseGate(w http.ResponseWriter, r *http.Request) {

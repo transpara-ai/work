@@ -926,6 +926,13 @@ func (ts *TaskStore) SupersedeDuplicateDirectChildren(
 		if status == LegacyStatusCompleted {
 			continue
 		}
+		canonicalStatus, err := ts.GetStatus(child.ID)
+		if err != nil {
+			return superseded, fmt.Errorf("get duplicate canonical status: %w", err)
+		}
+		if isTerminalTaskStatus(canonicalStatus) {
+			continue
+		}
 		body := fmt.Sprintf("Superseded duplicate child task. Canonical task: %s (%s). Parent task: %s.", canonical.ID.Value(), canonical.Title, parentID.Value())
 		if err := ts.AddComment(child.ID, body, source, causes, convID); err != nil {
 			return superseded, fmt.Errorf("comment duplicate child: %w", err)
@@ -1834,6 +1841,7 @@ func validateV39Reference(recordType, field, value string) error {
 		v39.TypeGateResult:          "gate_",
 		v39.TypeFailure:             "fail_",
 		v39.TypeRepairAttempt:       "rep_",
+		v39.TypeWaiver:              "waiver_",
 	}
 	if prefix := prefixByType[recordType]; prefix != "" && !strings.HasPrefix(value, prefix) {
 		return fmt.Errorf("%s %q must reference %s with prefix %q", field, value, recordType, prefix)
@@ -1855,6 +1863,15 @@ func isKnownTaskStatus(status TaskStatus) bool {
 	case StatusCreated, StatusReady, StatusRunning, StatusBlocked, StatusFailed, StatusRepairRequired,
 		StatusRepairRunning, StatusRepaired, StatusVerificationRunning, StatusVerified, StatusCertified,
 		StatusRejected, StatusSuperseded, StatusPolicyBlocked:
+		return true
+	default:
+		return false
+	}
+}
+
+func isTerminalTaskStatus(status TaskStatus) bool {
+	switch status {
+	case StatusCertified, StatusRejected, StatusSuperseded:
 		return true
 	default:
 		return false

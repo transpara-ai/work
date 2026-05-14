@@ -467,6 +467,18 @@ func TestTaskStoreV39_AttachEvidenceRequiresReferences(t *testing.T) {
 	if err := ts.AttachVerificationEvidence(testActor, task.ID, work.VerificationEvidence{TestRunIDs: []string{"not_a_test_run"}}, "", causes, testConv); err == nil {
 		t.Fatal("AttachVerificationEvidence accepted invalid test run prefix")
 	}
+	if err := ts.AttachVerificationEvidence(testActor, task.ID, work.VerificationEvidence{WaiverIDs: []string{"not_a_waiver"}}, "", causes, testConv); err == nil {
+		t.Fatal("AttachVerificationEvidence accepted invalid waiver prefix")
+	}
+	if err := ts.AttachFailureRepairReferences(testActor, task.ID, work.FailureRepairReferences{WaiverIDs: []string{"not_a_waiver"}}, "", causes, testConv); err == nil {
+		t.Fatal("AttachFailureRepairReferences accepted invalid waiver prefix")
+	}
+	if err := ts.AttachVerificationEvidence(testActor, task.ID, work.VerificationEvidence{WaiverIDs: []string{"waiver_verification"}}, "", causes, testConv); err != nil {
+		t.Fatalf("AttachVerificationEvidence rejected valid waiver prefix: %v", err)
+	}
+	if err := ts.AttachFailureRepairReferences(testActor, task.ID, work.FailureRepairReferences{WaiverIDs: []string{"waiver_repair"}}, "", causes, testConv); err != nil {
+		t.Fatalf("AttachFailureRepairReferences rejected valid waiver prefix: %v", err)
+	}
 }
 
 func TestTaskStoreV39_ProjectTaskReplayCorrectnessAcrossStoreInstances(t *testing.T) {

@@ -196,6 +196,78 @@ func TestTaskStore_SupersedeDuplicateDirectChildren(t *testing.T) {
 	}
 }
 
+func TestTaskStore_SupersedeDuplicateDirectChildrenSkipsCanonicalTerminalChildren(t *testing.T) {
+	for _, terminal := range []work.TaskStatus{work.StatusCertified, work.StatusRejected, work.StatusSuperseded} {
+		t.Run(string(terminal), func(t *testing.T) {
+			s, causes := setupStore(t)
+			ts := newTaskStore(t, s)
+
+			parent, err := ts.Create(testActor, "Investigate terminal duplicates", "", causes, testConv)
+			if err != nil {
+				t.Fatalf("Create parent: %v", err)
+			}
+			canonical, err := ts.Create(testActor, "Review terminal state", "", causes, testConv)
+			if err != nil {
+				t.Fatalf("Create canonical: %v", err)
+			}
+			duplicate, err := ts.Create(testActor, "Review terminal state", "", causes, testConv)
+			if err != nil {
+				t.Fatalf("Create duplicate: %v", err)
+			}
+			if err := ts.AddDependency(testActor, canonical.ID, parent.ID, causes, testConv); err != nil {
+				t.Fatalf("AddDependency canonical: %v", err)
+			}
+			if err := ts.AddDependency(testActor, duplicate.ID, parent.ID, causes, testConv); err != nil {
+				t.Fatalf("AddDependency duplicate: %v", err)
+			}
+
+			switch terminal {
+			case work.StatusCertified:
+				for _, state := range []work.TaskStatus{work.StatusReady, work.StatusRunning, work.StatusVerified, work.StatusCertified} {
+					if err := ts.TransitionTask(testActor, duplicate.ID, state, "advance", nil, causes, testConv); err != nil {
+						t.Fatalf("TransitionTask to %s: %v", state, err)
+					}
+				}
+			case work.StatusRejected:
+				for _, state := range []work.TaskStatus{work.StatusReady, work.StatusRunning, work.StatusVerified} {
+					if err := ts.TransitionTask(testActor, duplicate.ID, state, "advance", nil, causes, testConv); err != nil {
+						t.Fatalf("TransitionTask to %s: %v", state, err)
+					}
+				}
+				if err := ts.RejectTask(testActor, duplicate.ID, "not accepted", nil, causes, testConv); err != nil {
+					t.Fatalf("RejectTask: %v", err)
+				}
+			case work.StatusSuperseded:
+				if err := ts.SupersedeTask(testActor, duplicate.ID, "tsk_canonical_terminal_duplicate", "duplicate", nil, causes, testConv); err != nil {
+					t.Fatalf("SupersedeTask: %v", err)
+				}
+			}
+
+			superseded, err := ts.SupersedeDuplicateDirectChildren(parent.ID, testActor, causes, testConv)
+			if err != nil {
+				t.Fatalf("SupersedeDuplicateDirectChildren: %v", err)
+			}
+			if len(superseded) != 0 {
+				t.Fatalf("superseded len = %d; want 0", len(superseded))
+			}
+			legacyStatus, err := ts.GetCompatibilityStatus(duplicate.ID)
+			if err != nil {
+				t.Fatalf("GetCompatibilityStatus duplicate: %v", err)
+			}
+			if legacyStatus == work.LegacyStatusCompleted {
+				t.Fatal("canonically terminal duplicate child should not be legacy-completed")
+			}
+			status, err := ts.GetStatus(duplicate.ID)
+			if err != nil {
+				t.Fatalf("GetStatus duplicate: %v", err)
+			}
+			if status != terminal {
+				t.Fatalf("canonical status = %q; want %q", status, terminal)
+			}
+		})
+	}
+}
+
 func TestTaskStore_List_RespectsLimit(t *testing.T) {
 	s, causes := setupStore(t)
 	ts := newTaskStore(t, s)
