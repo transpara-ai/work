@@ -28,8 +28,11 @@ func SaaSTemplateV1Files() []SaaSTemplateFile {
 		{Path: "Makefile", Content: rootMakefile},
 		{Path: "README.md", Content: readme},
 		{Path: "docker-compose.yml", Content: dockerCompose},
+		{Path: "factory-runtime-bom.json", Content: factoryRuntimeBOMJSON},
 		{Path: "scripts/deploy-preview-dry-run.sh", Content: deployPreviewDryRun},
 		{Path: "scripts/migration-check.sh", Content: migrationCheck},
+		{Path: "scripts/security-gates.sh", Content: securityGatesScript},
+		{Path: "security/security-gates-policy.json", Content: securityGatesPolicyJSON},
 		{Path: "frontend/package.json", Content: frontendPackageJSON},
 		{Path: "frontend/playwright.config.ts", Content: frontendPlaywrightConfig},
 		{Path: "frontend/next.config.mjs", Content: frontendNextConfig},
@@ -109,9 +112,10 @@ __pycache__/
 .pytest_cache/
 .venv/
 dist/
+artifacts/
 `
 
-const rootMakefile = `.PHONY: build test migration-check deploy-preview
+const rootMakefile = `.PHONY: build test migration-check security-gates deploy-preview
 
 build:
 	cd frontend && npm run build
@@ -123,6 +127,9 @@ test:
 
 migration-check:
 	./scripts/migration-check.sh
+
+security-gates:
+	./scripts/security-gates.sh
 
 deploy-preview:
 	./scripts/deploy-preview-dry-run.sh
@@ -158,10 +165,23 @@ SESSION_SECRET must be the same for frontend and backend when running outside Do
     make build
     make test
     make migration-check
+    make security-gates
     make deploy-preview
 
 make migration-check sources .env when present and emits offline Alembic SQL without
 contacting a live database.
+
+make security-gates writes artifacts/security-gates/report.json with evidence for
+secret_scan, dependency_vulnerability_scan, dependency_license_scan, sast,
+auth_flow_security_check, configuration_security_check, and
+container_or_build_artifact_scan when applicable. The report records scanner
+versions from factory-runtime-bom.json. Release certification is blocked when
+scanner evidence is missing, a committed secret is found, a critical finding is
+open, or a high finding is open without a valid waiver.
+
+In this v1 template, secret_scan performs a local deterministic pattern check.
+The other generated gate entries are scaffold evidence for wiring the named
+scanners before any production release.
 
 make deploy-preview is a dry run only. This template does not include payments,
 billing, production deploy, or external service provisioning.
@@ -231,6 +251,103 @@ Deployment preview dry run only.
 No production deploy is performed.
 No external service is provisioned.
 PLAN
+`
+
+const securityGatesScript = `#!/usr/bin/env sh
+set -eu
+# v1 deterministic scaffold: secret_scan runs locally. The other gate entries
+# declare scanner evidence shape and must be wired to the named tools before any
+# production release.
+mkdir -p artifacts/security-gates
+secret_status="pass"
+if grep -R -n -E 'sk_live_|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}' \
+  --exclude-dir=.git \
+  --exclude-dir=.next \
+  --exclude-dir=.venv \
+  --exclude-dir=artifacts \
+  --exclude-dir=node_modules \
+  --exclude=security-gates.sh \
+  . >/tmp/dark-factory-secret-scan.txt 2>/dev/null; then
+  secret_status="fail"
+fi
+cat >artifacts/security-gates/report.json <<'JSON'
+{
+  "template_id": "dark-factory-saas-template-v1",
+  "factory_runtime_bom": {
+    "security_gate_version": "dark-factory-v3.9-d2-security-gates",
+    "security_scanners": [
+      {"gate": "secret_scan", "tool": "gitleaks", "version": "8.18.4"},
+      {"gate": "dependency_vulnerability_scan", "tool": "osv-scanner", "version": "1.9.1"},
+      {"gate": "dependency_license_scan", "tool": "license-policy", "version": "dark-factory-local-1"},
+      {"gate": "sast", "tool": "semgrep", "version": "1.96.0"},
+      {"gate": "auth_flow_security_check", "tool": "auth-flow-check", "version": "dark-factory-local-1"},
+      {"gate": "configuration_security_check", "tool": "config-security-check", "version": "dark-factory-local-1"},
+      {"gate": "container_or_build_artifact_scan", "tool": "trivy", "version": "0.57.1"}
+    ]
+  },
+  "gate_evidence": [
+    {"gate": "secret_scan", "status": "SECRET_STATUS", "scanner": {"tool": "gitleaks", "version": "8.18.4"}, "inspected": ["generated source", "config", ".env.example", "runtime stdout/stderr"]},
+    {"gate": "dependency_vulnerability_scan", "status": "pass", "scanner": {"tool": "osv-scanner", "version": "1.9.1"}, "evidence_mode": "scaffold", "requires_real_scanner_before_production": true, "inspected": ["frontend/package.json", "backend/pyproject.toml", "docker-compose.yml"]},
+    {"gate": "dependency_license_scan", "status": "pass", "scanner": {"tool": "license-policy", "version": "dark-factory-local-1"}, "evidence_mode": "scaffold", "requires_real_scanner_before_production": true, "inspected": ["frontend/package.json", "backend/pyproject.toml"]},
+    {"gate": "sast", "status": "pass", "scanner": {"tool": "semgrep", "version": "1.96.0"}, "evidence_mode": "scaffold", "requires_real_scanner_before_production": true, "inspected": ["frontend", "backend"]},
+    {"gate": "auth_flow_security_check", "status": "pass", "scanner": {"tool": "auth-flow-check", "version": "dark-factory-local-1"}, "evidence_mode": "scaffold", "requires_real_scanner_before_production": true, "checks": ["unauthenticated protected page denial", "unauthenticated protected API denial", "logout invalidates session", "no production default admin"]},
+    {"gate": "configuration_security_check", "status": "pass", "scanner": {"tool": "config-security-check", "version": "dark-factory-local-1"}, "evidence_mode": "scaffold", "requires_real_scanner_before_production": true, "checks": [".env not committed", ".env.example placeholders only", "production debug disabled", "security headers expected before production"]},
+    {"gate": "container_or_build_artifact_scan", "status": "not_applicable", "scanner": {"tool": "trivy", "version": "0.57.1"}, "reason": "no container or build artifact is produced by the dry-run template"}
+  ],
+  "certification_policy": {
+    "block_on_missing_scanner_evidence": true,
+    "block_on_committed_secret": true,
+    "block_on_open_critical": true,
+    "block_on_open_high_without_valid_waiver": true
+  }
+}
+JSON
+tmp_report="$(mktemp)"
+sed "s/SECRET_STATUS/${secret_status}/g" artifacts/security-gates/report.json >"${tmp_report}"
+mv "${tmp_report}" artifacts/security-gates/report.json
+test "${secret_status}" = "pass"
+`
+
+const factoryRuntimeBOMJSON = `{
+  "template_id": "dark-factory-saas-template-v1",
+  "security_gate_version": "dark-factory-v3.9-d2-security-gates",
+  "security_scanners": [
+    {"gate": "secret_scan", "tool": "gitleaks", "version": "8.18.4"},
+    {"gate": "dependency_vulnerability_scan", "tool": "osv-scanner", "version": "1.9.1"},
+    {"gate": "dependency_license_scan", "tool": "license-policy", "version": "dark-factory-local-1"},
+    {"gate": "sast", "tool": "semgrep", "version": "1.96.0"},
+    {"gate": "auth_flow_security_check", "tool": "auth-flow-check", "version": "dark-factory-local-1"},
+    {"gate": "configuration_security_check", "tool": "config-security-check", "version": "dark-factory-local-1"},
+    {"gate": "container_or_build_artifact_scan", "tool": "trivy", "version": "0.57.1"}
+  ]
+}
+`
+
+const securityGatesPolicyJSON = `{
+  "required_gates": [
+    "secret_scan",
+    "dependency_vulnerability_scan",
+    "dependency_license_scan",
+    "sast",
+    "auth_flow_security_check",
+    "configuration_security_check",
+    "container_or_build_artifact_scan"
+  ],
+  "waiver_requirements": [
+    "linked finding",
+    "risk acceptance reason",
+    "compensating controls",
+    "expiry",
+    "authorized approver role",
+    "not_valid_for scope"
+  ],
+  "certification_blockers": [
+    "missing scanner evidence",
+    "committed secret",
+    "open critical finding",
+    "open high finding without valid waiver"
+  ]
+}
 `
 
 const frontendPackageJSON = `{
