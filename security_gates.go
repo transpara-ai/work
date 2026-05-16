@@ -47,15 +47,15 @@ const (
 )
 
 type SecurityScanner struct {
-	Gate    SecurityGateID
-	Tool    string
-	Version string
+	Gate    SecurityGateID `json:"gate"`
+	Tool    string         `json:"tool"`
+	Version string         `json:"version"`
 }
 
 type FactoryRuntimeBOM struct {
-	TemplateID          string
-	SecurityGateVersion string
-	SecurityScanners    []SecurityScanner
+	TemplateID          string            `json:"template_id"`
+	SecurityGateVersion string            `json:"security_gate_version"`
+	SecurityScanners    []SecurityScanner `json:"security_scanners"`
 }
 
 type SecurityFinding struct {
@@ -133,8 +133,11 @@ func EvaluateSecurityGateCertification(evidence []SecurityGateEvidence, waivers 
 		if gateEvidence.ScannerTool == "" || gateEvidence.ScannerVersion == "" {
 			result.BlockingReasons = append(result.BlockingReasons, fmt.Sprintf("%s scanner evidence is missing", gateEvidence.Gate))
 		}
+		if gateEvidence.Status == SecurityGateStatusFail {
+			result.BlockingReasons = append(result.BlockingReasons, fmt.Sprintf("%s gate status is fail", gateEvidence.Gate))
+		}
 		for _, finding := range gateEvidence.Findings {
-			if finding.SecretHit && finding.Gate == GateSecretScan {
+			if finding.SecretHit {
 				result.BlockingFindings = append(result.BlockingFindings, finding)
 				result.BlockingReasons = append(result.BlockingReasons, fmt.Sprintf("%s exposes a committed secret", finding.ID))
 				continue

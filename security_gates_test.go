@@ -52,13 +52,13 @@ func TestEvaluateSecurityGateCertificationBlocksMissingEvidence(t *testing.T) {
 func TestEvaluateSecurityGateCertificationBlocksOpenCriticalEvenWithWaiver(t *testing.T) {
 	asOf := time.Date(2026, 5, 15, 0, 0, 0, 0, time.UTC)
 	evidence := cleanEvidence()
-	evidence[0].Findings = []work.SecurityFinding{{
+	setGateFindings(evidence, work.GateDependencyVulnerabilityScan, []work.SecurityFinding{{
 		ID:       "finding-critical",
 		Gate:     work.GateDependencyVulnerabilityScan,
 		Severity: work.FindingSeverityCritical,
 		Status:   work.FindingStatusOpen,
 		WaiverID: "waiver-critical",
-	}}
+	}})
 	waivers := []work.SecurityWaiver{validWaiver("waiver-critical", "finding-critical", asOf)}
 
 	result := work.EvaluateSecurityGateCertification(evidence, waivers, asOf)
@@ -115,12 +115,30 @@ func TestEvaluateSecurityGateCertificationBlocksCommittedSecretEvenWhenFindingSt
 		Gate:      work.GateSecretScan,
 		Severity:  work.FindingSeverityHigh,
 		Status:    work.FindingStatusWaived,
+		WaiverID:  "waiver-secret",
 		SecretHit: true,
 	}}
 
 	result := work.EvaluateSecurityGateCertification(evidence, []work.SecurityWaiver{validWaiver("waiver-secret", "finding-secret", time.Now())}, time.Now())
 	if !result.Blocked || len(result.BlockingFindings) != 1 {
 		t.Fatalf("committed secret finding did not block certification: %#v", result)
+	}
+}
+
+func TestEvaluateSecurityGateCertificationBlocksSecretHitFromAnyGate(t *testing.T) {
+	evidence := cleanEvidence()
+	setGateFindings(evidence, work.GateSAST, []work.SecurityFinding{{
+		ID:        "finding-sast-secret",
+		Gate:      work.GateSAST,
+		Severity:  work.FindingSeverityMedium,
+		Status:    work.FindingStatusWaived,
+		WaiverID:  "waiver-sast-secret",
+		SecretHit: true,
+	}})
+
+	result := work.EvaluateSecurityGateCertification(evidence, []work.SecurityWaiver{validWaiver("waiver-sast-secret", "finding-sast-secret", time.Now())}, time.Now())
+	if !result.Blocked || len(result.BlockingFindings) != 1 {
+		t.Fatalf("SecretHit finding from non-secret-scan gate did not block certification: %#v", result)
 	}
 }
 
@@ -131,6 +149,16 @@ func TestEvaluateSecurityGateCertificationBlocksMissingScannerVersion(t *testing
 	result := work.EvaluateSecurityGateCertification(evidence, nil, time.Date(2026, 5, 15, 0, 0, 0, 0, time.UTC))
 	if !result.Blocked || len(result.BlockingReasons) == 0 {
 		t.Fatalf("missing scanner version did not block certification: %#v", result)
+	}
+}
+
+func TestEvaluateSecurityGateCertificationBlocksFailedGateStatus(t *testing.T) {
+	evidence := cleanEvidence()
+	evidence[0].Status = work.SecurityGateStatusFail
+
+	result := work.EvaluateSecurityGateCertification(evidence, nil, time.Date(2026, 5, 15, 0, 0, 0, 0, time.UTC))
+	if !result.Blocked || len(result.BlockingReasons) == 0 {
+		t.Fatalf("failed gate status did not block certification: %#v", result)
 	}
 }
 
@@ -173,6 +201,16 @@ func cleanEvidence() []work.SecurityGateEvidence {
 		})
 	}
 	return out
+}
+
+func setGateFindings(evidence []work.SecurityGateEvidence, gate work.SecurityGateID, findings []work.SecurityFinding) {
+	for i := range evidence {
+		if evidence[i].Gate == gate {
+			evidence[i].Findings = findings
+			return
+		}
+	}
+	panic("missing evidence bucket")
 }
 
 func validWaiver(id, findingID string, asOf time.Time) work.SecurityWaiver {

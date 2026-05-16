@@ -1,9 +1,11 @@
 package work_test
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -11,7 +13,7 @@ import (
 	"github.com/transpara-ai/work"
 )
 
-func TestSaaSTemplateV1FilesCoverRequiredD1Surface(t *testing.T) {
+func TestSaaSTemplateV1FilesCoverRequiredSurface(t *testing.T) {
 	files := work.SaaSTemplateV1Files()
 	byPath := map[string]string{}
 	for _, file := range files {
@@ -84,6 +86,20 @@ func TestSaaSTemplateV1FilesCoverRequiredD1Surface(t *testing.T) {
 	assertContains(t, byPath["README.md"], "make security-gates")
 	assertContains(t, byPath["README.md"], "scaffold evidence")
 	assertContains(t, byPath["scripts/deploy-preview-dry-run.sh"], "dry run only")
+}
+
+func TestSaaSTemplateV1GeneratedBOMMatchesScannerMetadata(t *testing.T) {
+	byPath := map[string]string{}
+	for _, file := range work.SaaSTemplateV1Files() {
+		byPath[file.Path] = file.Content
+	}
+	var generated work.FactoryRuntimeBOM
+	if err := json.Unmarshal([]byte(byPath["factory-runtime-bom.json"]), &generated); err != nil {
+		t.Fatalf("unmarshal generated factory-runtime-bom.json: %v", err)
+	}
+	if !reflect.DeepEqual(generated, work.SaaSTemplateV1FactoryRuntimeBOM()) {
+		t.Fatalf("generated BOM drifted from scanner metadata\ngot:  %#v\nwant: %#v", generated, work.SaaSTemplateV1FactoryRuntimeBOM())
+	}
 }
 
 func TestSaaSTemplateV1ExcludesOutOfScopeProductionFeatures(t *testing.T) {
