@@ -1,8 +1,11 @@
 package work_test
 
 import (
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -10,7 +13,7 @@ import (
 	"github.com/transpara-ai/work"
 )
 
-func TestSaaSTemplateV1FilesCoverRequiredD1Surface(t *testing.T) {
+func TestSaaSTemplateV1FilesCoverRequiredSurface(t *testing.T) {
 	files := work.SaaSTemplateV1Files()
 	byPath := map[string]string{}
 	for _, file := range files {
@@ -33,7 +36,10 @@ func TestSaaSTemplateV1FilesCoverRequiredD1Surface(t *testing.T) {
 		"backend/alembic/versions/0001_create_tracker_items.py",
 		"backend/tests/test_auth_and_tracker.py",
 		"scripts/migration-check.sh",
+		"scripts/security-gates.sh",
 		"scripts/deploy-preview-dry-run.sh",
+		"factory-runtime-bom.json",
+		"security/security-gates-policy.json",
 	}
 	for _, path := range requiredFiles {
 		if _, ok := byPath[path]; !ok {
@@ -62,10 +68,38 @@ func TestSaaSTemplateV1FilesCoverRequiredD1Surface(t *testing.T) {
 	assertContains(t, byPath["backend/tests/test_auth_and_tracker.py"], "test_tracker_crud_lifecycle_requires_session")
 	assertContains(t, byPath["backend/tests/test_auth_and_tracker.py"], `client.post("/api/tracker-items", json={"title": "Nope"}).status_code == 401`)
 	assertContains(t, byPath["Makefile"], "build:")
+	assertContains(t, byPath["Makefile"], "security-gates:")
 	assertContains(t, byPath["scripts/migration-check.sh"], ". ./.env")
 	assertContains(t, byPath["scripts/migration-check.sh"], "alembic upgrade head --sql")
 	assertContains(t, byPath["backend/alembic/env.py"], "context.is_offline_mode()")
+	assertContains(t, byPath["scripts/security-gates.sh"], "artifacts/security-gates/report.json")
+	assertContains(t, byPath["scripts/security-gates.sh"], `"secret_scan"`)
+	assertContains(t, byPath["scripts/security-gates.sh"], `"dependency_vulnerability_scan"`)
+	assertContains(t, byPath["scripts/security-gates.sh"], `"dependency_license_scan"`)
+	assertContains(t, byPath["scripts/security-gates.sh"], `"sast"`)
+	assertContains(t, byPath["scripts/security-gates.sh"], `"auth_flow_security_check"`)
+	assertContains(t, byPath["scripts/security-gates.sh"], `"configuration_security_check"`)
+	assertContains(t, byPath["scripts/security-gates.sh"], `"container_or_build_artifact_scan"`)
+	assertContains(t, byPath["factory-runtime-bom.json"], `"security_scanners"`)
+	assertContains(t, byPath["factory-runtime-bom.json"], `"version": "8.18.4"`)
+	assertContains(t, byPath["security/security-gates-policy.json"], "open high finding without valid waiver")
+	assertContains(t, byPath["README.md"], "make security-gates")
+	assertContains(t, byPath["README.md"], "scaffold evidence")
 	assertContains(t, byPath["scripts/deploy-preview-dry-run.sh"], "dry run only")
+}
+
+func TestSaaSTemplateV1GeneratedBOMMatchesScannerMetadata(t *testing.T) {
+	byPath := map[string]string{}
+	for _, file := range work.SaaSTemplateV1Files() {
+		byPath[file.Path] = file.Content
+	}
+	var generated work.FactoryRuntimeBOM
+	if err := json.Unmarshal([]byte(byPath["factory-runtime-bom.json"]), &generated); err != nil {
+		t.Fatalf("unmarshal generated factory-runtime-bom.json: %v", err)
+	}
+	if !reflect.DeepEqual(generated, work.SaaSTemplateV1FactoryRuntimeBOM()) {
+		t.Fatalf("generated BOM drifted from scanner metadata\ngot:  %#v\nwant: %#v", generated, work.SaaSTemplateV1FactoryRuntimeBOM())
+	}
 }
 
 func TestSaaSTemplateV1ExcludesOutOfScopeProductionFeatures(t *testing.T) {
@@ -138,6 +172,64 @@ func TestGenerateSaaSTemplateV1RejectsEmptyTarget(t *testing.T) {
 	if _, err := work.GenerateSaaSTemplateV1(" "); err == nil {
 		t.Fatal("GenerateSaaSTemplateV1 accepted an empty target")
 	}
+}
+
+func TestGeneratedSaaSTemplateV1SecurityGatesCommandWritesEvidence(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := work.GenerateSaaSTemplateV1(dir); err != nil {
+		t.Fatalf("GenerateSaaSTemplateV1: %v", err)
+	}
+
+	cmd := exec.Command(filepath.Join(dir, "scripts", "security-gates.sh"))
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("security-gates.sh failed: %v\n%s", err, output)
+	}
+
+	reportPath := filepath.Join(dir, "artifacts", "security-gates", "report.json")
+	report, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read security gate report: %v", err)
+	}
+	reportText := string(report)
+	assertContains(t, reportText, `"gate": "secret_scan"`)
+	assertContains(t, reportText, `"gate": "dependency_vulnerability_scan"`)
+	assertContains(t, reportText, `"gate": "dependency_license_scan"`)
+	assertContains(t, reportText, `"gate": "sast"`)
+	assertContains(t, reportText, `"gate": "auth_flow_security_check"`)
+	assertContains(t, reportText, `"gate": "configuration_security_check"`)
+	assertContains(t, reportText, `"gate": "container_or_build_artifact_scan"`)
+	assertContains(t, reportText, `"security_gate_version": "dark-factory-v3.9-d2-security-gates"`)
+	assertContains(t, reportText, `"block_on_open_high_without_valid_waiver": true`)
+	assertContains(t, reportText, `"evidence_mode": "scaffold"`)
+	assertContains(t, reportText, `"requires_real_scanner_before_production": true`)
+}
+
+func TestGeneratedSaaSTemplateV1SecurityGatesCommandFailsOnCommittedSecret(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := work.GenerateSaaSTemplateV1(dir); err != nil {
+		t.Fatalf("GenerateSaaSTemplateV1: %v", err)
+	}
+	secretPath := filepath.Join(dir, "backend", "app", "leaked_key.txt")
+	if err := os.WriteFile(secretPath, []byte("AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP\n"), 0o644); err != nil {
+		t.Fatalf("write planted secret: %v", err)
+	}
+
+	cmd := exec.Command(filepath.Join(dir, "scripts", "security-gates.sh"))
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("security-gates.sh passed with planted secret\n%s", output)
+	}
+
+	reportPath := filepath.Join(dir, "artifacts", "security-gates", "report.json")
+	report, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read security gate report: %v", err)
+	}
+	assertContains(t, string(report), `"gate": "secret_scan"`)
+	assertContains(t, string(report), `"status": "fail"`)
 }
 
 func assertContains(t *testing.T, haystack, needle string) {

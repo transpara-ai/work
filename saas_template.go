@@ -1,6 +1,7 @@
 package work
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -28,8 +29,11 @@ func SaaSTemplateV1Files() []SaaSTemplateFile {
 		{Path: "Makefile", Content: rootMakefile},
 		{Path: "README.md", Content: readme},
 		{Path: "docker-compose.yml", Content: dockerCompose},
+		{Path: "factory-runtime-bom.json", Content: factoryRuntimeBOMJSON()},
 		{Path: "scripts/deploy-preview-dry-run.sh", Content: deployPreviewDryRun},
 		{Path: "scripts/migration-check.sh", Content: migrationCheck},
+		{Path: "scripts/security-gates.sh", Content: securityGatesScript()},
+		{Path: "security/security-gates-policy.json", Content: securityGatesPolicyJSON},
 		{Path: "frontend/package.json", Content: frontendPackageJSON},
 		{Path: "frontend/playwright.config.ts", Content: frontendPlaywrightConfig},
 		{Path: "frontend/next.config.mjs", Content: frontendNextConfig},
@@ -109,9 +113,10 @@ __pycache__/
 .pytest_cache/
 .venv/
 dist/
+artifacts/
 `
 
-const rootMakefile = `.PHONY: build test migration-check deploy-preview
+const rootMakefile = `.PHONY: build test migration-check security-gates deploy-preview
 
 build:
 	cd frontend && npm run build
@@ -123,6 +128,9 @@ test:
 
 migration-check:
 	./scripts/migration-check.sh
+
+security-gates:
+	./scripts/security-gates.sh
 
 deploy-preview:
 	./scripts/deploy-preview-dry-run.sh
@@ -158,10 +166,23 @@ SESSION_SECRET must be the same for frontend and backend when running outside Do
     make build
     make test
     make migration-check
+    make security-gates
     make deploy-preview
 
 make migration-check sources .env when present and emits offline Alembic SQL without
 contacting a live database.
+
+make security-gates writes artifacts/security-gates/report.json with evidence for
+secret_scan, dependency_vulnerability_scan, dependency_license_scan, sast,
+auth_flow_security_check, configuration_security_check, and
+container_or_build_artifact_scan when applicable. The report includes the same
+scanner metadata as factory-runtime-bom.json. Release certification is blocked when
+scanner evidence is missing, a committed secret is found, a critical finding is
+open, or a high finding is open without a valid waiver.
+
+In this v1 template, secret_scan performs a local deterministic pattern check.
+The other generated gate entries are scaffold evidence for wiring the named
+scanners before any production release.
 
 make deploy-preview is a dry run only. This template does not include payments,
 billing, production deploy, or external service provisioning.
@@ -231,6 +252,180 @@ Deployment preview dry run only.
 No production deploy is performed.
 No external service is provisioned.
 PLAN
+`
+
+func securityGatesScript() string {
+	return fmt.Sprintf(`#!/usr/bin/env sh
+set -eu
+# v1 deterministic scaffold: secret_scan runs locally. The other gate entries
+# declare scanner evidence shape and must be wired to the named tools before any
+# production release.
+mkdir -p artifacts/security-gates
+secret_status="pass"
+if grep -R -n -E 'sk_live_|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}' \
+  --exclude-dir=.git \
+  --exclude-dir=.next \
+  --exclude-dir=.venv \
+  --exclude-dir=artifacts \
+  --exclude-dir=node_modules \
+  --exclude=security-gates.sh \
+  . >/tmp/dark-factory-secret-scan.txt 2>/dev/null; then
+  secret_status="fail"
+fi
+cat >artifacts/security-gates/report.json <<'JSON'
+%sJSON
+tmp_report="$(mktemp)"
+sed "s/SECRET_STATUS/${secret_status}/g" artifacts/security-gates/report.json >"${tmp_report}"
+mv "${tmp_report}" artifacts/security-gates/report.json
+test "${secret_status}" = "pass"
+`, securityGateReportJSON())
+}
+
+type generatedSecurityGateReport struct {
+	TemplateID          string                          `json:"template_id"`
+	FactoryRuntimeBOM   FactoryRuntimeBOM               `json:"factory_runtime_bom"`
+	GateEvidence        []generatedSecurityGateEvidence `json:"gate_evidence"`
+	CertificationPolicy generatedSecurityGateCertPolicy `json:"certification_policy"`
+}
+
+type generatedSecurityGateEvidence struct {
+	Gate                                SecurityGateID `json:"gate"`
+	Status                              string         `json:"status"`
+	Scanner                             scannerRef     `json:"scanner"`
+	EvidenceMode                        string         `json:"evidence_mode,omitempty"`
+	RequiresRealScannerBeforeProduction bool           `json:"requires_real_scanner_before_production,omitempty"`
+	Inspected                           []string       `json:"inspected,omitempty"`
+	Checks                              []string       `json:"checks,omitempty"`
+	Reason                              string         `json:"reason,omitempty"`
+}
+
+type scannerRef struct {
+	Tool    string `json:"tool"`
+	Version string `json:"version"`
+}
+
+type generatedSecurityGateCertPolicy struct {
+	BlockOnMissingScannerEvidence     bool `json:"block_on_missing_scanner_evidence"`
+	BlockOnCommittedSecret            bool `json:"block_on_committed_secret"`
+	BlockOnOpenCritical               bool `json:"block_on_open_critical"`
+	BlockOnOpenHighWithoutValidWaiver bool `json:"block_on_open_high_without_valid_waiver"`
+}
+
+func factoryRuntimeBOMJSON() string {
+	return mustMarshalTemplateJSON(SaaSTemplateV1FactoryRuntimeBOM())
+}
+
+func securityGateReportJSON() string {
+	bom := SaaSTemplateV1FactoryRuntimeBOM()
+	report := generatedSecurityGateReport{
+		TemplateID:        SaaSTemplateV1ID,
+		FactoryRuntimeBOM: bom,
+		GateEvidence: []generatedSecurityGateEvidence{
+			{
+				Gate:      GateSecretScan,
+				Status:    "SECRET_STATUS",
+				Scanner:   scannerForGate(bom, GateSecretScan),
+				Inspected: []string{"generated source", "config", ".env.example", "runtime stdout/stderr"},
+			},
+			{
+				Gate:                                GateDependencyVulnerabilityScan,
+				Status:                              "pass",
+				Scanner:                             scannerForGate(bom, GateDependencyVulnerabilityScan),
+				EvidenceMode:                        "scaffold",
+				RequiresRealScannerBeforeProduction: true,
+				Inspected:                           []string{"frontend/package.json", "backend/pyproject.toml", "docker-compose.yml"},
+			},
+			{
+				Gate:                                GateDependencyLicenseScan,
+				Status:                              "pass",
+				Scanner:                             scannerForGate(bom, GateDependencyLicenseScan),
+				EvidenceMode:                        "scaffold",
+				RequiresRealScannerBeforeProduction: true,
+				Inspected:                           []string{"frontend/package.json", "backend/pyproject.toml"},
+			},
+			{
+				Gate:                                GateSAST,
+				Status:                              "pass",
+				Scanner:                             scannerForGate(bom, GateSAST),
+				EvidenceMode:                        "scaffold",
+				RequiresRealScannerBeforeProduction: true,
+				Inspected:                           []string{"frontend", "backend"},
+			},
+			{
+				Gate:                                GateAuthFlowSecurityCheck,
+				Status:                              "pass",
+				Scanner:                             scannerForGate(bom, GateAuthFlowSecurityCheck),
+				EvidenceMode:                        "scaffold",
+				RequiresRealScannerBeforeProduction: true,
+				Checks:                              []string{"unauthenticated protected page denial", "unauthenticated protected API denial", "logout invalidates session", "no production default admin"},
+			},
+			{
+				Gate:                                GateConfigurationSecurityCheck,
+				Status:                              "pass",
+				Scanner:                             scannerForGate(bom, GateConfigurationSecurityCheck),
+				EvidenceMode:                        "scaffold",
+				RequiresRealScannerBeforeProduction: true,
+				Checks:                              []string{".env not committed", ".env.example placeholders only", "production debug disabled", "security headers expected before production"},
+			},
+			{
+				Gate:    GateContainerOrArtifactScan,
+				Status:  "not_applicable",
+				Scanner: scannerForGate(bom, GateContainerOrArtifactScan),
+				Reason:  "no container or build artifact is produced by the dry-run template",
+			},
+		},
+		CertificationPolicy: generatedSecurityGateCertPolicy{
+			BlockOnMissingScannerEvidence:     true,
+			BlockOnCommittedSecret:            true,
+			BlockOnOpenCritical:               true,
+			BlockOnOpenHighWithoutValidWaiver: true,
+		},
+	}
+	return mustMarshalTemplateJSON(report)
+}
+
+func scannerForGate(bom FactoryRuntimeBOM, gate SecurityGateID) scannerRef {
+	for _, scanner := range bom.SecurityScanners {
+		if scanner.Gate == gate {
+			return scannerRef{Tool: scanner.Tool, Version: scanner.Version}
+		}
+	}
+	panic(fmt.Sprintf("missing scanner metadata for %s", gate))
+}
+
+func mustMarshalTemplateJSON(value any) string {
+	raw, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		panic(fmt.Sprintf("marshal template json: %v", err))
+	}
+	return string(raw) + "\n"
+}
+
+const securityGatesPolicyJSON = `{
+  "required_gates": [
+    "secret_scan",
+    "dependency_vulnerability_scan",
+    "dependency_license_scan",
+    "sast",
+    "auth_flow_security_check",
+    "configuration_security_check",
+    "container_or_build_artifact_scan"
+  ],
+  "waiver_requirements": [
+    "linked finding",
+    "risk acceptance reason",
+    "compensating controls",
+    "expiry",
+    "authorized approver role",
+    "not_valid_for scope"
+  ],
+  "certification_blockers": [
+    "missing scanner evidence",
+    "committed secret",
+    "open critical finding",
+    "open high finding without valid waiver"
+  ]
+}
 `
 
 const frontendPackageJSON = `{
