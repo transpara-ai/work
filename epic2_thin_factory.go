@@ -698,13 +698,6 @@ func epic2ProjectionDecision(graphRun epic2GraphRun) *Epic2EvidenceDecision {
 	return &Epic2EvidenceDecision{Kind: "rejection", ID: rej.CommonNode.ID, ActorID: rej.RejectorActorID, Reason: rej.Reason, EvidenceRefs: append([]string(nil), rej.EvidenceRefs...), Status: statusString(rej.CommonNode.Status), CreatedAt: rej.CommonNode.CreatedAt.Format(time.RFC3339)}
 }
 
-func epic2ModeFromDecision(graphRun epic2GraphRun) Epic2ThinFactoryMode {
-	if graphRun.Rejection != nil {
-		return Epic2ThinFactoryRejected
-	}
-	return Epic2ThinFactoryCertified
-}
-
 func taskStatusFromMode(mode Epic2ThinFactoryMode) TaskStatus {
 	if mode == Epic2ThinFactoryRejected {
 		return StatusRejected
