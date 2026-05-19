@@ -293,7 +293,7 @@ func RunEpic2ThinFactoryVerticalSlice(ts *TaskStore, opts Epic2ThinFactoryOption
 		return Epic2ThinFactoryRun{}, err
 	}
 
-	projection, err := epic2BuildProjection(graph, graphRun, task, runtimeRun)
+	projection, err := epic2BuildProjection(graph, ids, opts.Mode, graphRun, task, runtimeRun)
 	if err != nil {
 		return Epic2ThinFactoryRun{}, err
 	}
@@ -425,6 +425,11 @@ func epic2RuntimeArtifactHash(result RuntimeResult) (string, error) {
 func epic2RecordEventGraph(ids epic2FixtureIDs, mode Epic2ThinFactoryMode, artifactHash string, runtimeRun RuntimeRun) (*v39.InMemoryStore, epic2GraphRun, error) {
 	graph := v39.NewInMemoryStore()
 	createdAt := epic2FixtureTime()
+	traceStartedAt := createdAt
+	traceCompletedAt := createdAt.Add(time.Second)
+	// The EventGraph envelope uses a deterministic placeholder; the Work runtime
+	// evidence retains the actual caller-provided temp directory.
+	eventGraphWorkingDirectory := "fixture://local-dry-run"
 	status := "certified"
 	gateStatus := "pass"
 	testRunStatus := "pass"
@@ -444,8 +449,8 @@ func epic2RecordEventGraph(ids epic2FixtureIDs, mode Epic2ThinFactoryMode, artif
 		&v39.AuthorityRequest{CommonNode: epic2Common(ids.authorityRequest, v39.TypeAuthorityRequest, "open"), ActorID: epic2FixtureActorID, ActorRole: "agent", Action: "runtime.invoke.local", TargetType: "task", TargetID: ids.task, RiskClass: "low", Reason: "Run only the authorized local deterministic dry-run fixture."},
 		&v39.AuthorityDecision{CommonNode: epic2Common(ids.authorityDecision, v39.TypeAuthorityDecision, "approved"), AuthorityRequestID: ids.authorityRequest, DeciderActorID: "act_human", DeciderRole: "maintainer", Decision: "Autonomous", Reason: "Local deterministic fixture only; no protected side effects.", Scope: []string{"runtime.invoke.local"}},
 		&v39.ExecutionReceipt{CommonNode: epic2Common(ids.executionReceipt, v39.TypeExecutionReceipt, "recorded"), AuthorityDecisionID: ids.authorityDecision, ActorInvocationID: &ids.actorInvocation, Action: "runtime.invoke.local", TargetID: ids.task, Result: "succeeded", EvidenceRefs: []string{ids.runtimeResult}},
-		&v39.RuntimeEnvelope{CommonNode: epic2Common(ids.runtimeEnvelope, v39.TypeRuntimeEnvelope, "recorded"), RuntimeAdapterID: "local_deterministic", RuntimeAdapterVersion: "1", FactoryRuntimeVersionRef: ids.factoryRuntime, TaskID: ids.task, ActorID: epic2FixtureActorID, AuthorityDecisionRef: ids.authorityDecision, AllowedFiles: []string{"out.txt"}, DeniedFiles: []string{"secret.txt", ".git", "../"}, AllowedCommands: []string{"write_file", "checksum_file"}, DeniedCommands: []string{"network_attempt", "secret_attempt"}, NetworkPolicy: "disabled", SecretsPolicy: "none", WorkingDirectory: "fixture://local-dry-run", Timeout: "1s", ResourceLimits: map[string]any{"max_files_changed": 1, "max_output_bytes": 4096}, ExpectedOutputs: []string{"out.txt"}, OutputContract: map[string]any{"format": "text"}, TraceRequiredPaths: []string{"FactoryOrder -> Requirement -> AcceptanceCriterion -> Task", "Task -> RuntimeEnvelope -> RuntimeResult", "Task -> Artifact", "Task -> TestCase -> TestRun -> GateResult"}, PostRunValidationPlan: []string{"checksum_file out.txt"}, EnvelopeHash: "sha256:epic2-envelope"},
-		&v39.RuntimeResult{CommonNode: epic2Common(ids.runtimeResult, v39.TypeRuntimeResult, "recorded"), InvocationID: ids.runtimeEnvelope, RuntimeAdapterID: "local_deterministic", StartedAt: runtimeRun.Result.Result.StartedAt, CompletedAt: runtimeRun.Result.Result.FinishedAt, ExitStatus: "succeeded", ArtifactRefs: []string{ids.artifact}, ChangedFiles: []string{"out.txt"}, CommandLog: epic2CommandLog(runtimeRun.Result.Result.CommandLog), NetworkAccessLog: []string{}, SecretAccessLog: []string{}, PolicyDecisionRefs: []string{ids.authorityDecision}, PostRunValidationRefs: []string{ids.testRun}},
+		&v39.RuntimeEnvelope{CommonNode: epic2Common(ids.runtimeEnvelope, v39.TypeRuntimeEnvelope, "recorded"), RuntimeAdapterID: "local_deterministic", RuntimeAdapterVersion: "1", FactoryRuntimeVersionRef: ids.factoryRuntime, TaskID: ids.task, ActorID: epic2FixtureActorID, AuthorityDecisionRef: ids.authorityDecision, AllowedFiles: []string{"out.txt"}, DeniedFiles: []string{"secret.txt", ".git", "../"}, AllowedCommands: []string{"write_file", "checksum_file"}, DeniedCommands: []string{"network_attempt", "secret_attempt"}, NetworkPolicy: "disabled", SecretsPolicy: "none", WorkingDirectory: eventGraphWorkingDirectory, Timeout: "1s", ResourceLimits: map[string]any{"max_files_changed": 1, "max_output_bytes": 4096}, ExpectedOutputs: []string{"out.txt"}, OutputContract: map[string]any{"format": "text"}, TraceRequiredPaths: []string{"FactoryOrder -> Requirement -> AcceptanceCriterion -> Task", "Task -> RuntimeEnvelope -> RuntimeResult", "Task -> Artifact", "Task -> TestCase -> TestRun -> GateResult"}, PostRunValidationPlan: []string{"checksum_file out.txt"}, EnvelopeHash: "sha256:epic2-envelope"},
+		&v39.RuntimeResult{CommonNode: epic2Common(ids.runtimeResult, v39.TypeRuntimeResult, "recorded"), InvocationID: ids.runtimeEnvelope, RuntimeAdapterID: "local_deterministic", StartedAt: traceStartedAt, CompletedAt: traceCompletedAt, ExitStatus: "succeeded", ArtifactRefs: []string{ids.artifact}, ChangedFiles: []string{"out.txt"}, CommandLog: epic2CommandLog(runtimeRun.Result.Result.CommandLog), NetworkAccessLog: []string{}, SecretAccessLog: []string{}, PolicyDecisionRefs: []string{ids.authorityDecision}, PostRunValidationRefs: []string{ids.testRun}},
 		&v39.Artifact{CommonNode: epic2Common(ids.artifact, v39.TypeArtifact, "verified"), TaskID: &ids.task, ArtifactType: "document", Path: strPtr("out.txt"), ContentHash: &artifactHash},
 		&v39.TestCase{CommonNode: epic2Common(ids.testCase, v39.TypeTestCase, "active"), AcceptanceCriterionID: &ids.acceptanceCriterion, RequirementID: &ids.requirement, Name: "Epic 2 deterministic local fixture acceptance", TestType: "unit", Path: strPtr("work/epic2_thin_factory_test.go")},
 		&v39.TestRun{CommonNode: epic2Common(ids.testRun, v39.TypeTestRun, testRunStatus), TestCaseID: &ids.testCase, ActorInvocationID: &ids.actorInvocation, Command: "go test ./..."},
@@ -471,6 +476,9 @@ func epic2RecordEventGraph(ids epic2FixtureIDs, mode Epic2ThinFactoryMode, artif
 	trace, traceErr := graph.EvaluateTraceCompletenessGate(rc.CommonNode.ID)
 	if mode == Epic2ThinFactoryCertified && traceErr != nil {
 		return nil, epic2GraphRun{}, traceErr
+	}
+	if mode == Epic2ThinFactoryCertified && !trace.Completed {
+		return nil, epic2GraphRun{}, errors.New("certified fixture trace completeness was not completed")
 	}
 	if mode == Epic2ThinFactoryRejected && traceErr == nil {
 		return nil, epic2GraphRun{}, errors.New("negative fixture unexpectedly passed TraceCompletenessGate")
@@ -535,8 +543,7 @@ func epic2AppendEdges(graph *v39.InMemoryStore, ids epic2FixtureIDs, mode Epic2T
 	return nil
 }
 
-func epic2BuildProjection(graph *v39.InMemoryStore, graphRun epic2GraphRun, task Task, runtimeRun RuntimeRun) (Epic2OpsEvidenceProjection, error) {
-	ids := epic2IDs(epic2ModeFromDecision(graphRun))
+func epic2BuildProjection(graph *v39.InMemoryStore, ids epic2FixtureIDs, mode Epic2ThinFactoryMode, graphRun epic2GraphRun, task Task, runtimeRun RuntimeRun) (Epic2OpsEvidenceProjection, error) {
 	foRecord, err := graph.Get(ids.factoryOrder)
 	if err != nil {
 		return Epic2OpsEvidenceProjection{}, err
@@ -549,16 +556,34 @@ func epic2BuildProjection(graph *v39.InMemoryStore, graphRun epic2GraphRun, task
 	if err != nil {
 		return Epic2OpsEvidenceProjection{}, err
 	}
+	runtimeRecord, err := graph.Get(ids.runtimeResult)
+	if err != nil {
+		return Epic2OpsEvidenceProjection{}, err
+	}
 	audit := graphRun.AuditReport
 	fo := foRecord.(*v39.FactoryOrder)
 	rc := rcRecord.(*v39.ReleaseCandidate)
 	gate := gateRecord.(*v39.GateResult)
+	runtimeResult := runtimeRecord.(*v39.RuntimeResult)
 	status := statusString(gate.CommonNode.Status)
 	decision := epic2ProjectionDecision(graphRun)
 	packetStatus := "pass"
 	if graphRun.Rejection != nil {
 		packetStatus = "fail"
 	}
+	timeline := []Epic2EvidenceTimelineEvent{
+		{Label: "Factory order", Kind: v39.TypeFactoryOrder, Status: statusString(fo.CommonNode.Status), NodeID: fo.CommonNode.ID, CreatedAt: fo.CommonNode.CreatedAt.Format(time.RFC3339), Summary: "Epic 2 human-selected thin factory fixture."},
+		{Label: "Runtime", Kind: v39.TypeRuntimeResult, Status: string(runtimeRun.Result.Result.Status), NodeID: runtimeResult.CommonNode.ID, CreatedAt: runtimeResult.StartedAt.Format(time.RFC3339), Summary: "Local deterministic runtime produced out.txt."},
+	}
+	if graphRun.Rejection != nil {
+		failureRecord, err := graph.Get(ids.failure)
+		if err != nil {
+			return Epic2OpsEvidenceProjection{}, err
+		}
+		failure := failureRecord.(*v39.Failure)
+		timeline = append(timeline, Epic2EvidenceTimelineEvent{Label: "Failure", Kind: v39.TypeFailure, Status: statusString(failure.CommonNode.Status), NodeID: failure.CommonNode.ID, CreatedAt: failure.CommonNode.CreatedAt.Format(time.RFC3339), Summary: failure.Summary})
+	}
+	timeline = append(timeline, Epic2EvidenceTimelineEvent{Label: "Decision", Kind: decision.Kind, Status: decision.Status, NodeID: decision.ID, CreatedAt: decision.CreatedAt, Summary: decision.Reason})
 	projection := Epic2OpsEvidenceProjection{
 		GeneratedAt: epic2FixtureTime().Format(time.RFC3339),
 		Source:      "work-epic2-thin-factory-fixture",
@@ -587,11 +612,7 @@ func epic2BuildProjection(graph *v39.InMemoryStore, graphRun epic2GraphRun, task
 			TraceScore:   audit.TraceScore,
 			MissingLinks: append([]string(nil), audit.MissingLinks...),
 		},
-		Timeline: []Epic2EvidenceTimelineEvent{
-			{Label: "Factory order", Kind: v39.TypeFactoryOrder, Status: statusString(fo.CommonNode.Status), NodeID: fo.CommonNode.ID, CreatedAt: fo.CommonNode.CreatedAt.Format(time.RFC3339), Summary: "Epic 2 human-selected thin factory fixture."},
-			{Label: "Runtime", Kind: v39.TypeRuntimeResult, Status: string(runtimeRun.Result.Result.Status), NodeID: ids.runtimeResult, CreatedAt: runtimeRun.Result.Result.StartedAt.Format(time.RFC3339), Summary: "Local deterministic runtime produced out.txt."},
-			{Label: "Decision", Kind: decision.Kind, Status: decision.Status, NodeID: decision.ID, CreatedAt: decision.CreatedAt, Summary: decision.Reason},
-		},
+		Timeline: timeline,
 		GateEvidence: []Epic2EvidenceGate{
 			{GateName: gate.GateName, Status: status, GateResultID: gate.CommonNode.ID, EvidenceRefs: append([]string(nil), gate.EvidenceRefs...), WaiverRef: derefString(gate.WaiverRef), MissingRefs: epic2MissingForGate(graphRun.Trace, gate.CommonNode.ID)},
 		},
@@ -605,7 +626,7 @@ func epic2BuildProjection(graph *v39.InMemoryStore, graphRun epic2GraphRun, task
 			Summary: "Epic 2 local/dry-run proof-of-work packet for a deterministic text artifact.",
 			WorkItem: &Epic2ProofOfWorkItem{
 				Label:          "Work task",
-				Status:         string(taskStatusFromMode(epic2ModeFromDecision(graphRun))),
+				Status:         string(taskStatusFromMode(mode)),
 				Summary:        task.Title,
 				ArtifactRef:    task.ID.Value(),
 				EventGraphRefs: []string{egRef(v39.TypeTask, ids.task)},

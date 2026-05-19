@@ -123,6 +123,26 @@ func TestEpic2ThinFactoryRejectsUnsafeFixtureOptions(t *testing.T) {
 	ts := newTaskStore(t, s)
 
 	_, err := work.RunEpic2ThinFactoryVerticalSlice(ts, work.Epic2ThinFactoryOptions{
+		ConversationID: testConv,
+		Causes:         causes,
+		WorkingDir:     t.TempDir(),
+		Mode:           work.Epic2ThinFactoryCertified,
+	})
+	if err == nil || !strings.Contains(err.Error(), "source actor is required") {
+		t.Fatalf("missing source err = %v; want source requirement", err)
+	}
+
+	_, err = work.RunEpic2ThinFactoryVerticalSlice(ts, work.Epic2ThinFactoryOptions{
+		Source:     testActor,
+		Causes:     causes,
+		WorkingDir: t.TempDir(),
+		Mode:       work.Epic2ThinFactoryCertified,
+	})
+	if err == nil || !strings.Contains(err.Error(), "conversation ID is required") {
+		t.Fatalf("missing conversation err = %v; want conversation requirement", err)
+	}
+
+	_, err = work.RunEpic2ThinFactoryVerticalSlice(ts, work.Epic2ThinFactoryOptions{
 		Source:         testActor,
 		ConversationID: testConv,
 		Causes:         causes,
@@ -254,6 +274,9 @@ func assertEpic2ProjectionJSONShape(t *testing.T, run work.Epic2ThinFactoryRun, 
 	}
 	if decoded.ProofOfWorkPacket.ID == "" || len(decoded.ProofOfWorkPacket.WorkItem.EventGraphRefs) != 1 {
 		t.Fatalf("proof packet = %#v; want site-compatible work item refs", decoded.ProofOfWorkPacket)
+	}
+	if decisionKind == "rejection" && len(run.Projection.Timeline) < 4 {
+		t.Fatalf("timeline = %#v; want rejected fixture failure entry", run.Projection.Timeline)
 	}
 	foundGateB := false
 	for _, item := range decoded.ProofOfWorkPacket.SecurityScanResults {
