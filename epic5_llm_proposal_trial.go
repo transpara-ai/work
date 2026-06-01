@@ -79,6 +79,7 @@ type Epic5LLMProposalRun struct {
 	TraceCompleteness       v39.TraceCompletenessGateResult
 	CapabilityUsagePath     v39.RequiredPath
 	KnowledgePath           v39.RequiredPath
+	GateFValidation         Epic5GateFValidation
 	Certification           *v39.Certification
 	Rejection               *v39.Rejection
 	HumanApproval           *v39.HumanApproval
@@ -159,6 +160,11 @@ type Epic5GateEvidence struct {
 	GateResultID string   `json:"gate_result_id"`
 	EvidenceRefs []string `json:"evidence_refs"`
 	MissingRefs  []string `json:"missing_refs"`
+}
+
+type Epic5GateFValidation struct {
+	Status  string   `json:"status"`
+	Missing []string `json:"missing,omitempty"`
 }
 
 type Epic5AuditEvidence struct {
@@ -315,6 +321,7 @@ func RunEpic5BoundedLLMProposalTrial(ts *TaskStore, opts Epic5LLMProposalOptions
 		TraceCompleteness:       graphRun.Trace,
 		CapabilityUsagePath:     graphRun.CapabilityUsagePath,
 		KnowledgePath:           graphRun.KnowledgePath,
+		GateFValidation:         graphRun.GateFValidation,
 		Certification:           graphRun.Certification,
 		Rejection:               graphRun.Rejection,
 		HumanApproval:           graphRun.HumanApproval,
@@ -382,10 +389,25 @@ type epic5GraphRun struct {
 	Trace               v39.TraceCompletenessGateResult
 	CapabilityUsagePath v39.RequiredPath
 	KnowledgePath       v39.RequiredPath
+	GateFValidation     Epic5GateFValidation
 	Certification       *v39.Certification
 	Rejection           *v39.Rejection
 	HumanApproval       *v39.HumanApproval
 	AuditReport         *v39.AuditReport
+}
+
+type epic5GraphStatuses struct {
+	FactoryStatus string
+	TaskStatus    string
+	TestRunStatus string
+	GateStatus    string
+}
+
+type epic5GraphEvidence struct {
+	Graph               *v39.InMemoryStore
+	Trace               v39.TraceCompletenessGateResult
+	CapabilityUsagePath v39.RequiredPath
+	KnowledgePath       v39.RequiredPath
 }
 
 func epic5IDs(mode Epic5LLMProposalMode) epic5FixtureIDs {
@@ -459,8 +481,8 @@ func epic5RecordedTranscript() epic5RecordedTranscriptEvidence {
 		ResponseHash:       epic5Hash(response),
 		ProposalHash:       epic5Hash(proposal),
 		ProposedPatchHash:  epic5Hash(patch),
-		InputContractHash:  epic5Hash("epic5-input-contract:v1:prompt+scope+target"),
-		OutputContractHash: epic5Hash("epic5-output-contract:v1:proposal+patch+authority-boundary"),
+		InputContractHash:  epic5Hash(strings.Join([]string{"epic5-input-contract:v1", prompt, epic5ProposalTargetPath}, "\n")),
+		OutputContractHash: epic5Hash(strings.Join([]string{"epic5-output-contract:v1", response, proposal, patch}, "\n")),
 	}
 }
 
@@ -488,28 +510,78 @@ func epic5WriteLocalArtifacts(dir string, transcript epic5RecordedTranscriptEvid
 }
 
 func epic5RecordEventGraph(ids epic5FixtureIDs, mode Epic5LLMProposalMode, transcript epic5RecordedTranscriptEvidence) (*v39.InMemoryStore, epic5GraphRun, error) {
+	hasInvocation := mode != Epic5LLMProposalMissingInvocation
+	proposalApplied := mode == Epic5LLMProposalAppliedPatch
+
+	preflight, err := epic5BuildEventGraphEvidence(ids, mode, transcript, epic5GraphStatuses{
+		FactoryStatus: "verification",
+		TaskStatus:    "verification_running",
+		TestRunStatus: "skipped",
+		GateStatus:    "skipped",
+	})
+	if err != nil {
+		return nil, epic5GraphRun{}, err
+	}
+	gateValidation := epic5EvaluateGateF(preflight.Trace, preflight.CapabilityUsagePath, preflight.KnowledgePath, hasInvocation, proposalApplied)
+	evidence, err := epic5BuildEventGraphEvidence(ids, mode, transcript, epic5StatusesFromGateFValidation(gateValidation))
+	if err != nil {
+		return nil, epic5GraphRun{}, err
+	}
+	graph := evidence.Graph
+	gate, err := epic5GateResultFromGraph(graph, ids.gateResult)
+	if err != nil {
+		return nil, epic5GraphRun{}, err
+	}
+	if gate.CommonNode.Status == nil || *gate.CommonNode.Status != gateValidation.Status {
+		return nil, epic5GraphRun{}, fmt.Errorf("gate F status %q does not match evaluated status %q", statusString(gate.CommonNode.Status), gateValidation.Status)
+	}
+	if mode == Epic5LLMProposalReviewOnly && gateValidation.Status != "pass" {
+		return nil, epic5GraphRun{}, fmt.Errorf("%w: gate F validation incomplete: %v", v39.ErrRequiredPathMissing, gateValidation.Missing)
+	}
+	if mode != Epic5LLMProposalReviewOnly && gateValidation.Status != "fail" {
+		return nil, epic5GraphRun{}, errors.New("negative Epic 5 fixture unexpectedly passed Gate F validation")
+	}
+	approval, err := epic5HumanApprovalFromGraph(graph, ids.humanApproval)
+	if err != nil {
+		return nil, epic5GraphRun{}, err
+	}
+
+	if mode == Epic5LLMProposalReviewOnly {
+		cert, err := graph.CertifyReleaseCandidate(&v39.Certification{CommonNode: epic5Common(ids.certification, v39.TypeCertification, "certified"), ReleaseCandidateID: ids.releaseCandidate, CertifierActorID: epic5FixtureHumanActorID, Reason: "Gate F recorded LLM proposal evidence is complete for review-only certification; the proposed patch remains unapplied.", EvidenceRefs: []string{ids.gateResult, ids.humanApproval, ids.authorityDecision, ids.codeChange}})
+		if err != nil {
+			return nil, epic5GraphRun{}, err
+		}
+		audit, err := graph.ReconstructAuditReport(ids.releaseCandidate, &v39.AuditReport{CommonNode: epic5Common(ids.auditReport, v39.TypeAuditReport, "complete"), TargetType: "release_candidate", TargetID: ids.releaseCandidate})
+		if err != nil {
+			return nil, epic5GraphRun{}, err
+		}
+		return graph, epic5GraphRun{DecisionID: cert.CommonNode.ID, Trace: evidence.Trace, CapabilityUsagePath: evidence.CapabilityUsagePath, KnowledgePath: evidence.KnowledgePath, GateFValidation: gateValidation, Certification: cert, HumanApproval: approval, AuditReport: audit}, nil
+	}
+
+	rejection, err := graph.RejectReleaseCandidate(&v39.Rejection{CommonNode: epic5Common(ids.rejection, v39.TypeRejection, "rejected"), ReleaseCandidateID: ids.releaseCandidate, RejectorActorID: epic5FixtureHumanActorID, Reason: epic5FailureSummary(mode), EvidenceRefs: []string{ids.gateResult, ids.failure}})
+	if err != nil {
+		return nil, epic5GraphRun{}, err
+	}
+	audit, err := graph.ReconstructAuditReport(ids.releaseCandidate, &v39.AuditReport{CommonNode: epic5Common(ids.auditReport, v39.TypeAuditReport, "incomplete"), TargetType: "release_candidate", TargetID: ids.releaseCandidate})
+	if err != nil {
+		return nil, epic5GraphRun{}, err
+	}
+	return graph, epic5GraphRun{DecisionID: rejection.CommonNode.ID, RejectionID: rejection.CommonNode.ID, FailureID: ids.failure, Trace: evidence.Trace, CapabilityUsagePath: evidence.CapabilityUsagePath, KnowledgePath: evidence.KnowledgePath, GateFValidation: gateValidation, Rejection: rejection, HumanApproval: approval, AuditReport: audit}, nil
+}
+
+func epic5BuildEventGraphEvidence(ids epic5FixtureIDs, mode Epic5LLMProposalMode, transcript epic5RecordedTranscriptEvidence, statuses epic5GraphStatuses) (epic5GraphEvidence, error) {
 	graph := v39.NewInMemoryStore()
 	createdAt := epic5FixtureTime()
 	hasInvocation := mode != Epic5LLMProposalMissingInvocation
-	gateStatus := "pass"
-	testRunStatus := "pass"
-	factoryStatus := "certified"
-	taskStatus := "certified"
-	if mode != Epic5LLMProposalReviewOnly {
-		gateStatus = "fail"
-		testRunStatus = "fail"
-		factoryStatus = "rejected"
-		taskStatus = "rejected"
-	}
 
-	taskCommon := epic5Common(ids.task, v39.TypeTask, taskStatus)
+	taskCommon := epic5Common(ids.task, v39.TypeTask, statuses.TaskStatus)
 	taskCommon.SourceRefs = []string{ids.capabilityArtifact, epic5KnowledgeSourceRef}
 
 	records := []v39.Record{
-		&v39.FactoryOrder{CommonNode: epic5Common(ids.factoryOrder, v39.TypeFactoryOrder, factoryStatus), FactoryOrderVersion: 1, SourceIntentHash: "sha256:docs-pr-83-gate-f-authorization", SourceIntentRef: "transpara-ai/docs#83", RiskClass: "medium", ReleasePolicy: "human_approval_required"},
+		&v39.FactoryOrder{CommonNode: epic5Common(ids.factoryOrder, v39.TypeFactoryOrder, statuses.FactoryStatus), FactoryOrderVersion: 1, SourceIntentHash: "sha256:docs-pr-83-gate-f-authorization", SourceIntentRef: "transpara-ai/docs#83", RiskClass: "medium", ReleasePolicy: "human_approval_required"},
 		&v39.Requirement{CommonNode: epic5Common(ids.requirement, v39.TypeRequirement, "accepted"), FactoryOrderID: ids.factoryOrder, Text: "Prove one recorded LLM proposal path with traceable influence, validation, proof-of-work display, and human authority.", Source: "explicit", RiskClass: "medium"},
 		&v39.AcceptanceCriterion{CommonNode: epic5Common(ids.acceptanceCriterion, v39.TypeAcceptanceCriterion, "verified"), RequirementID: ids.requirement, Text: "Gate F passes only when a recorded LLM invocation, proposed-only diff, capability/knowledge influence, validation, audit, and human approval evidence are present.", Source: "explicit", VerificationMethod: "test", RequiredEvidenceType: "eventgraph_trace", OwnerRole: "maintainer", RiskClass: "medium"},
-		&v39.Task{CommonNode: taskCommon, FactoryOrderID: &ids.factoryOrder, Cell: "cell_epic5_llm_proposal", State: taskStatus, Priority: 1, RiskClass: "medium", AttemptCount: 1},
+		&v39.Task{CommonNode: taskCommon, FactoryOrderID: &ids.factoryOrder, Cell: "cell_epic5_llm_proposal", State: statuses.TaskStatus, Priority: 1, RiskClass: "medium", AttemptCount: 1},
 		&v39.ActorIdentity{CommonNode: epic5Common(ids.llmActorIdentity, v39.TypeActorIdentity, "active"), ActorID: epic5FixtureActorID, ActorType: "agent", IdentityMode: "fixture"},
 		&v39.ActorIdentity{CommonNode: epic5Common(ids.humanActorIdentity, v39.TypeActorIdentity, "active"), ActorID: epic5FixtureHumanActorID, ActorType: "human", IdentityMode: "fixture"},
 		&v39.CapabilityArtifact{CommonNode: epic5Common(ids.capabilityArtifact, v39.TypeCapabilityArtifact, "active"), ArtifactID: ids.capabilityArtifact, ArtifactType: "prompt_section", Name: "Epic 5 Gate F recorded LLM prompt", ArtifactVersion: "v1", SourceRepoOrOrigin: "transpara-ai/work", ContentHash: transcript.PromptHash, Owner: "work", RiskClass: "medium", ActivationScope: "fixture_only", EvalRefs: []string{ids.testCase}, HumanReviewRef: ids.humanApproval, RollbackRef: "not_applicable_review_only_fixture", UsageLoggingRequired: true},
@@ -522,8 +594,8 @@ func epic5RecordEventGraph(ids epic5FixtureIDs, mode Epic5LLMProposalMode, trans
 		&v39.AuthorityDecision{CommonNode: epic5Common(ids.authorityDecision, v39.TypeAuthorityDecision, epic5AuthorityDecisionStatus(mode)), AuthorityRequestID: ids.authorityRequest, DeciderActorID: epic5FixtureHumanActorID, DeciderRole: "maintainer", Decision: epic5AuthorityDecision(mode), Reason: epic5AuthorityReason(mode), Scope: []string{"repo.review.proposed_patch"}, Conditions: []string{"do not apply patch", "do not push", "do not merge", "do not mutate another repo"}},
 		&v39.HumanApproval{CommonNode: epic5Common(ids.humanApproval, v39.TypeHumanApproval, epic5HumanDecision(mode)), RequestRef: ids.authorityRequest, ApproverActorID: epic5FixtureHumanActorID, ApproverRole: "maintainer", Decision: epic5HumanDecision(mode), Reason: epic5HumanReason(mode)},
 		&v39.TestCase{CommonNode: epic5Common(ids.testCase, v39.TypeTestCase, "active"), AcceptanceCriterionID: &ids.acceptanceCriterion, RequirementID: &ids.requirement, Name: "Epic 5 recorded LLM proposal Gate F evidence", TestType: "unit", Path: strPtr("work/epic5_llm_proposal_trial_test.go")},
-		&v39.TestRun{CommonNode: epic5Common(ids.testRun, v39.TypeTestRun, testRunStatus), TestCaseID: &ids.testCase, ActorInvocationID: epic5OptionalInvocation(ids, hasInvocation), Command: "go test ./..."},
-		&v39.GateResult{CommonNode: epic5Common(ids.gateResult, v39.TypeGateResult, gateStatus), FactoryOrderID: ids.factoryOrder, ReleaseCandidateID: &ids.releaseCandidate, GateName: "gate_f_recorded_llm_proposal", EvidenceRefs: epic5GateEvidenceRefs(ids, hasInvocation)},
+		&v39.TestRun{CommonNode: epic5Common(ids.testRun, v39.TypeTestRun, statuses.TestRunStatus), TestCaseID: &ids.testCase, ActorInvocationID: epic5OptionalInvocation(ids, hasInvocation), Command: "go test ./..."},
+		&v39.GateResult{CommonNode: epic5Common(ids.gateResult, v39.TypeGateResult, statuses.GateStatus), FactoryOrderID: ids.factoryOrder, ReleaseCandidateID: &ids.releaseCandidate, GateName: "gate_f_recorded_llm_proposal", EvidenceRefs: epic5GateEvidenceRefs(ids, hasInvocation)},
 	}
 	if hasInvocation {
 		records = append(records,
@@ -533,14 +605,14 @@ func epic5RecordEventGraph(ids epic5FixtureIDs, mode Epic5LLMProposalMode, trans
 			&v39.RuntimeResult{CommonNode: epic5Common(ids.runtimeResult, v39.TypeRuntimeResult, "recorded"), InvocationID: ids.runtimeEnvelope, RuntimeAdapterID: "recorded_llm_fixture", StartedAt: createdAt, CompletedAt: createdAt.Add(time.Second), ExitStatus: "succeeded", ArtifactRefs: []string{ids.promptArtifact, ids.responseArtifact, ids.proposalArtifact, ids.patchArtifact}, ChangedFiles: []string{}, CommandLog: []string{"0:record_prompt:succeeded", "1:record_response:succeeded", "2:record_proposed_patch:succeeded", "3:apply_patch:denied"}, NetworkAccessLog: []string{}, SecretAccessLog: []string{}, PolicyDecisionRefs: []string{ids.authorityDecision, ids.humanApproval}, PostRunValidationRefs: []string{ids.testRun}},
 		)
 	}
-	if mode != Epic5LLMProposalReviewOnly {
+	if statuses.GateStatus == "fail" {
 		records = append(records, &v39.Failure{CommonNode: epic5Common(ids.failure, v39.TypeFailure, "open"), FactoryOrderID: &ids.factoryOrder, TaskID: &ids.task, GateResultID: &ids.gateResult, TestRunID: &ids.testRun, FailureClass: epic5FailureClass(mode), Severity: "high", Summary: epic5FailureSummary(mode)})
 	}
 	if err := epic5AppendRecords(graph, records...); err != nil {
-		return nil, epic5GraphRun{}, err
+		return epic5GraphEvidence{}, err
 	}
 	if _, err := graph.RecordCapabilityUsage(ids.task, ids.capabilityArtifact, epic5Common("edge_epic5_used_capability_"+ids.suffix, v39.TypeCapabilityArtifact, "recorded")); err != nil {
-		return nil, epic5GraphRun{}, err
+		return epic5GraphEvidence{}, err
 	}
 	if _, err := graph.RecordKnowledgeReference(&v39.KnowledgeReference{AdvisoryReference: v39.AdvisoryReference{
 		CommonNode:                   epic5Common(ids.knowledgeReference, v39.TypeKnowledgeReference, "recorded"),
@@ -557,51 +629,65 @@ func epic5RecordEventGraph(ids epic5FixtureIDs, mode Epic5LLMProposalMode, trans
 		FreshnessStatus:              "current",
 		RedactionState:               "none",
 	}}); err != nil {
-		return nil, epic5GraphRun{}, err
+		return epic5GraphEvidence{}, err
 	}
 	if _, err := graph.RecordFactoryRuntimeVersionBOM(&v39.FactoryRuntimeVersion{CommonNode: epic5Common(ids.factoryRuntime, v39.TypeFactoryRuntimeVersion, "active"), RuntimeVersion: "3.9.0-epic5-recorded-llm", CapabilityVersionRefs: []string{}, RuntimeRefs: []string{"work.recorded_llm_fixture@1"}}); err != nil {
-		return nil, epic5GraphRun{}, err
+		return epic5GraphEvidence{}, err
 	}
-	if err := epic5AppendEdges(graph, ids, mode, createdAt, hasInvocation); err != nil {
-		return nil, epic5GraphRun{}, err
+	if err := epic5AppendEdges(graph, ids, createdAt, hasInvocation, statuses.GateStatus == "fail"); err != nil {
+		return epic5GraphEvidence{}, err
 	}
-	rc, err := graph.RecordReleaseCandidate(&v39.ReleaseCandidate{CommonNode: epic5Common(ids.releaseCandidate, v39.TypeReleaseCandidate, factoryStatus), FactoryOrderID: ids.factoryOrder, FactoryRuntimeVersionID: &ids.factoryRuntime, ArtifactRefs: []string{ids.patchArtifact}})
+	rc, err := graph.RecordReleaseCandidate(&v39.ReleaseCandidate{CommonNode: epic5Common(ids.releaseCandidate, v39.TypeReleaseCandidate, statuses.FactoryStatus), FactoryOrderID: ids.factoryOrder, FactoryRuntimeVersionID: &ids.factoryRuntime, ArtifactRefs: []string{ids.patchArtifact}})
 	if err != nil {
-		return nil, epic5GraphRun{}, err
+		return epic5GraphEvidence{}, err
 	}
 	trace, traceErr := graph.EvaluateTraceCompletenessGate(rc.CommonNode.ID)
 	capabilityPath, _ := graph.CapabilityUsageEvidencePath(rc.CommonNode.ID)
 	knowledgePath, _ := graph.AdvisoryReferenceEvidencePath(rc.CommonNode.ID)
-	if mode == Epic5LLMProposalReviewOnly && traceErr != nil {
-		return nil, epic5GraphRun{}, traceErr
+	if statuses.GateStatus == "pass" && traceErr != nil {
+		return epic5GraphEvidence{}, traceErr
 	}
-	if mode == Epic5LLMProposalReviewOnly && (!capabilityPath.Completed || !knowledgePath.Completed) {
-		return nil, epic5GraphRun{}, fmt.Errorf("%w: Gate F influence evidence incomplete: capability=%v knowledge=%v", v39.ErrRequiredPathMissing, capabilityPath.Missing, knowledgePath.Missing)
-	}
+	return epic5GraphEvidence{Graph: graph, Trace: trace, CapabilityUsagePath: capabilityPath, KnowledgePath: knowledgePath}, nil
+}
 
-	if mode == Epic5LLMProposalReviewOnly {
-		cert, err := graph.CertifyReleaseCandidate(&v39.Certification{CommonNode: epic5Common(ids.certification, v39.TypeCertification, "certified"), ReleaseCandidateID: ids.releaseCandidate, CertifierActorID: epic5FixtureHumanActorID, Reason: "Gate F recorded LLM proposal evidence is complete for review-only certification; the proposed patch remains unapplied.", EvidenceRefs: []string{ids.gateResult, ids.humanApproval, ids.authorityDecision, ids.codeChange}})
-		if err != nil {
-			return nil, epic5GraphRun{}, err
-		}
-		audit, err := graph.ReconstructAuditReport(ids.releaseCandidate, &v39.AuditReport{CommonNode: epic5Common(ids.auditReport, v39.TypeAuditReport, "complete"), TargetType: "release_candidate", TargetID: ids.releaseCandidate})
-		if err != nil {
-			return nil, epic5GraphRun{}, err
-		}
-		approval, _ := graph.Get(ids.humanApproval)
-		return graph, epic5GraphRun{DecisionID: cert.CommonNode.ID, Trace: trace, CapabilityUsagePath: capabilityPath, KnowledgePath: knowledgePath, Certification: cert, HumanApproval: approval.(*v39.HumanApproval), AuditReport: audit}, nil
+func epic5EvaluateGateF(trace v39.TraceCompletenessGateResult, capabilityPath, knowledgePath v39.RequiredPath, hasInvocation, proposalApplied bool) Epic5GateFValidation {
+	seen := map[string]bool{}
+	var missing []string
+	if !trace.Completed {
+		missing = appendUniqueStrings(missing, trace.Missing, seen)
 	}
+	if !capabilityPath.Completed {
+		missing = appendUniqueStrings(missing, prefixMissing("capability evidence", capabilityPath.Missing), seen)
+	}
+	if !knowledgePath.Completed {
+		missing = appendUniqueStrings(missing, prefixMissing("knowledge evidence", knowledgePath.Missing), seen)
+	}
+	if !hasInvocation {
+		missing = appendUniqueStrings(missing, []string{"recorded LLM ActorInvocation evidence"}, seen)
+	}
+	if proposalApplied {
+		missing = appendUniqueStrings(missing, []string{"proposed-only boundary: CodeChange status is applied"}, seen)
+	}
+	status := "pass"
+	if len(missing) > 0 {
+		status = "fail"
+	}
+	return Epic5GateFValidation{Status: status, Missing: missing}
+}
 
-	rejection, err := graph.RejectReleaseCandidate(&v39.Rejection{CommonNode: epic5Common(ids.rejection, v39.TypeRejection, "rejected"), ReleaseCandidateID: ids.releaseCandidate, RejectorActorID: epic5FixtureHumanActorID, Reason: epic5FailureSummary(mode), EvidenceRefs: []string{ids.gateResult, ids.failure}})
-	if err != nil {
-		return nil, epic5GraphRun{}, err
+func epic5StatusesFromGateFValidation(validation Epic5GateFValidation) epic5GraphStatuses {
+	if validation.Status == "pass" {
+		return epic5GraphStatuses{FactoryStatus: "certified", TaskStatus: "certified", TestRunStatus: "pass", GateStatus: "pass"}
 	}
-	audit, err := graph.ReconstructAuditReport(ids.releaseCandidate, &v39.AuditReport{CommonNode: epic5Common(ids.auditReport, v39.TypeAuditReport, "incomplete"), TargetType: "release_candidate", TargetID: ids.releaseCandidate})
-	if err != nil {
-		return nil, epic5GraphRun{}, err
+	return epic5GraphStatuses{FactoryStatus: "rejected", TaskStatus: "rejected", TestRunStatus: "fail", GateStatus: "fail"}
+}
+
+func prefixMissing(prefix string, values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, prefix+": "+value)
 	}
-	approval, _ := graph.Get(ids.humanApproval)
-	return graph, epic5GraphRun{DecisionID: rejection.CommonNode.ID, RejectionID: rejection.CommonNode.ID, FailureID: ids.failure, Trace: trace, CapabilityUsagePath: capabilityPath, KnowledgePath: knowledgePath, Rejection: rejection, HumanApproval: approval.(*v39.HumanApproval), AuditReport: audit}, nil
+	return out
 }
 
 func epic5AppendRecords(graph *v39.InMemoryStore, records ...v39.Record) error {
@@ -613,7 +699,7 @@ func epic5AppendRecords(graph *v39.InMemoryStore, records ...v39.Record) error {
 	return nil
 }
 
-func epic5AppendEdges(graph *v39.InMemoryStore, ids epic5FixtureIDs, mode Epic5LLMProposalMode, createdAt time.Time, hasInvocation bool) error {
+func epic5AppendEdges(graph *v39.InMemoryStore, ids epic5FixtureIDs, createdAt time.Time, hasInvocation, includeFailure bool) error {
 	edges := []v39.CommonEdge{
 		epic5Edge("fo_req", v39.EdgeRequires, ids.factoryOrder, ids.requirement, createdAt),
 		epic5Edge("req_ac", v39.EdgeRequires, ids.requirement, ids.acceptanceCriterion, createdAt),
@@ -638,7 +724,7 @@ func epic5AppendEdges(graph *v39.InMemoryStore, ids epic5FixtureIDs, mode Epic5L
 			epic5Edge("change_patch", v39.EdgeModified, ids.codeChange, ids.patchArtifact, createdAt),
 		)
 	}
-	if mode != Epic5LLMProposalReviewOnly {
+	if includeFailure {
 		edges = append(edges, epic5Edge("gate_failure", v39.EdgeFailedBy, ids.gateResult, ids.failure, createdAt))
 	}
 	for _, edge := range edges {
@@ -650,21 +736,18 @@ func epic5AppendEdges(graph *v39.InMemoryStore, ids epic5FixtureIDs, mode Epic5L
 }
 
 func epic5BuildProjection(graph *v39.InMemoryStore, ids epic5FixtureIDs, mode Epic5LLMProposalMode, transcript epic5RecordedTranscriptEvidence, graphRun epic5GraphRun) (Epic5LLMProposalProjection, error) {
-	gateRecord, err := graph.Get(ids.gateResult)
+	gate, err := epic5GateResultFromGraph(graph, ids.gateResult)
 	if err != nil {
 		return Epic5LLMProposalProjection{}, err
 	}
-	gate := gateRecord.(*v39.GateResult)
-	authorityDecisionRecord, err := graph.Get(ids.authorityDecision)
+	authorityDecision, err := epic5AuthorityDecisionFromGraph(graph, ids.authorityDecision)
 	if err != nil {
 		return Epic5LLMProposalProjection{}, err
 	}
-	authorityDecision := authorityDecisionRecord.(*v39.AuthorityDecision)
-	humanApprovalRecord, err := graph.Get(ids.humanApproval)
+	humanApproval, err := epic5HumanApprovalFromGraph(graph, ids.humanApproval)
 	if err != nil {
 		return Epic5LLMProposalProjection{}, err
 	}
-	humanApproval := humanApprovalRecord.(*v39.HumanApproval)
 	audit := graphRun.AuditReport
 	status := statusString(gate.CommonNode.Status)
 	packetStatus := "pass"
@@ -708,7 +791,7 @@ func epic5BuildProjection(graph *v39.InMemoryStore, ids epic5FixtureIDs, mode Ep
 			EventGraphRefs: []string{egRef(v39.TypeKnowledgeReference, ids.knowledgeReference)},
 		},
 		GateEvidence: []Epic5GateEvidence{
-			{GateName: gate.GateName, Status: status, GateResultID: gate.CommonNode.ID, EvidenceRefs: append([]string(nil), gate.EvidenceRefs...), MissingRefs: append([]string(nil), graphRun.Trace.Missing...)},
+			{GateName: gate.GateName, Status: status, GateResultID: gate.CommonNode.ID, EvidenceRefs: append([]string(nil), gate.EvidenceRefs...), MissingRefs: append([]string(nil), graphRun.GateFValidation.Missing...)},
 		},
 		AuditReport: Epic5AuditEvidence{
 			ID:           audit.CommonNode.ID,
@@ -792,13 +875,49 @@ func epic5BuildProjection(graph *v39.InMemoryStore, ids epic5FixtureIDs, mode Ep
 	}
 	if mode == Epic5LLMProposalMissingInvocation {
 		projection.Errors = append(projection.Errors, "recorded LLM invocation missing")
-		projection.NegativeEvidence = append(projection.NegativeEvidence, Epic5ProofOfWorkItem{Label: "Missing invocation", Status: "fail", Summary: "Gate F cannot pass without ActorInvocation evidence.", ArtifactRef: ids.gateResult, EventGraphRefs: []string{egRef(v39.TypeGateResult, ids.gateResult)}})
+		projection.NegativeEvidence = append(projection.NegativeEvidence, Epic5ProofOfWorkItem{Label: "Missing invocation", Status: graphRun.GateFValidation.Status, Summary: "Gate F cannot pass without ActorInvocation evidence.", ArtifactRef: ids.gateResult, EventGraphRefs: []string{egRef(v39.TypeGateResult, ids.gateResult)}})
 	}
 	if mode == Epic5LLMProposalAppliedPatch {
 		projection.Errors = append(projection.Errors, "proposal marked applied")
-		projection.NegativeEvidence = append(projection.NegativeEvidence, Epic5ProofOfWorkItem{Label: "Applied proposal", Status: "fail", Summary: "Gate F cannot pass if the proposal is applied instead of remaining proposed-only.", ArtifactRef: ids.codeChange, EventGraphRefs: []string{egRef(v39.TypeCodeChange, ids.codeChange)}})
+		projection.NegativeEvidence = append(projection.NegativeEvidence, Epic5ProofOfWorkItem{Label: "Applied proposal", Status: graphRun.GateFValidation.Status, Summary: "Gate F cannot pass if the proposal is applied instead of remaining proposed-only.", ArtifactRef: ids.codeChange, EventGraphRefs: []string{egRef(v39.TypeCodeChange, ids.codeChange)}})
 	}
 	return projection, nil
+}
+
+func epic5GateResultFromGraph(graph *v39.InMemoryStore, id string) (*v39.GateResult, error) {
+	record, err := graph.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	gate, ok := record.(*v39.GateResult)
+	if !ok {
+		return nil, fmt.Errorf("record %s is %T, want *v39.GateResult", id, record)
+	}
+	return gate, nil
+}
+
+func epic5AuthorityDecisionFromGraph(graph *v39.InMemoryStore, id string) (*v39.AuthorityDecision, error) {
+	record, err := graph.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	decision, ok := record.(*v39.AuthorityDecision)
+	if !ok {
+		return nil, fmt.Errorf("record %s is %T, want *v39.AuthorityDecision", id, record)
+	}
+	return decision, nil
+}
+
+func epic5HumanApprovalFromGraph(graph *v39.InMemoryStore, id string) (*v39.HumanApproval, error) {
+	record, err := graph.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	approval, ok := record.(*v39.HumanApproval)
+	if !ok {
+		return nil, fmt.Errorf("record %s is %T, want *v39.HumanApproval", id, record)
+	}
+	return approval, nil
 }
 
 func (p Epic5ProofOfWorkPacket) JSON() ([]byte, error) {

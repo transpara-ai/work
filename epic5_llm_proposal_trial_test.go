@@ -32,6 +32,9 @@ func TestEpic5BoundedLLMProposalTrialReviewOnly(t *testing.T) {
 	if run.TraceCompleteness.Status != v39.TraceCompletenessPassed || !run.TraceCompleteness.Completed {
 		t.Fatalf("trace = %#v; want completed pass", run.TraceCompleteness)
 	}
+	if run.GateFValidation.Status != "pass" || len(run.GateFValidation.Missing) != 0 {
+		t.Fatalf("Gate F validation = %#v; want pass with no missing evidence", run.GateFValidation)
+	}
 	if run.WorkProjection.Status != work.StatusCertified {
 		t.Fatalf("work status = %q; want certified", run.WorkProjection.Status)
 	}
@@ -81,6 +84,15 @@ func TestEpic5BoundedLLMProposalTrialMissingInvocationFailsGateF(t *testing.T) {
 	if statusValue(gate.CommonNode.Status) != "fail" {
 		t.Fatalf("gate status = %q; want fail", statusValue(gate.CommonNode.Status))
 	}
+	if run.GateFValidation.Status != "fail" {
+		t.Fatalf("Gate F validation status = %q; want fail", run.GateFValidation.Status)
+	}
+	if !containsString(run.GateFValidation.Missing, "USED_ENVELOPE from tsk_epic5_llm_proposal_missing_invocation") {
+		t.Fatalf("Gate F missing evidence = %#v; want trace-derived missing runtime envelope", run.GateFValidation.Missing)
+	}
+	if !containsString(run.GateFValidation.Missing, "recorded LLM ActorInvocation evidence") {
+		t.Fatalf("Gate F missing evidence = %#v; want missing invocation evidence", run.GateFValidation.Missing)
+	}
 	if !containsString(run.Projection.Errors, "recorded LLM invocation missing") {
 		t.Fatalf("errors = %#v; want missing invocation", run.Projection.Errors)
 	}
@@ -119,6 +131,12 @@ func TestEpic5BoundedLLMProposalTrialAppliedPatchFailsGateF(t *testing.T) {
 	gate := getEpic5GateResult(t, run)
 	if statusValue(gate.CommonNode.Status) != "fail" {
 		t.Fatalf("gate status = %q; want fail", statusValue(gate.CommonNode.Status))
+	}
+	if run.GateFValidation.Status != "fail" {
+		t.Fatalf("Gate F validation status = %q; want fail", run.GateFValidation.Status)
+	}
+	if !containsString(run.GateFValidation.Missing, "proposed-only boundary: CodeChange status is applied") {
+		t.Fatalf("Gate F missing evidence = %#v; want applied-proposal boundary failure", run.GateFValidation.Missing)
 	}
 	assertEpic5NoExecutionReceipt(t, run)
 }
