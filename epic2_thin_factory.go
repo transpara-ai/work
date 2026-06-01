@@ -256,7 +256,7 @@ func RunEpic2ThinFactoryVerticalSlice(ts *TaskStore, opts Epic2ThinFactoryOption
 		return Epic2ThinFactoryRun{}, err
 	}
 	if runtimeRun.Result.Result.Status != RuntimeStatusSucceeded {
-		return Epic2ThinFactoryRun{}, fmt.Errorf("Epic 2 runtime status %s: %s", runtimeRun.Result.Result.Status, runtimeRun.Result.Result.Error)
+		return Epic2ThinFactoryRun{}, fmt.Errorf("epic 2 runtime status %s: %s", runtimeRun.Result.Result.Status, runtimeRun.Result.Result.Error)
 	}
 	artifactHash, err := epic2RuntimeArtifactHash(runtimeRun.Result.Result)
 	if err != nil {

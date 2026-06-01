@@ -87,18 +87,6 @@ func expectFrame(t *testing.T, frames <-chan string, timeout time.Duration) stri
 	}
 }
 
-// expectNoFrame asserts no frame arrives within dur.
-func expectNoFrame(t *testing.T, frames <-chan string, dur time.Duration) {
-	t.Helper()
-	select {
-	case f, ok := <-frames:
-		if ok {
-			t.Fatalf("unexpected sse frame: %s", f)
-		}
-	case <-time.After(dur):
-	}
-}
-
 // drainFrames collects every frame that arrives within dur.
 func drainFrames(frames <-chan string, dur time.Duration) []string {
 	var out []string
@@ -368,12 +356,12 @@ func TestEventMatchesFilters(t *testing.T) {
 		filters []string
 		want    bool
 	}{
-		{"hive.gap.detected", nil, true},                             // no filter = pass
-		{"hive.gap.detected", []string{"hive."}, true},               // prefix match
-		{"agent.state.changed", []string{"hive."}, false},            // prefix miss
-		{"site.op.received", []string{"hive.", "site.op."}, true},    // multi-prefix match
-		{"work.task.created", []string{"hive.", "site.op."}, false},  // multi-prefix miss
-		{"hive.gap", []string{"hive.gap.detected"}, false},           // prefix is longer than event type
+		{"hive.gap.detected", nil, true},                            // no filter = pass
+		{"hive.gap.detected", []string{"hive."}, true},              // prefix match
+		{"agent.state.changed", []string{"hive."}, false},           // prefix miss
+		{"site.op.received", []string{"hive.", "site.op."}, true},   // multi-prefix match
+		{"work.task.created", []string{"hive.", "site.op."}, false}, // multi-prefix miss
+		{"hive.gap", []string{"hive.gap.detected"}, false},          // prefix is longer than event type
 	}
 	for _, c := range cases {
 		if got := eventMatchesFilters(c.evType, c.filters); got != c.want {
