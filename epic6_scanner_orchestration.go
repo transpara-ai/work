@@ -480,10 +480,16 @@ func epic6LicensePolicyEvidence(targetDir, evidenceDir string) Epic6ScannerGateE
 	inputRefs := []string{"frontend/package.json", "frontend/package-lock.json", "backend/pyproject.toml", "backend/requirements.lock.txt"}
 	status := SecurityGateStatusPass
 	var findings []SecurityFinding
-	checks := []string{}
+	checks := []string{"inspected generated frontend and backend dependency manifests"}
 	if !epic6FileContains(filepath.Join(targetDir, "frontend", "package.json"), []string{`"dependencies"`, `"next"`, `"react"`}) {
 		status = SecurityGateStatusFail
 		findings = append(findings, SecurityFinding{ID: "finding_epic6_license_frontend_manifest", Gate: GateDependencyLicenseScan, Severity: FindingSeverityHigh, Status: FindingStatusOpen, Summary: "frontend dependency metadata is missing required entries"})
+	}
+	licenseChecks, licenseFindings := epic6FrontendPackageLockLicenseChecks(filepath.Join(targetDir, "frontend", "package-lock.json"))
+	checks = append(checks, licenseChecks...)
+	if len(licenseFindings) > 0 {
+		status = SecurityGateStatusFail
+		findings = append(findings, licenseFindings...)
 	}
 	if !epic6FileContains(filepath.Join(targetDir, "backend", "pyproject.toml"), []string{"dependencies = [", `"fastapi`, `"sqlalchemy`}) {
 		status = SecurityGateStatusFail
@@ -493,10 +499,79 @@ func epic6LicensePolicyEvidence(targetDir, evidenceDir string) Epic6ScannerGateE
 		status = SecurityGateStatusFail
 		findings = append(findings, SecurityFinding{ID: "finding_epic6_license_backend_lock", Gate: GateDependencyLicenseScan, Severity: FindingSeverityHigh, Status: FindingStatusOpen, Summary: "backend dependency lock metadata is missing required entries"})
 	}
-	checks = append(checks, "inspected generated frontend and backend dependency manifests")
 	outputRef := filepath.Join(evidenceDir, "license-policy.json")
 	_ = epic6WriteJSON(outputRef, map[string]any{"tool": "license-policy", "version": "dark-factory-local-1", "status": status, "checks": checks, "findings": findings})
 	return Epic6ScannerGateEvidence{Gate: GateDependencyLicenseScan, Status: status, ScannerTool: "license-policy", ScannerVersion: "dark-factory-local-1", EvidenceMode: "real_local_checker", Commands: []Epic6ScannerCommandEvidence{epic6LocalCommand("license-policy", targetDir, inputRefs, outputRef)}, InputRefs: inputRefs, RawOutputRefs: []string{outputRef}, Findings: findings, D2ScaffoldDisposition: "replaces generated D2 scaffold evidence with manifest-derived local policy evidence"}
+}
+
+func epic6FrontendPackageLockLicenseChecks(path string) ([]string, []SecurityFinding) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, []SecurityFinding{{ID: "finding_epic6_license_frontend_lock_missing", Gate: GateDependencyLicenseScan, Severity: FindingSeverityHigh, Status: FindingStatusOpen, Summary: "frontend package-lock license metadata is missing"}}
+	}
+	var lock struct {
+		Packages map[string]struct {
+			Version string `json:"version"`
+			License string `json:"license"`
+		} `json:"packages"`
+	}
+	if err := json.Unmarshal(raw, &lock); err != nil || len(lock.Packages) == 0 {
+		return nil, []SecurityFinding{{ID: "finding_epic6_license_frontend_lock_invalid", Gate: GateDependencyLicenseScan, Severity: FindingSeverityHigh, Status: FindingStatusOpen, Summary: "frontend package-lock license metadata is invalid"}}
+	}
+	required := map[string]string{
+		"node_modules/next":      "MIT",
+		"node_modules/react":     "MIT",
+		"node_modules/react-dom": "MIT",
+	}
+	licenses := map[string]bool{}
+	packageCount := 0
+	var findings []SecurityFinding
+	for packagePath, pkg := range lock.Packages {
+		if packagePath == "" {
+			continue
+		}
+		packageCount++
+		license := strings.TrimSpace(pkg.License)
+		if license == "" {
+			findings = append(findings, SecurityFinding{ID: "finding_epic6_license_missing_" + epic6Slug(packagePath), Gate: GateDependencyLicenseScan, Severity: FindingSeverityHigh, Status: FindingStatusOpen, Summary: "frontend package-lock dependency is missing license metadata: " + packagePath})
+			continue
+		}
+		licenses[license] = true
+		if epic6ForbiddenLicenseExpression(license) {
+			findings = append(findings, SecurityFinding{ID: "finding_epic6_license_forbidden_" + epic6Slug(packagePath), Gate: GateDependencyLicenseScan, Severity: FindingSeverityHigh, Status: FindingStatusOpen, Summary: "frontend package-lock dependency has forbidden license expression: " + packagePath})
+		}
+	}
+	for packagePath, expectedLicense := range required {
+		pkg, ok := lock.Packages[packagePath]
+		if !ok || strings.TrimSpace(pkg.Version) == "" {
+			findings = append(findings, SecurityFinding{ID: "finding_epic6_license_required_missing_" + epic6Slug(packagePath), Gate: GateDependencyLicenseScan, Severity: FindingSeverityHigh, Status: FindingStatusOpen, Summary: "frontend package-lock dependency metadata is missing required package: " + packagePath})
+			continue
+		}
+		if !strings.Contains(pkg.License, expectedLicense) {
+			findings = append(findings, SecurityFinding{ID: "finding_epic6_license_required_unexpected_" + epic6Slug(packagePath), Gate: GateDependencyLicenseScan, Severity: FindingSeverityHigh, Status: FindingStatusOpen, Summary: "frontend package-lock dependency has unexpected license metadata: " + packagePath})
+		}
+	}
+	checks := []string{fmt.Sprintf("inspected frontend package-lock license metadata for %d packages and %d license expressions", packageCount, len(licenses))}
+	return checks, findings
+}
+
+func epic6ForbiddenLicenseExpression(license string) bool {
+	normalized := strings.ToUpper(strings.TrimSpace(license))
+	tokens := strings.FieldsFunc(normalized, func(r rune) bool {
+		return r == ' ' || r == '(' || r == ')' || r == '/'
+	})
+	for _, token := range tokens {
+		token = strings.Trim(token, ",")
+		for _, marker := range []string{"AGPL", "AGPL-3.0-ONLY", "AGPL-3.0-OR-LATER", "GPL-3.0-ONLY", "GPL-3.0-OR-LATER", "BUSL", "UNLICENSED"} {
+			if token == marker {
+				return true
+			}
+		}
+		if strings.HasPrefix(token, "AGPL-") || strings.HasPrefix(token, "BUSL-") {
+			return true
+		}
+	}
+	return false
 }
 
 func epic6AuthFlowEvidence(targetDir, evidenceDir string) Epic6ScannerGateEvidence {

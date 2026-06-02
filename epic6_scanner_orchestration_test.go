@@ -214,6 +214,17 @@ func assertEpic6EvidenceShape(t *testing.T, run work.Epic6ScannerOrchestrationRu
 			t.Fatalf("%s evidence = %#v; want real local checker command evidence", gate, item)
 		}
 	}
+	license := byGate[work.GateDependencyLicenseScan]
+	if !containsString(license.InputRefs, "frontend/package-lock.json") || len(license.RawOutputRefs) == 0 {
+		t.Fatalf("license evidence = %#v; want frontend package-lock input and raw output", license)
+	}
+	licenseOutput, err := os.ReadFile(license.RawOutputRefs[0])
+	if err != nil {
+		t.Fatalf("read license output: %v", err)
+	}
+	if !strings.Contains(string(licenseOutput), "frontend package-lock license metadata") {
+		t.Fatalf("license output = %s; want package-lock license metadata check", licenseOutput)
+	}
 	if byGate[work.GateContainerOrArtifactScan].Status != work.SecurityGateStatusNotApplicable || byGate[work.GateContainerOrArtifactScan].NotApplicableReason == "" {
 		t.Fatalf("container evidence = %#v; want explicit not_applicable proof", byGate[work.GateContainerOrArtifactScan])
 	}
