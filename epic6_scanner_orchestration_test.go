@@ -41,6 +41,27 @@ func TestEpic6RealScannerOrchestrationMissingScannerBlocksGateG(t *testing.T) {
 	}
 }
 
+func TestEpic6RealScannerOrchestrationMissingScannerOutputBlocksGateG(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	run, err := work.RunEpic6RealScannerOrchestrationTrial(ts, work.Epic6ScannerOrchestrationOptions{
+		Source:         testActor,
+		ConversationID: testConv,
+		Causes:         causes,
+		WorkingDir:     t.TempDir(),
+		Mode:           work.Epic6ScannerOrchestrationLocalEvidence,
+		CommandRunner:  epic6MissingOutputRunner,
+		Timeout:        time.Second,
+	})
+	if err != nil {
+		t.Fatalf("RunEpic6RealScannerOrchestrationTrial missing output: %v", err)
+	}
+	assertEpic6Rejected(t, run)
+	if !epic6EvidenceHasFinding(run.ScannerEvidence, "finding_epic6_missing_output_") {
+		t.Fatalf("scanner evidence = %#v; want missing scanner output finding", run.ScannerEvidence)
+	}
+}
+
 func TestEpic6RealScannerOrchestrationOpenCriticalBlocksEvenWithWaiver(t *testing.T) {
 	run := runEpic6(t, work.Epic6ScannerOrchestrationOpenCritical)
 	assertEpic6Rejected(t, run)
@@ -171,6 +192,29 @@ func epic6FakeRunner(_ context.Context, command work.Epic6ScannerCommand) work.E
 		_ = os.WriteFile(command.OutputRef, []byte(`{"results":[]}`+"\n"), 0o644)
 	}
 	return work.Epic6CommandResult{StartedAt: started, CompletedAt: started.Add(time.Second), ExitCode: 0, Stdout: stdout}
+}
+
+func epic6MissingOutputRunner(_ context.Context, command work.Epic6ScannerCommand) work.Epic6CommandResult {
+	started := time.Date(2026, 6, 2, 0, 30, 0, 0, time.UTC)
+	stdout := ""
+	if len(command.Args) > 0 && (strings.Contains(strings.Join(command.Args, " "), "version") || command.Args[0] == "--version") {
+		stdout = map[string]string{"gitleaks": "8.18.4", "osv-scanner": "1.9.1", "semgrep": "1.96.0"}[command.Tool]
+		if stdout == "" {
+			stdout = "1.0.0"
+		}
+	}
+	return work.Epic6CommandResult{StartedAt: started, CompletedAt: started.Add(time.Second), ExitCode: 0, Stdout: stdout}
+}
+
+func epic6EvidenceHasFinding(evidence []work.Epic6ScannerGateEvidence, prefix string) bool {
+	for _, item := range evidence {
+		for _, finding := range item.Findings {
+			if strings.HasPrefix(finding.ID, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func assertEpic6Rejected(t *testing.T, run work.Epic6ScannerOrchestrationRun) {

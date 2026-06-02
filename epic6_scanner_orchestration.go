@@ -468,6 +468,16 @@ func epic6ExternalScannerEvidence(ctx context.Context, targetDir, evidenceDir st
 			Summary:   tool + " returned a failing exit status",
 		})
 	}
+	if epic6ScannerOutputMissing(scanCommand.OutputRef) {
+		status = SecurityGateStatusFail
+		findings = append(findings, SecurityFinding{
+			ID:       "finding_epic6_missing_output_" + string(gate),
+			Gate:     gate,
+			Severity: epic6SeverityForGate(gate),
+			Status:   FindingStatusOpen,
+			Summary:  tool + " did not produce required scanner output",
+		})
+	}
 	return Epic6ScannerGateEvidence{
 		Gate: gate, Status: status, ScannerTool: tool, ScannerVersion: version, EvidenceMode: "real_scanner_command",
 		Commands:  []Epic6ScannerCommandEvidence{versionEvidence, scanEvidence},
@@ -1054,6 +1064,11 @@ func epic6CommandOutputRefs(command Epic6ScannerCommandEvidence) []string {
 		}
 	}
 	return refs
+}
+
+func epic6ScannerOutputMissing(path string) bool {
+	raw, err := os.ReadFile(path)
+	return err != nil || strings.TrimSpace(string(raw)) == ""
 }
 
 func epic6LocalCommand(tool, dir string, inputs []string, outputRef string) Epic6ScannerCommandEvidence {
