@@ -79,6 +79,12 @@ func TestEpic9GoldenPRDProductFactoryRunRejectsRequiredMissingEvidence(t *testin
 			if tt.opts.OmitFactoryOrder && run.Rejection != nil {
 				t.Fatalf("rejection = %#v; want no release decision when FactoryOrder is absent", run.Rejection)
 			}
+			if tt.opts.OmitSourceIntent {
+				order := assertEpic9GraphRecord(t, run, run.FactoryOrderID, v39.TypeFactoryOrder).(*v39.FactoryOrder)
+				if strings.HasPrefix(order.SourceIntentHash, "sha256:") {
+					t.Fatalf("source-intent sentinel = %q; want no digest prefix", order.SourceIntentHash)
+				}
+			}
 		})
 	}
 }
@@ -135,11 +141,18 @@ func assertEpic9Rejected(t *testing.T, run work.Epic9GoldenPRDRun) {
 func assertEpic9GoldenPRD(t *testing.T, run work.Epic9GoldenPRDRun) {
 	t.Helper()
 	golden := run.Projection.GoldenPRD
-	if golden.Name != "simple CRUD tracker" || golden.SourceRef == "" || golden.Hash == "" {
-		t.Fatalf("golden PRD = %#v; want named source ref and hash", golden)
+	if golden.Name != "simple CRUD tracker" || golden.SourceRef == "" || golden.LocatorHash == "" {
+		t.Fatalf("golden PRD = %#v; want named source ref and locator hash", golden)
 	}
-	if run.GateJValidation.Metrics.GoldenPRDRef != golden.SourceRef || run.GateJValidation.Metrics.GoldenPRDHash != golden.Hash {
-		t.Fatalf("metrics = %#v; want golden PRD ref/hash", run.GateJValidation.Metrics)
+	if run.GateJValidation.Metrics.GoldenPRDRef != golden.SourceRef || run.GateJValidation.Metrics.GoldenPRDLocatorHash != golden.LocatorHash {
+		t.Fatalf("metrics = %#v; want golden PRD ref/locator hash", run.GateJValidation.Metrics)
+	}
+	knowledge := assertEpic9GraphRecord(t, run, run.KnowledgeReferenceID, v39.TypeKnowledgeReference).(*v39.KnowledgeReference)
+	if strings.HasPrefix(knowledge.SourceHashOrImmutableLocator, "sha256:") {
+		t.Fatalf("knowledge locator = %q; want locator without digest prefix", knowledge.SourceHashOrImmutableLocator)
+	}
+	if !strings.Contains(knowledge.SourceHashOrImmutableLocator, "docs-pr-91-merged-") {
+		t.Fatalf("knowledge locator = %q; want docs#91 merge locator", knowledge.SourceHashOrImmutableLocator)
 	}
 }
 

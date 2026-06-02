@@ -125,10 +125,10 @@ type Epic9GoldenPRDProjection struct {
 }
 
 type Epic9GoldenPRDSource struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	SourceRef string `json:"source_ref"`
-	Hash      string `json:"hash"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	SourceRef   string `json:"source_ref"`
+	LocatorHash string `json:"locator_hash"`
 }
 
 type Epic9GeneratedManifest struct {
@@ -190,7 +190,7 @@ type Epic9GateJValidation struct {
 
 type Epic9GateJMetrics struct {
 	GoldenPRDRef             string   `json:"golden_prd_ref"`
-	GoldenPRDHash            string   `json:"golden_prd_hash"`
+	GoldenPRDLocatorHash     string   `json:"golden_prd_locator_hash"`
 	FactoryOrderID           string   `json:"factory_order_id"`
 	GeneratedTemplateID      string   `json:"generated_template_id"`
 	GeneratedFileCount       int      `json:"generated_file_count"`
@@ -680,7 +680,7 @@ func epic9EvaluateGateJ(ids epic9FixtureIDs, opts Epic9GoldenPRDOptions, manifes
 		Missing: missing,
 		Metrics: Epic9GateJMetrics{
 			GoldenPRDRef:             epic9GoldenPRDSourceRef,
-			GoldenPRDHash:            epic9GoldenPRDHash(),
+			GoldenPRDLocatorHash:     epic9GoldenPRDLocatorHash(),
 			FactoryOrderID:           ids.factoryOrder,
 			GeneratedTemplateID:      manifest.TemplateID,
 			GeneratedFileCount:       manifest.FileCount,
@@ -719,7 +719,7 @@ func epic9RecordEventGraph(ids epic9FixtureIDs, opts Epic9GoldenPRDOptions, mani
 		&v39.ActorIdentity{CommonNode: epic9Common(ids.actorIdentity, v39.TypeActorIdentity, "active"), ActorID: epic9FixtureActorID, ActorType: "agent", IdentityMode: "fixture"},
 		&v39.ActorIdentity{CommonNode: epic9Common(ids.humanActorIdentity, v39.TypeActorIdentity, "active"), ActorID: epic9FixtureHumanActorID, ActorType: "human", IdentityMode: "fixture"},
 		&v39.CapabilityArtifact{CommonNode: epic9Common(ids.capabilityArtifact, v39.TypeCapabilityArtifact, "active"), ArtifactID: ids.capabilityArtifact, ArtifactType: "workflow_pack", Name: "Epic 9 SaaS Template v1 local generator", ArtifactVersion: "v1", SourceRepoOrOrigin: "transpara-ai/work", ContentHash: epic7Hash(SaaSTemplateV1ID + ":" + strings.Join(manifest.Files, "\n")), Owner: "work", RiskClass: "high", ActivationScope: "fixture_only", EvalRefs: []string{ids.testCase}, HumanReviewRef: epic9DocsReviewedHead, RollbackRef: "not_applicable_local_dry_run_fixture", UsageLoggingRequired: true},
-		&v39.ActorInvocation{CommonNode: epic9Common(ids.actorInvocation, v39.TypeActorInvocation, runtimeStatus), TaskID: ids.task, Runtime: "local", ActorID: epic9FixtureActorID, InputContractHash: epic9GoldenPRDHash(), OutputContractHash: strPtr(epic7Hash("epic9-output:" + strings.Join(artifactRefs, ":")))},
+		&v39.ActorInvocation{CommonNode: epic9Common(ids.actorInvocation, v39.TypeActorInvocation, runtimeStatus), TaskID: ids.task, Runtime: "local", ActorID: epic9FixtureActorID, InputContractHash: epic9GoldenPRDLocatorHash(), OutputContractHash: strPtr(epic7Hash("epic9-output:" + strings.Join(artifactRefs, ":")))},
 		&v39.RuntimeEnvelope{CommonNode: epic9Common(ids.runtimeEnvelope, v39.TypeRuntimeEnvelope, "recorded"), RuntimeAdapterID: "local_golden_prd_factory_fixture", RuntimeAdapterVersion: "1", FactoryRuntimeVersionRef: ids.factoryRuntime, TaskID: ids.task, ActorID: epic9FixtureActorID, AuthorityDecisionRef: "human_authorized_in_chat_2026-06-02_docs_main_" + epic7ShortSHA(epic9DocsMergeSHA), AllowedFiles: []string{"generated-saas-template-v1/**", "artifacts/golden-prd/**"}, DeniedFiles: []string{".git", "../", ".env", "secrets.env"}, AllowedCommands: []string{"generate_saas_template_v1", "write_security_gate_report", "write_proof_packet", "write_audit_report"}, DeniedCommands: []string{"gh pr create", "git push", "git merge", "gh pr merge", "deploy", "protected_execution.run", "capability.activate.global", "PolicyEngineAdapterDecision"}, NetworkPolicy: "disabled", SecretsPolicy: "none", WorkingDirectory: opts.WorkingDir, Timeout: "1s", ResourceLimits: map[string]any{"max_live_prs_created": 0, "max_branch_pushes": 0, "max_production_deploys": 0, "max_protected_executions": 0, "max_global_activations": 0, "max_repos_mutated": 0}, ExpectedOutputs: []string{"generated-saas-template-v1/**", "artifacts/golden-prd/security-gates/report.json", "artifacts/golden-prd/proof-of-work.json", "artifacts/golden-prd/audit-report.json"}, OutputContract: map[string]any{"mode": string(opts.Mode), "gate": "gate_j_golden_prd_product_factory_run"}, TraceRequiredPaths: []string{"FactoryOrder -> Requirement -> AcceptanceCriterion -> Task", "Task -> ActorInvocation", "Task -> RuntimeEnvelope -> RuntimeResult", "Task -> Artifact", "Task -> TestCase -> TestRun -> GateResult", "ReleaseCandidate -> Certification or Rejection -> AuditReport"}, PostRunValidationPlan: []string{"epic9EvaluateGateJ", "go test ./... -run Epic9", "make verify"}, EnvelopeHash: epic7Hash("epic9-envelope:" + string(opts.Mode))},
 		&v39.RuntimeResult{CommonNode: epic9Common(ids.runtimeResult, v39.TypeRuntimeResult, runtimeStatus), InvocationID: ids.runtimeEnvelope, RuntimeAdapterID: "local_golden_prd_factory_fixture", StartedAt: createdAt, CompletedAt: createdAt.Add(time.Second), ExitStatus: runtimeStatus, ArtifactRefs: artifactRefs, ChangedFiles: epic9ChangedFiles(manifest, opts), CommandLog: epic9CommandLog(opts, validation), NetworkAccessLog: []string{}, SecretAccessLog: []string{}, PolicyDecisionRefs: []string{"local_security_gate_policy", "no_policy_engine_adapter_decision"}, PostRunValidationRefs: []string{ids.testRun}},
 		&v39.TestCase{CommonNode: epic9Common(ids.testCase, v39.TypeTestCase, "active"), AcceptanceCriterionID: epic9AcceptanceCriterionRef(ids, opts), RequirementID: &ids.requirement, Name: "Epic 9 golden PRD Gate J evidence", TestType: "unit", Path: strPtr("work/epic9_golden_prd_factory_run_test.go")},
@@ -746,7 +746,7 @@ func epic9RecordEventGraph(ids epic9FixtureIDs, opts Epic9GoldenPRDOptions, mani
 		return nil, epic9GraphRun{}, err
 	}
 	if !opts.OmitSourceIntent {
-		if _, err := graph.RecordKnowledgeReference(&v39.KnowledgeReference{AdvisoryReference: v39.AdvisoryReference{CommonNode: epic9Common(ids.knowledgeReference, v39.TypeKnowledgeReference, "recorded"), ReferenceCreatedAt: createdAt, SourceSystem: "transpara-ai/docs", SourceRef: epic9KnowledgeSourceRef, SourceHashOrImmutableLocator: "sha256:docs-pr-91-merged-" + epic9DocsMergeSHA + "-reviewed-head-" + epic9DocsReviewedHead, RetrievedAt: createdAt, UsedByActor: epic9FixtureActorID, UsedInTask: ids.task, InfluenceSummary: "Gate J authorization constrained the golden PRD, local dry-run mode, FactoryOrder-to-AuditReport evidence model, security gates, rejection paths, residual risks, and stop conditions.", RiskScope: "high", TrustLevel: "human_authorized", FreshnessStatus: "current", RedactionState: "none"}}); err != nil {
+		if _, err := graph.RecordKnowledgeReference(&v39.KnowledgeReference{AdvisoryReference: v39.AdvisoryReference{CommonNode: epic9Common(ids.knowledgeReference, v39.TypeKnowledgeReference, "recorded"), ReferenceCreatedAt: createdAt, SourceSystem: "transpara-ai/docs", SourceRef: epic9KnowledgeSourceRef, SourceHashOrImmutableLocator: "docs-pr-91-merged-" + epic9DocsMergeSHA + "-reviewed-head-" + epic9DocsReviewedHead, RetrievedAt: createdAt, UsedByActor: epic9FixtureActorID, UsedInTask: ids.task, InfluenceSummary: "Gate J authorization constrained the golden PRD, local dry-run mode, FactoryOrder-to-AuditReport evidence model, security gates, rejection paths, residual risks, and stop conditions.", RiskScope: "high", TrustLevel: "human_authorized", FreshnessStatus: "current", RedactionState: "none"}}); err != nil {
 			return nil, epic9GraphRun{}, err
 		}
 	}
@@ -828,7 +828,7 @@ func epic9ArtifactRecords(ids epic9FixtureIDs, opts Epic9GoldenPRDOptions, manif
 	var records []v39.Record
 	if !opts.OmitSourceIntent {
 		path := epic9GoldenPRDSourceRef
-		records = append(records, &v39.Artifact{CommonNode: epic9Common(ids.sourceIntentArtifact, v39.TypeArtifact, "verified"), TaskID: &ids.task, ArtifactType: "document", Path: &path, ContentHash: strPtr(epic9GoldenPRDHash())})
+		records = append(records, &v39.Artifact{CommonNode: epic9Common(ids.sourceIntentArtifact, v39.TypeArtifact, "verified"), TaskID: &ids.task, ArtifactType: "document", Path: &path, ContentHash: strPtr(epic9GoldenPRDLocatorHash())})
 	}
 	if !opts.OmitGeneratedArtifactEvidence {
 		manifestPath := "artifacts/golden-prd/generated-manifest.json"
@@ -990,24 +990,24 @@ func epic9ReleaseEvidence(ids epic9FixtureIDs, graphRun epic9GraphRun, audit Epi
 }
 
 func epic9GoldenPRDSource(opts Epic9GoldenPRDOptions) Epic9GoldenPRDSource {
-	hash := epic9GoldenPRDHash()
+	locatorHash := epic9GoldenPRDLocatorHash()
 	sourceRef := epic9GoldenPRDSourceRef
 	if opts.OmitSourceIntent {
-		hash = ""
+		locatorHash = ""
 		sourceRef = ""
 	}
-	return Epic9GoldenPRDSource{ID: "golden_prd_simple_crud_tracker_v1", Name: epic9GoldenPRDName, SourceRef: sourceRef, Hash: hash}
+	return Epic9GoldenPRDSource{ID: "golden_prd_simple_crud_tracker_v1", Name: epic9GoldenPRDName, SourceRef: sourceRef, LocatorHash: locatorHash}
 }
 
-func epic9GoldenPRDHash() string {
+func epic9GoldenPRDLocatorHash() string {
 	return epic7Hash(epic9GoldenPRDName + "|" + epic9GoldenPRDSourceRef)
 }
 
 func epic9SourceIntentHash(opts Epic9GoldenPRDOptions) string {
 	if opts.OmitSourceIntent {
-		return "sha256:source-intent-omitted-negative-seam"
+		return "source-intent-omitted-negative-seam"
 	}
-	return epic9GoldenPRDHash()
+	return epic9GoldenPRDLocatorHash()
 }
 
 func epic9SourceIntentRef(opts Epic9GoldenPRDOptions) string {

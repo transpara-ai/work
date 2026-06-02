@@ -10,7 +10,10 @@ The fixture is `RunEpic9GoldenPRDProductFactoryRun` with mode
 authorized by `transpara-ai/docs#91`.
 
 The selected golden PRD is `simple CRUD tracker`, sourced from
-`dark-factory/v3.9/04-production-workflow-and-runtime-v3.9.md`.
+`dark-factory/v3.9/04-production-workflow-and-runtime-v3.9.md`. The local
+fixture records this source by canonical path plus a deterministic locator hash
+derived from the PRD name and source reference; it does not claim a
+cross-repository document-body digest.
 
 ## Evidence Path
 
@@ -27,7 +30,9 @@ The fixture records:
 - `Certification` or `Rejection`
 - `AuditReport`
 - `KnowledgeReference` and local capability-usage evidence required by the
-  current EventGraph v3.9 certification eligibility path
+  current EventGraph v3.9 certification eligibility path, with the docs#91
+  merge/reviewed-head locator recorded as an immutable locator rather than a
+  digest
 
 The generated product is SaaS Template v1, written only into the caller's
 working directory. The deploy preview is a dry-run text artifact only.
