@@ -1,6 +1,7 @@
 package work
 
 import (
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +35,7 @@ func SaaSTemplateV1Files() []SaaSTemplateFile {
 		{Path: "scripts/migration-check.sh", Content: migrationCheck},
 		{Path: "scripts/security-gates.sh", Content: securityGatesScript()},
 		{Path: "security/security-gates-policy.json", Content: securityGatesPolicyJSON},
+		{Path: "frontend/package-lock.json", Content: frontendPackageLockJSON},
 		{Path: "frontend/package.json", Content: frontendPackageJSON},
 		{Path: "frontend/playwright.config.ts", Content: frontendPlaywrightConfig},
 		{Path: "frontend/next.config.mjs", Content: frontendNextConfig},
@@ -436,18 +438,24 @@ const frontendPackageJSON = `{
     "e2e": "playwright test"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^5.0.0",
-    "next": "^15.0.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "@vitejs/plugin-react": "6.0.2",
+    "next": "16.2.7",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
   },
   "devDependencies": {
-    "@playwright/test": "^1.48.0",
-    "typescript": "^5.6.0",
-    "vitest": "^2.1.0"
+    "@playwright/test": "1.60.0",
+    "typescript": "6.0.3",
+    "vitest": "4.1.8"
+  },
+  "overrides": {
+    "postcss": "8.5.15"
   }
 }
 `
+
+//go:embed templates/saas-template-v1/frontend/package-lock.json
+var frontendPackageLockJSON string
 
 const frontendNextConfig = `const nextConfig = {
   output: "standalone"

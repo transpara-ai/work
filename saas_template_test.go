@@ -26,6 +26,7 @@ func TestSaaSTemplateV1FilesCoverRequiredSurface(t *testing.T) {
 		"docker-compose.yml",
 		"Makefile",
 		"frontend/package.json",
+		"frontend/package-lock.json",
 		"frontend/playwright.config.ts",
 		"frontend/app/api/login/route.ts",
 		"frontend/app/login/page.tsx",
@@ -48,6 +49,9 @@ func TestSaaSTemplateV1FilesCoverRequiredSurface(t *testing.T) {
 	}
 
 	assertContains(t, byPath["frontend/package.json"], `"next"`)
+	assertContains(t, byPath["frontend/package.json"], `"postcss": "8.5.15"`)
+	assertContains(t, byPath["frontend/package-lock.json"], `"lockfileVersion": 3`)
+	assertContains(t, byPath["frontend/package-lock.json"], `"postcss"`)
 	assertContains(t, byPath["backend/pyproject.toml"], `"fastapi`)
 	assertContains(t, byPath["docker-compose.yml"], "postgres:")
 	assertContains(t, byPath["backend/alembic/versions/0001_create_tracker_items.py"], "create_table")
