@@ -2,7 +2,9 @@ package work_test
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -64,6 +66,22 @@ func TestEpic8CapabilityMonitoringRejectsMissingRollbackTrigger(t *testing.T) {
 	assertEpic8Rejected(t, run)
 	if !containsString(run.GateIValidation.Missing, "rollback trigger evidence missing") {
 		t.Fatalf("missing = %#v; want rollback trigger failure", run.GateIValidation.Missing)
+	}
+	if _, err := run.EventGraph.Get(run.RollbackRecordID); err == nil {
+		t.Fatalf("rollback record %s exists; want omitted rollback trigger seam", run.RollbackRecordID)
+	}
+	if _, err := os.Stat(run.LocalArtifacts.RollbackDecision); err == nil {
+		t.Fatalf("rollback decision artifact exists at %s; want omitted rollback trigger seam", run.LocalArtifacts.RollbackDecision)
+	}
+	proof := readEpic8Proof(t, run)
+	if proof.Metrics.RollbackTriggerCount != 0 {
+		t.Fatalf("proof rollback trigger count = %d; want 0", proof.Metrics.RollbackTriggerCount)
+	}
+	if proof.RollbackDecision.Decision != "missing" || proof.RollbackDecision.AuthorityDecisionID != "" {
+		t.Fatalf("proof rollback decision = %#v; want missing without authority refs", proof.RollbackDecision)
+	}
+	if !strings.Contains(proof.RollbackDecision.Summary, "Rollback trigger evidence missing") {
+		t.Fatalf("proof rollback decision summary = %q; want trigger-missing explanation", proof.RollbackDecision.Summary)
 	}
 }
 
@@ -242,18 +260,12 @@ func assertEpic8LocalArtifacts(t *testing.T, run work.Epic8CapabilityMonitoringR
 	assertFileExists(t, run.LocalArtifacts.MonitoringWindow)
 	assertFileExists(t, run.LocalArtifacts.ProofOfWork)
 	assertFileExists(t, run.LocalArtifacts.RollbackDecision)
+	assertEpic8WriteConfinement(t, run)
 }
 
 func assertEpic8ProofJSONShape(t *testing.T, run work.Epic8CapabilityMonitoringRun) {
 	t.Helper()
-	raw, err := os.ReadFile(run.LocalArtifacts.ProofOfWork)
-	if err != nil {
-		t.Fatalf("read proof file: %v", err)
-	}
-	var proof work.Epic8ProofOfWorkPacket
-	if err := json.Unmarshal(raw, &proof); err != nil {
-		t.Fatalf("decode proof JSON: %v", err)
-	}
+	proof := readEpic8Proof(t, run)
 	if proof.Status != "pass" || len(proof.TrialRefs) != 5 {
 		t.Fatalf("proof status=%q trials=%#v; want pass with five trials", proof.Status, proof.TrialRefs)
 	}
@@ -271,6 +283,60 @@ func assertEpic8ProofJSONShape(t *testing.T, run work.Epic8CapabilityMonitoringR
 	}
 	if !strings.Contains(proof.LocalPromotionReceiptScope, "side-effect-free local capability.promote evidence") || strings.Contains(proof.LocalPromotionReceiptScope, "production ExecutionReceipt path claimed") {
 		t.Fatalf("receipt scope = %q; want local-only non-production wording", proof.LocalPromotionReceiptScope)
+	}
+	assertEpic8ResidualRisk(t, proof, "R-001", "excluded")
+	assertEpic8ResidualRisk(t, proof, "R-002", "excluded")
+	assertEpic8ResidualRisk(t, proof, "R-003", "excluded")
+	assertEpic8ResidualRisk(t, proof, "Gate J", "waiting")
+}
+
+func readEpic8Proof(t *testing.T, run work.Epic8CapabilityMonitoringRun) work.Epic8ProofOfWorkPacket {
+	t.Helper()
+	raw, err := os.ReadFile(run.LocalArtifacts.ProofOfWork)
+	if err != nil {
+		t.Fatalf("read proof file: %v", err)
+	}
+	var proof work.Epic8ProofOfWorkPacket
+	if err := json.Unmarshal(raw, &proof); err != nil {
+		t.Fatalf("decode proof JSON: %v", err)
+	}
+	return proof
+}
+
+func assertEpic8ResidualRisk(t *testing.T, proof work.Epic8ProofOfWorkPacket, label, status string) {
+	t.Helper()
+	for _, risk := range proof.ResidualRisks {
+		if risk.Label == label {
+			if risk.Status != status {
+				t.Fatalf("residual risk %s status = %q; want %q", label, risk.Status, status)
+			}
+			return
+		}
+	}
+	t.Fatalf("residual risks = %#v; want label %s", proof.ResidualRisks, label)
+}
+
+func assertEpic8WriteConfinement(t *testing.T, run work.Epic8CapabilityMonitoringRun) {
+	t.Helper()
+	workingDir := filepath.Dir(filepath.Dir(run.LocalArtifacts.Root))
+	expected := map[string]bool{
+		run.LocalArtifacts.MonitoringWindow: true,
+		run.LocalArtifacts.ProofOfWork:      true,
+		run.LocalArtifacts.RollbackDecision: true,
+	}
+	if err := filepath.WalkDir(workingDir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !expected[path] {
+			t.Fatalf("unexpected local fixture write %s under %s", path, workingDir)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk working dir %s: %v", workingDir, err)
 	}
 }
 

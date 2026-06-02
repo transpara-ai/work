@@ -958,6 +958,9 @@ func epic8RollbackDecision(ids epic8FixtureIDs, opts Epic8CapabilityMonitoringOp
 }
 
 func epic8ProjectionRollbackDecision(ids epic8FixtureIDs, window Epic8MonitoringWindow) Epic8RollbackDecision {
+	if window.Metrics.RollbackTriggerCount == 0 || window.Metrics.RolledBackCapabilityVersionRef == "" {
+		return Epic8RollbackDecision{Decision: "missing", Summary: "Rollback trigger evidence missing from the monitoring-window evidence."}
+	}
 	if window.Metrics.OperatorRollbackDecisionRef == "" {
 		return Epic8RollbackDecision{Decision: "missing", Summary: "Operator rollback authority missing from the monitoring-window evidence."}
 	}
