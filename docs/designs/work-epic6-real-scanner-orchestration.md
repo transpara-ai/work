@@ -19,9 +19,10 @@ The positive path records:
 - `TestCase`, `TestRun`, `GateResult`, `ReleaseCandidate`, `Certification`,
   and `AuditReport`
 - command evidence for `gitleaks`, `osv-scanner` over the generated
-  `frontend/package-lock.json`, `semgrep`, local `license-policy`, local
-  `auth-flow-check`, local `config-security-check`, and explicit `trivy`
-  not-applicable proof when no container/build artifact exists
+  `frontend/package-lock.json` and `backend/requirements.lock.txt`, `semgrep`,
+  local `license-policy`, local `auth-flow-check`, local
+  `config-security-check`, and explicit `trivy` not-applicable proof when no
+  container/build artifact exists
 
 The negative modes prove Gate G failure behavior:
 

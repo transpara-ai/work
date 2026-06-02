@@ -415,7 +415,7 @@ func epic6CollectScannerEvidence(ctx context.Context, targetDir, evidenceDir str
 		outputName  string
 	}{
 		{GateSecretScan, "gitleaks", opts.ToolPaths.Gitleaks, []string{"version"}, []string{"detect", "--no-git", "--source", targetDir, "--report-format", "json", "--report-path", filepath.Join(evidenceDir, "gitleaks.json"), "--exit-code", "1"}, []string{"generated source", "config", ".env.example"}, "gitleaks.json"},
-		{GateDependencyVulnerabilityScan, "osv-scanner", opts.ToolPaths.OSVScanner, []string{"--version"}, []string{"scan", "--format", "json", "--output", filepath.Join(evidenceDir, "osv-scanner.json"), "--lockfile", filepath.Join(targetDir, "frontend", "package-lock.json")}, []string{"frontend/package.json", "frontend/package-lock.json", "backend/pyproject.toml"}, "osv-scanner.json"},
+		{GateDependencyVulnerabilityScan, "osv-scanner", opts.ToolPaths.OSVScanner, []string{"--version"}, []string{"scan", "--format", "json", "--output", filepath.Join(evidenceDir, "osv-scanner.json"), "--lockfile", filepath.Join(targetDir, "frontend", "package-lock.json"), "--lockfile", filepath.Join(targetDir, "backend", "requirements.lock.txt")}, []string{"frontend/package.json", "frontend/package-lock.json", "backend/pyproject.toml", "backend/requirements.lock.txt"}, "osv-scanner.json"},
 		{GateSAST, "semgrep", opts.ToolPaths.Semgrep, []string{"--version"}, epic6SemgrepArgs(targetDir, evidenceDir), []string{"frontend", "backend"}, "semgrep.json"},
 	}
 	for _, gate := range gates {
@@ -477,7 +477,7 @@ func epic6ExternalScannerEvidence(ctx context.Context, targetDir, evidenceDir st
 }
 
 func epic6LicensePolicyEvidence(targetDir, evidenceDir string) Epic6ScannerGateEvidence {
-	inputRefs := []string{"frontend/package.json", "backend/pyproject.toml"}
+	inputRefs := []string{"frontend/package.json", "frontend/package-lock.json", "backend/pyproject.toml", "backend/requirements.lock.txt"}
 	status := SecurityGateStatusPass
 	var findings []SecurityFinding
 	checks := []string{}
@@ -488,6 +488,10 @@ func epic6LicensePolicyEvidence(targetDir, evidenceDir string) Epic6ScannerGateE
 	if !epic6FileContains(filepath.Join(targetDir, "backend", "pyproject.toml"), []string{"dependencies = [", `"fastapi`, `"sqlalchemy`}) {
 		status = SecurityGateStatusFail
 		findings = append(findings, SecurityFinding{ID: "finding_epic6_license_backend_manifest", Gate: GateDependencyLicenseScan, Severity: FindingSeverityHigh, Status: FindingStatusOpen, Summary: "backend dependency metadata is missing required entries"})
+	}
+	if !epic6FileContains(filepath.Join(targetDir, "backend", "requirements.lock.txt"), []string{"fastapi==", "pytest=="}) {
+		status = SecurityGateStatusFail
+		findings = append(findings, SecurityFinding{ID: "finding_epic6_license_backend_lock", Gate: GateDependencyLicenseScan, Severity: FindingSeverityHigh, Status: FindingStatusOpen, Summary: "backend dependency lock metadata is missing required entries"})
 	}
 	checks = append(checks, "inspected generated frontend and backend dependency manifests")
 	outputRef := filepath.Join(evidenceDir, "license-policy.json")

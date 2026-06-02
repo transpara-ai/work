@@ -33,6 +33,7 @@ func TestSaaSTemplateV1FilesCoverRequiredSurface(t *testing.T) {
 		"frontend/app/logout/route.ts",
 		"frontend/app/dashboard/page.tsx",
 		"backend/pyproject.toml",
+		"backend/requirements.lock.txt",
 		"backend/app/main.py",
 		"backend/alembic/versions/0001_create_tracker_items.py",
 		"backend/tests/test_auth_and_tracker.py",
@@ -53,6 +54,8 @@ func TestSaaSTemplateV1FilesCoverRequiredSurface(t *testing.T) {
 	assertContains(t, byPath["frontend/package-lock.json"], `"lockfileVersion": 3`)
 	assertContains(t, byPath["frontend/package-lock.json"], `"postcss"`)
 	assertContains(t, byPath["backend/pyproject.toml"], `"fastapi`)
+	assertContains(t, byPath["backend/requirements.lock.txt"], "fastapi==0.136.3")
+	assertContains(t, byPath["backend/requirements.lock.txt"], "pytest==9.0.3")
 	assertContains(t, byPath["docker-compose.yml"], "postgres:")
 	assertContains(t, byPath["backend/alembic/versions/0001_create_tracker_items.py"], "create_table")
 	assertContains(t, byPath[".env.example"], "DATABASE_URL=")

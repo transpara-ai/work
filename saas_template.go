@@ -60,6 +60,7 @@ func SaaSTemplateV1Files() []SaaSTemplateFile {
 		{Path: "backend/alembic/script.py.mako", Content: alembicScript},
 		{Path: "backend/alembic/versions/0001_create_tracker_items.py", Content: alembicMigration},
 		{Path: "backend/tests/test_auth_and_tracker.py", Content: backendTests},
+		{Path: "backend/requirements.lock.txt", Content: backendRequirementsLock},
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files
@@ -667,16 +668,16 @@ name = "dark-factory-saas-template-v1"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-  "alembic>=1.13",
-  "fastapi>=0.115",
-  "psycopg[binary]>=3.2",
-  "pydantic>=2.9",
-  "sqlalchemy>=2.0",
-  "uvicorn>=0.32"
+  "alembic>=1.18.4",
+  "fastapi>=0.136.3",
+  "psycopg[binary]>=3.3.4",
+  "pydantic>=2.13.4",
+  "sqlalchemy>=2.0.50",
+  "uvicorn>=0.48.0"
 ]
 
 [project.optional-dependencies]
-test = ["httpx>=0.27", "pytest>=8.3"]
+test = ["httpx>=0.28.1", "pytest>=9.0.3"]
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -684,6 +685,16 @@ build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+`
+
+const backendRequirementsLock = `alembic==1.18.4
+fastapi==0.136.3
+httpx==0.28.1
+psycopg==3.3.4
+pydantic==2.13.4
+pytest==9.0.3
+sqlalchemy==2.0.50
+uvicorn==0.48.0
 `
 
 const backendAuth = `import os
