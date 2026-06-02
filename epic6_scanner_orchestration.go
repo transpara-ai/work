@@ -639,11 +639,29 @@ func epic6ContainerEvidence(targetDir, evidenceDir, trivyPath string) Epic6Scann
 	outputRef := filepath.Join(evidenceDir, "container-build-artifact-scan.json")
 	artifacts := epic6ContainerArtifacts(targetDir)
 	version := "not_applicable:no_container_or_build_artifact"
-	if len(artifacts) > 0 && trivyPath != "" {
-		version = "pending_real_trivy_run"
+	status := SecurityGateStatusNotApplicable
+	evidenceMode := "not_applicable_with_proof"
+	reason := "generated fixture produced no container image, image archive, SBOM, dist, or standalone build artifact"
+	d2Disposition := "narrows generated D2 scaffold evidence to explicit not_applicable proof for this fixture"
+	var findings []SecurityFinding
+	if len(artifacts) > 0 {
+		status = SecurityGateStatusFail
+		evidenceMode = "missing_real_scanner_command"
+		version = "missing_real_trivy_scan"
+		reason = "container or build artifact exists and requires real trivy scan evidence"
+		d2Disposition = "blocked: container/build artifact requires real trivy evidence"
+		summary := "container/build artifact requires real trivy scan evidence"
+		if trivyPath == "" {
+			summary = "container/build artifact exists but trivy binary is missing"
+		}
+		findings = append(findings, SecurityFinding{ID: "finding_epic6_container_artifact_trivy_missing", Gate: GateContainerOrArtifactScan, Severity: FindingSeverityHigh, Status: FindingStatusOpen, Summary: summary})
 	}
-	_ = epic6WriteJSON(outputRef, map[string]any{"tool": "trivy", "version": version, "status": SecurityGateStatusNotApplicable, "reason": "generated fixture produced no container image, image archive, SBOM, dist, or standalone build artifact", "artifacts": artifacts})
-	return Epic6ScannerGateEvidence{Gate: GateContainerOrArtifactScan, Status: SecurityGateStatusNotApplicable, ScannerTool: "trivy", ScannerVersion: version, EvidenceMode: "not_applicable_with_proof", Commands: []Epic6ScannerCommandEvidence{epic6LocalCommand("trivy-artifact-presence-check", targetDir, inputRefs, outputRef)}, InputRefs: inputRefs, RawOutputRefs: []string{outputRef}, NotApplicableReason: "no container image or build artifact produced by the generated SaaS Template v1 fixture", D2ScaffoldDisposition: "narrows generated D2 scaffold evidence to explicit not_applicable proof for this fixture"}
+	_ = epic6WriteJSON(outputRef, map[string]any{"tool": "trivy", "version": version, "status": status, "reason": reason, "artifacts": artifacts, "findings": findings})
+	notApplicableReason := ""
+	if status == SecurityGateStatusNotApplicable {
+		notApplicableReason = reason
+	}
+	return Epic6ScannerGateEvidence{Gate: GateContainerOrArtifactScan, Status: status, ScannerTool: "trivy", ScannerVersion: version, EvidenceMode: evidenceMode, Commands: []Epic6ScannerCommandEvidence{epic6LocalCommand("trivy-artifact-presence-check", targetDir, inputRefs, outputRef)}, InputRefs: inputRefs, RawOutputRefs: []string{outputRef}, Findings: findings, NotApplicableReason: notApplicableReason, D2ScaffoldDisposition: d2Disposition}
 }
 
 func epic6ApplyModeEvidence(mode Epic6ScannerOrchestrationMode, evidence []Epic6ScannerGateEvidence) []SecurityWaiver {

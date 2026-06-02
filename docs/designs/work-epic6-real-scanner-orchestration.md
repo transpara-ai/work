@@ -24,9 +24,12 @@ The positive path records:
   `config-security-check`, and explicit `trivy` not-applicable proof when no
   container/build artifact exists
 
-The negative modes prove Gate G failure behavior:
+The negative modes and focused tests prove Gate G failure behavior:
 
-- `Epic6ScannerOrchestrationMissingScanner` rejects missing real scanner output.
+- `Epic6ScannerOrchestrationMissingScanner` rejects a missing real scanner
+  binary.
+- A scanner command that exits successfully without producing non-empty raw
+  output still rejects Gate G.
 - `Epic6ScannerOrchestrationOpenCritical` rejects critical findings even with a
   waiver.
 - `Epic6ScannerOrchestrationOpenHigh` rejects high findings without a valid
