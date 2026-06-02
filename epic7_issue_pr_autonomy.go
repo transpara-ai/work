@@ -33,7 +33,6 @@ const (
 const (
 	epic7FixtureActorID      = "act_epic7_issue_pr_proposer"
 	epic7FixtureHumanActorID = "act_epic7_human_reviewer"
-	epic7FixtureTimeRFC      = "2026-06-02T08:00:00Z"
 	epic7KnowledgeSourceRef  = "knowledge:dark-factory/v3.9/implementation/epics/epic-07-gate-h-issue-to-pr-autonomy-trials/01-work-issue-to-pr-autonomy-implementation-authorization-v3.9.md"
 	epic7DocsPRRef           = "transpara-ai/docs#87"
 	epic7DocsMergeSHA        = "b2f09a3b70ccfac124d3ab8e5e0bb21523860c29"
@@ -62,8 +61,11 @@ type Epic7IssueToPROptions struct {
 	CompletedForbiddenActions      []Epic7ProtectedAction
 	RecordExecutionReceipt         bool
 	MissingMultiRepoAuthority      bool
+	MissingRepairEvidence          bool
+	MissingRepairTestUpdateIntent  bool
 	MissingSelfImprovementReview   bool
 	MissingSelfImprovementRollback bool
+	OmitProtectedAction            Epic7ProtectedAction
 }
 
 // Epic7IssueToPRRun is the local evidence packet for the bounded Gate H trials.
@@ -101,15 +103,16 @@ type Epic7IssueToPRRun struct {
 }
 
 type Epic7LocalArtifacts struct {
-	IssueDir      string
-	ProposalDir   string
-	ProofDir      string
-	PatchDir      string
-	PRBodyDir     string
-	BranchPlanDir string
-	ValidationDir string
-	RepairDir     string
-	RollbackDir   string
+	IssueDir       string
+	ProposalDir    string
+	ProofDir       string
+	PatchDir       string
+	PRBodyDir      string
+	BranchPlanDir  string
+	ValidationDir  string
+	RepairDir      string
+	RollbackDir    string
+	HumanReviewDir string
 }
 
 type Epic7IssueToPRProjection struct {
@@ -148,24 +151,26 @@ type Epic7ProofOfWorkAggregate struct {
 }
 
 type Epic7TrialEvidence struct {
-	TrialID             string                      `json:"trial_id"`
-	Status              string                      `json:"status"`
-	IssueFixture        Epic7IssueFixture           `json:"issue_fixture"`
-	IssueFixtureRef     string                      `json:"issue_fixture_ref"`
-	ProposalPacketRef   string                      `json:"proposal_packet_ref"`
-	ProofPacketRef      string                      `json:"proof_packet_ref"`
-	PatchRef            string                      `json:"patch_ref,omitempty"`
-	PRBodyRef           string                      `json:"pr_body_ref"`
-	BranchPlanRef       string                      `json:"branch_plan_ref"`
-	ValidationPlanRef   string                      `json:"validation_plan_ref"`
-	RepairEvidenceRef   string                      `json:"repair_evidence_ref,omitempty"`
-	RollbackEvidenceRef string                      `json:"rollback_evidence_ref,omitempty"`
-	Proposal            Epic7PRProposalPacket       `json:"proposal"`
-	ProofOfWorkPacket   Epic7TrialProofOfWorkPacket `json:"proof_of_work_packet"`
-	AuthorityBoundary   []Epic7ProtectedActionRef   `json:"authority_boundary"`
-	Checks              Epic7TrialChecks            `json:"checks"`
-	EventGraphRefs      []string                    `json:"event_graph_refs"`
-	Missing             []string                    `json:"missing,omitempty"`
+	TrialID                string                      `json:"trial_id"`
+	Status                 string                      `json:"status"`
+	IssueFixture           Epic7IssueFixture           `json:"issue_fixture"`
+	IssueFixtureRef        string                      `json:"issue_fixture_ref"`
+	ProposalPacketRef      string                      `json:"proposal_packet_ref"`
+	ProofPacketRef         string                      `json:"proof_packet_ref"`
+	PatchRef               string                      `json:"patch_ref,omitempty"`
+	PRBodyRef              string                      `json:"pr_body_ref"`
+	BranchPlanRef          string                      `json:"branch_plan_ref"`
+	ValidationPlanRef      string                      `json:"validation_plan_ref"`
+	RepairEvidenceRef      string                      `json:"repair_evidence_ref,omitempty"`
+	RollbackEvidenceRef    string                      `json:"rollback_evidence_ref,omitempty"`
+	HumanReviewEvidenceRef string                      `json:"human_review_evidence_ref,omitempty"`
+	Proposal               Epic7PRProposalPacket       `json:"proposal"`
+	ProofOfWorkPacket      Epic7TrialProofOfWorkPacket `json:"proof_of_work_packet"`
+	AuthorityBoundary      []Epic7ProtectedActionRef   `json:"authority_boundary"`
+	MultiRepoAuthority     *Epic7AuthorityGrant        `json:"multi_repo_authority,omitempty"`
+	Checks                 Epic7TrialChecks            `json:"checks"`
+	EventGraphRefs         []string                    `json:"event_graph_refs"`
+	Missing                []string                    `json:"missing,omitempty"`
 }
 
 type Epic7IssueFixture struct {
@@ -178,21 +183,22 @@ type Epic7IssueFixture struct {
 }
 
 type Epic7PRProposalPacket struct {
-	ID                  string                    `json:"id"`
-	TrialID             string                    `json:"trial_id"`
-	IssueFixtureID      string                    `json:"issue_fixture_id"`
-	ProposedPRTitle     string                    `json:"proposed_pr_title"`
-	ProposedPRBody      string                    `json:"proposed_pr_body"`
-	ProposedBranchName  string                    `json:"proposed_branch_name"`
-	ChangedFileIntent   []Epic7ChangedFileIntent  `json:"changed_file_intent"`
-	ImplementationPlan  []string                  `json:"implementation_plan"`
-	ProposedDiffRef     string                    `json:"proposed_diff_ref,omitempty"`
-	ValidationPlanRef   string                    `json:"validation_plan_ref"`
-	RepairEvidenceRef   string                    `json:"repair_evidence_ref,omitempty"`
-	RollbackEvidenceRef string                    `json:"rollback_evidence_ref,omitempty"`
-	AuthorityBoundary   []Epic7ProtectedActionRef `json:"authority_boundary"`
-	ProposedOnly        bool                      `json:"proposed_only"`
-	Applied             bool                      `json:"applied"`
+	ID                     string                    `json:"id"`
+	TrialID                string                    `json:"trial_id"`
+	IssueFixtureID         string                    `json:"issue_fixture_id"`
+	ProposedPRTitle        string                    `json:"proposed_pr_title"`
+	ProposedPRBody         string                    `json:"proposed_pr_body"`
+	ProposedBranchName     string                    `json:"proposed_branch_name"`
+	ChangedFileIntent      []Epic7ChangedFileIntent  `json:"changed_file_intent"`
+	ImplementationPlan     []string                  `json:"implementation_plan"`
+	ProposedDiffRef        string                    `json:"proposed_diff_ref,omitempty"`
+	ValidationPlanRef      string                    `json:"validation_plan_ref"`
+	RepairEvidenceRef      string                    `json:"repair_evidence_ref,omitempty"`
+	RollbackEvidenceRef    string                    `json:"rollback_evidence_ref,omitempty"`
+	HumanReviewEvidenceRef string                    `json:"human_review_evidence_ref,omitempty"`
+	AuthorityBoundary      []Epic7ProtectedActionRef `json:"authority_boundary"`
+	ProposedOnly           bool                      `json:"proposed_only"`
+	Applied                bool                      `json:"applied"`
 }
 
 type Epic7ChangedFileIntent struct {
@@ -211,18 +217,30 @@ type Epic7ProtectedActionRef struct {
 	HumanApprovalID     string               `json:"human_approval_id,omitempty"`
 }
 
+type Epic7AuthorityGrant struct {
+	AuthorityRequestID  string   `json:"authority_request_id"`
+	AuthorityDecisionID string   `json:"authority_decision_id"`
+	HumanApprovalID     string   `json:"human_approval_id"`
+	Scope               []string `json:"scope"`
+	Decision            string   `json:"decision"`
+	Summary             string   `json:"summary"`
+}
+
 type Epic7TrialChecks struct {
-	IssueFixturePresent                   bool `json:"issue_fixture_present"`
-	ProposalPacketPresent                 bool `json:"proposal_packet_present"`
-	ProofPacketPresent                    bool `json:"proof_packet_present"`
-	ProposedOnly                          bool `json:"proposed_only"`
-	NoRepositoryMutation                  bool `json:"no_repository_mutation"`
-	NoExecutionReceipt                    bool `json:"no_execution_receipt"`
-	ForbiddenActionsSeparated             bool `json:"forbidden_actions_separated"`
-	MultiRepoWithoutAuthorityRejected     bool `json:"multi_repo_without_authority_rejected,omitempty"`
-	MultiRepoWithExplicitAuthorityOnly    bool `json:"multi_repo_with_explicit_authority_only,omitempty"`
-	SelfImprovementWithoutReviewRejected  bool `json:"self_improvement_without_review_rejected,omitempty"`
-	SelfImprovementWithReviewRollbackOnly bool `json:"self_improvement_with_review_rollback_only,omitempty"`
+	IssueFixturePresent                        bool `json:"issue_fixture_present"`
+	ProposalPacketPresent                      bool `json:"proposal_packet_present"`
+	ProofPacketPresent                         bool `json:"proof_packet_present"`
+	ProposedOnly                               bool `json:"proposed_only"`
+	NoRepositoryMutation                       bool `json:"no_repository_mutation"`
+	NoExecutionReceipt                         bool `json:"no_execution_receipt"`
+	ForbiddenActionsSeparated                  bool `json:"forbidden_actions_separated"`
+	RepairEvidencePresent                      bool `json:"repair_evidence_present,omitempty"`
+	RepairTestUpdateIntentPresent              bool `json:"repair_test_update_intent_present,omitempty"`
+	ExplicitMultiRepoAuthorityRecorded         bool `json:"explicit_multi_repo_authority_recorded,omitempty"`
+	MultiRepoProposalRemainsProposedOnly       bool `json:"multi_repo_proposal_remains_proposed_only,omitempty"`
+	SelfImprovementHumanReviewPresent          bool `json:"self_improvement_human_review_present,omitempty"`
+	SelfImprovementRollbackEvidencePresent     bool `json:"self_improvement_rollback_evidence_present,omitempty"`
+	SelfImprovementProposalRemainsProposedOnly bool `json:"self_improvement_proposal_remains_proposed_only,omitempty"`
 }
 
 type Epic7TrialProofOfWorkPacket struct {
@@ -235,7 +253,9 @@ type Epic7TrialProofOfWorkPacket struct {
 	ValidationPlan            Epic7ProofOfWorkItem      `json:"validation_plan"`
 	RepairEvidence            *Epic7ProofOfWorkItem     `json:"repair_evidence,omitempty"`
 	RollbackEvidence          *Epic7ProofOfWorkItem     `json:"rollback_evidence,omitempty"`
+	HumanReviewEvidence       *Epic7ProofOfWorkItem     `json:"human_review_evidence,omitempty"`
 	AuthorityBoundary         []Epic7ProtectedActionRef `json:"authority_boundary"`
+	MultiRepoAuthority        *Epic7AuthorityGrant      `json:"multi_repo_authority,omitempty"`
 	ForbiddenActionSeparation []Epic7ProtectedActionRef `json:"forbidden_action_separation"`
 	EventGraphRefs            []string                  `json:"event_graph_refs"`
 }
@@ -433,15 +453,16 @@ func epic7IDs() epic7FixtureIDs {
 
 func epic7LocalArtifacts(dir string) Epic7LocalArtifacts {
 	return Epic7LocalArtifacts{
-		IssueDir:      filepath.Join(dir, "fixtures", "epic7", "issues"),
-		ProposalDir:   filepath.Join(dir, "artifacts", "issue-pr", "proposals"),
-		ProofDir:      filepath.Join(dir, "artifacts", "issue-pr", "proof-of-work"),
-		PatchDir:      filepath.Join(dir, "artifacts", "issue-pr", "patches"),
-		PRBodyDir:     filepath.Join(dir, "artifacts", "issue-pr", "pr-bodies"),
-		BranchPlanDir: filepath.Join(dir, "artifacts", "issue-pr", "branch-plans"),
-		ValidationDir: filepath.Join(dir, "artifacts", "issue-pr", "validation"),
-		RepairDir:     filepath.Join(dir, "artifacts", "issue-pr", "repair"),
-		RollbackDir:   filepath.Join(dir, "artifacts", "issue-pr", "rollback"),
+		IssueDir:       filepath.Join(dir, "fixtures", "epic7", "issues"),
+		ProposalDir:    filepath.Join(dir, "artifacts", "issue-pr", "proposals"),
+		ProofDir:       filepath.Join(dir, "artifacts", "issue-pr", "proof-of-work"),
+		PatchDir:       filepath.Join(dir, "artifacts", "issue-pr", "patches"),
+		PRBodyDir:      filepath.Join(dir, "artifacts", "issue-pr", "pr-bodies"),
+		BranchPlanDir:  filepath.Join(dir, "artifacts", "issue-pr", "branch-plans"),
+		ValidationDir:  filepath.Join(dir, "artifacts", "issue-pr", "validation"),
+		RepairDir:      filepath.Join(dir, "artifacts", "issue-pr", "repair"),
+		RollbackDir:    filepath.Join(dir, "artifacts", "issue-pr", "rollback"),
+		HumanReviewDir: filepath.Join(dir, "artifacts", "issue-pr", "human-review"),
 	}
 }
 
@@ -559,9 +580,12 @@ func epic7BuildTrial(def epic7TrialDefinition, opts Epic7IssueToPROptions, dirs 
 	validationPath := filepath.Join(dirs.ValidationDir, def.id+".md")
 	repairPath := filepath.Join(dirs.RepairDir, def.id+".md")
 	rollbackPath := filepath.Join(dirs.RollbackDir, def.id+".md")
+	humanReviewPath := filepath.Join(dirs.HumanReviewDir, def.id+".md")
 
 	applied := opts.AppliedPatchTrial == def.id
 	authority := epic7AuthorityBoundary(def, opts)
+	intents := epic7ChangedFileIntents(def, opts)
+	multiRepoAuthority := epic7MultiRepoAuthorityGrant(def, opts)
 	proposal := Epic7PRProposalPacket{
 		ID:                 "proposal_" + def.id,
 		TrialID:            def.id,
@@ -569,7 +593,7 @@ func epic7BuildTrial(def epic7TrialDefinition, opts Epic7IssueToPROptions, dirs 
 		ProposedPRTitle:    "Gate H proposal: " + def.title,
 		ProposedPRBody:     epic7PRBody(def),
 		ProposedBranchName: "proposal/gate-h/" + strings.TrimPrefix(def.id, "trial_"),
-		ChangedFileIntent:  append([]Epic7ChangedFileIntent(nil), def.intents...),
+		ChangedFileIntent:  intents,
 		ImplementationPlan: []string{"read the issue fixture", "prepare a proposed patch packet", "record validation and authority boundaries", "stop before live PR creation or repository mutation"},
 		ProposedDiffRef:    patchPath,
 		ValidationPlanRef:  validationPath,
@@ -577,44 +601,52 @@ func epic7BuildTrial(def epic7TrialDefinition, opts Epic7IssueToPROptions, dirs 
 		ProposedOnly:       !applied,
 		Applied:            applied,
 	}
-	if def.needsRepair {
+	if def.needsRepair && !opts.MissingRepairEvidence {
 		proposal.RepairEvidenceRef = repairPath
 	}
-	if def.needsRollback {
+	if def.needsRollback && !opts.MissingSelfImprovementRollback {
 		proposal.RollbackEvidenceRef = rollbackPath
 	}
-	checks := Epic7TrialChecks{
-		IssueFixturePresent:                   opts.OmitIssueFixture != def.id,
-		ProposalPacketPresent:                 opts.OmitProposalPacket != def.id,
-		ProofPacketPresent:                    opts.OmitProposalPacket != def.id,
-		ProposedOnly:                          proposal.ProposedOnly && !proposal.Applied,
-		NoRepositoryMutation:                  !proposal.Applied && len(opts.CompletedForbiddenActions) == 0,
-		NoExecutionReceipt:                    !opts.RecordExecutionReceipt,
-		ForbiddenActionsSeparated:             epic7ForbiddenActionsSeparated(authority),
-		MultiRepoWithoutAuthorityRejected:     !def.multiRepo || !opts.MissingMultiRepoAuthority,
-		MultiRepoWithExplicitAuthorityOnly:    !def.multiRepo || !opts.MissingMultiRepoAuthority,
-		SelfImprovementWithoutReviewRejected:  !def.selfImprovement || !opts.MissingSelfImprovementReview,
-		SelfImprovementWithReviewRollbackOnly: !def.selfImprovement || (!opts.MissingSelfImprovementReview && !opts.MissingSelfImprovementRollback),
+	if def.selfImprovement && !opts.MissingSelfImprovementReview {
+		proposal.HumanReviewEvidenceRef = humanReviewPath
 	}
-	proof := epic7BuildTrialProof(def, proposal, proofPath, checks)
+	checks := Epic7TrialChecks{
+		IssueFixturePresent:                        opts.OmitIssueFixture != def.id,
+		ProposalPacketPresent:                      opts.OmitProposalPacket != def.id,
+		ProofPacketPresent:                         opts.OmitProposalPacket != def.id,
+		ProposedOnly:                               proposal.ProposedOnly && !proposal.Applied,
+		NoRepositoryMutation:                       !proposal.Applied && len(opts.CompletedForbiddenActions) == 0,
+		NoExecutionReceipt:                         !opts.RecordExecutionReceipt,
+		ForbiddenActionsSeparated:                  epic7ForbiddenActionsSeparated(authority),
+		RepairEvidencePresent:                      !def.needsRepair || proposal.RepairEvidenceRef != "",
+		RepairTestUpdateIntentPresent:              !def.needsRepair || epic7HasTestUpdateIntent(proposal.ChangedFileIntent),
+		ExplicitMultiRepoAuthorityRecorded:         !def.multiRepo || multiRepoAuthority != nil,
+		MultiRepoProposalRemainsProposedOnly:       !def.multiRepo || (multiRepoAuthority != nil && proposal.ProposedOnly && !proposal.Applied),
+		SelfImprovementHumanReviewPresent:          !def.selfImprovement || proposal.HumanReviewEvidenceRef != "",
+		SelfImprovementRollbackEvidencePresent:     !def.selfImprovement || proposal.RollbackEvidenceRef != "",
+		SelfImprovementProposalRemainsProposedOnly: !def.selfImprovement || (proposal.HumanReviewEvidenceRef != "" && proposal.RollbackEvidenceRef != "" && proposal.ProposedOnly && !proposal.Applied),
+	}
+	proof := epic7BuildTrialProof(def, proposal, proofPath, checks, multiRepoAuthority)
 	trial := Epic7TrialEvidence{
-		TrialID:             def.id,
-		Status:              "pass",
-		IssueFixture:        issue,
-		IssueFixtureRef:     issuePath,
-		ProposalPacketRef:   proposalPath,
-		ProofPacketRef:      proofPath,
-		PatchRef:            patchPath,
-		PRBodyRef:           prBodyPath,
-		BranchPlanRef:       branchPlanPath,
-		ValidationPlanRef:   validationPath,
-		RepairEvidenceRef:   proposal.RepairEvidenceRef,
-		RollbackEvidenceRef: proposal.RollbackEvidenceRef,
-		Proposal:            proposal,
-		ProofOfWorkPacket:   proof,
-		AuthorityBoundary:   authority,
-		Checks:              checks,
-		EventGraphRefs:      []string{egRef(v39.TypePlanningProposal, "plan_epic7_"+def.id), egRef(v39.TypeArtifact, "art_epic7_proposal_"+def.id), egRef(v39.TypeArtifact, "art_epic7_proof_"+def.id)},
+		TrialID:                def.id,
+		Status:                 "pass",
+		IssueFixture:           issue,
+		IssueFixtureRef:        issuePath,
+		ProposalPacketRef:      proposalPath,
+		ProofPacketRef:         proofPath,
+		PatchRef:               patchPath,
+		PRBodyRef:              prBodyPath,
+		BranchPlanRef:          branchPlanPath,
+		ValidationPlanRef:      validationPath,
+		RepairEvidenceRef:      proposal.RepairEvidenceRef,
+		RollbackEvidenceRef:    proposal.RollbackEvidenceRef,
+		HumanReviewEvidenceRef: proposal.HumanReviewEvidenceRef,
+		Proposal:               proposal,
+		ProofOfWorkPacket:      proof,
+		AuthorityBoundary:      authority,
+		MultiRepoAuthority:     multiRepoAuthority,
+		Checks:                 checks,
+		EventGraphRefs:         []string{egRef(v39.TypePlanningProposal, "plan_epic7_"+def.id), egRef(v39.TypeArtifact, "art_epic7_proposal_"+def.id), egRef(v39.TypeArtifact, "art_epic7_proof_"+def.id)},
 	}
 	trial.Missing = epic7TrialMissing(trial)
 	if len(trial.Missing) > 0 {
@@ -639,13 +671,18 @@ func epic7BuildTrial(def epic7TrialDefinition, opts Epic7IssueToPROptions, dirs 
 	if err := epic7WriteFile(validationPath, epic7ValidationPlan(def)); err != nil {
 		return Epic7TrialEvidence{}, err
 	}
-	if def.needsRepair {
+	if proposal.RepairEvidenceRef != "" {
 		if err := epic7WriteFile(repairPath, "Failing-test evidence is recorded; proposed fix and proposed test update remain unapplied.\n"); err != nil {
 			return Epic7TrialEvidence{}, err
 		}
 	}
-	if def.needsRollback {
+	if proposal.RollbackEvidenceRef != "" {
 		if err := epic7WriteFile(rollbackPath, "Rollback plan: discard the proposed generator change and keep the current local proposal generator active.\n"); err != nil {
+			return Epic7TrialEvidence{}, err
+		}
+	}
+	if proposal.HumanReviewEvidenceRef != "" {
+		if err := epic7WriteFile(humanReviewPath, "Human review evidence: reviewer approves proposal-only self-improvement with rollback evidence; no self-apply or activation is authorized.\n"); err != nil {
 			return Epic7TrialEvidence{}, err
 		}
 	}
@@ -663,6 +700,9 @@ func epic7BuildTrial(def epic7TrialDefinition, opts Epic7IssueToPROptions, dirs 
 func epic7AuthorityBoundary(def epic7TrialDefinition, opts Epic7IssueToPROptions) []Epic7ProtectedActionRef {
 	out := make([]Epic7ProtectedActionRef, 0, len(epic7ProtectedActions()))
 	for _, action := range epic7ProtectedActions() {
+		if opts.OmitProtectedAction == action {
+			continue
+		}
 		status := "forbidden"
 		summary := "Action is outside the bounded Gate H fixture and is not executed."
 		if action == Epic7ActionPullRequestPropose {
@@ -686,18 +726,74 @@ func epic7AuthorityBoundary(def epic7TrialDefinition, opts Epic7IssueToPROptions
 	return out
 }
 
-func epic7BuildTrialProof(def epic7TrialDefinition, proposal Epic7PRProposalPacket, proofPath string, checks Epic7TrialChecks) Epic7TrialProofOfWorkPacket {
+func epic7ChangedFileIntents(def epic7TrialDefinition, opts Epic7IssueToPROptions) []Epic7ChangedFileIntent {
+	out := make([]Epic7ChangedFileIntent, 0, len(def.intents))
+	for _, intent := range def.intents {
+		if def.needsRepair && opts.MissingRepairTestUpdateIntent && strings.HasSuffix(intent.Path, "_test.go") {
+			continue
+		}
+		out = append(out, intent)
+	}
+	return out
+}
+
+func epic7HasTestUpdateIntent(intents []Epic7ChangedFileIntent) bool {
+	for _, intent := range intents {
+		if strings.HasSuffix(intent.Path, "_test.go") && intent.ChangeType == "update" {
+			return true
+		}
+	}
+	return false
+}
+
+func epic7MultiRepoAuthorityGrant(def epic7TrialDefinition, opts Epic7IssueToPROptions) *Epic7AuthorityGrant {
+	if !def.multiRepo || opts.MissingMultiRepoAuthority {
+		return nil
+	}
+	return &Epic7AuthorityGrant{
+		AuthorityRequestID:  "auth_req_epic7_" + def.id + "_multi_repo_proposal",
+		AuthorityDecisionID: "auth_dec_epic7_" + def.id + "_multi_repo_proposal",
+		HumanApprovalID:     "human_app_epic7_" + def.id + "_multi_repo_proposal",
+		Scope:               []string{"transpara-ai/work:proposal-only", "transpara-ai/docs:proposal-only"},
+		Decision:            "ApprovalRequired",
+		Summary:             "Explicit human authority permits recording a multi-repo proposal packet only; no repository is mutated.",
+	}
+}
+
+func epic7BuildTrialProof(def epic7TrialDefinition, proposal Epic7PRProposalPacket, proofPath string, checks Epic7TrialChecks, multiRepoAuthority *Epic7AuthorityGrant) Epic7TrialProofOfWorkPacket {
 	status := "pass"
 	if len(epic7ChecksMissing(def, proposal, checks)) > 0 {
 		status = "fail"
 	}
 	var repair *Epic7ProofOfWorkItem
-	if proposal.RepairEvidenceRef != "" {
-		repair = &Epic7ProofOfWorkItem{Label: "Repair evidence", Status: "recorded", Summary: "Failing-test evidence, proposed fix, proposed test update, and repair rationale are recorded.", ArtifactRef: proposal.RepairEvidenceRef}
+	if def.needsRepair {
+		repairStatus := "missing"
+		repairSummary := "Repair evidence is missing."
+		if proposal.RepairEvidenceRef != "" {
+			repairStatus = "recorded"
+			repairSummary = "Failing-test evidence, proposed fix, proposed test update, and repair rationale are recorded."
+		}
+		repair = &Epic7ProofOfWorkItem{Label: "Repair evidence", Status: repairStatus, Summary: repairSummary, ArtifactRef: proposal.RepairEvidenceRef}
 	}
 	var rollback *Epic7ProofOfWorkItem
-	if proposal.RollbackEvidenceRef != "" {
-		rollback = &Epic7ProofOfWorkItem{Label: "Rollback evidence", Status: "recorded", Summary: "Human-reviewed self-improvement proposal includes rollback evidence and remains unapplied.", ArtifactRef: proposal.RollbackEvidenceRef}
+	if def.needsRollback {
+		rollbackStatus := "missing"
+		rollbackSummary := "Rollback evidence is missing."
+		if proposal.RollbackEvidenceRef != "" {
+			rollbackStatus = "recorded"
+			rollbackSummary = "Human-reviewed self-improvement proposal includes rollback evidence and remains unapplied."
+		}
+		rollback = &Epic7ProofOfWorkItem{Label: "Rollback evidence", Status: rollbackStatus, Summary: rollbackSummary, ArtifactRef: proposal.RollbackEvidenceRef}
+	}
+	var humanReview *Epic7ProofOfWorkItem
+	if def.selfImprovement {
+		reviewStatus := "missing"
+		reviewSummary := "Human review evidence is missing."
+		if proposal.HumanReviewEvidenceRef != "" {
+			reviewStatus = "recorded"
+			reviewSummary = "Human reviewer approves only proposal evidence with rollback; no self-apply, merge, or activation is authorized."
+		}
+		humanReview = &Epic7ProofOfWorkItem{Label: "Human review evidence", Status: reviewStatus, Summary: reviewSummary, ArtifactRef: proposal.HumanReviewEvidenceRef}
 	}
 	return Epic7TrialProofOfWorkPacket{
 		ID:      "pow_" + def.id,
@@ -730,7 +826,9 @@ func epic7BuildTrialProof(def epic7TrialDefinition, proposal Epic7PRProposalPack
 		},
 		RepairEvidence:            repair,
 		RollbackEvidence:          rollback,
+		HumanReviewEvidence:       humanReview,
 		AuthorityBoundary:         append([]Epic7ProtectedActionRef(nil), proposal.AuthorityBoundary...),
+		MultiRepoAuthority:        multiRepoAuthority,
 		ForbiddenActionSeparation: epic7ForbiddenActionRefs(proposal.AuthorityBoundary),
 		EventGraphRefs:            []string{egRef(v39.TypeGateResult, "gate_epic7_issue_pr_autonomy")},
 	}
@@ -796,19 +894,30 @@ func epic7ChecksMissing(def epic7TrialDefinition, proposal Epic7PRProposalPacket
 	if !checks.ForbiddenActionsSeparated {
 		missing = appendUniqueStrings(missing, []string{"forbidden action separation failed for " + def.id}, seen)
 	}
-	if def.multiRepo {
-		if !checks.MultiRepoWithoutAuthorityRejected {
-			missing = appendUniqueStrings(missing, []string{"multi-repo proposal without explicit authority was not rejected"}, seen)
+	if def.needsRepair {
+		if !checks.RepairEvidencePresent {
+			missing = appendUniqueStrings(missing, []string{"repair evidence missing for " + def.id}, seen)
 		}
-		if !checks.MultiRepoWithExplicitAuthorityOnly {
+		if !checks.RepairTestUpdateIntentPresent {
+			missing = appendUniqueStrings(missing, []string{"repair proposed test update missing for " + def.id}, seen)
+		}
+	}
+	if def.multiRepo {
+		if !checks.ExplicitMultiRepoAuthorityRecorded {
+			missing = appendUniqueStrings(missing, []string{"multi-repo proposal authority evidence is missing"}, seen)
+		}
+		if !checks.MultiRepoProposalRemainsProposedOnly {
 			missing = appendUniqueStrings(missing, []string{"multi-repo proposal with explicit authority did not remain proposed-only"}, seen)
 		}
 	}
 	if def.selfImprovement {
-		if !checks.SelfImprovementWithoutReviewRejected {
-			missing = appendUniqueStrings(missing, []string{"self-improvement proposal without human review was not rejected"}, seen)
+		if !checks.SelfImprovementHumanReviewPresent {
+			missing = appendUniqueStrings(missing, []string{"self-improvement human review evidence is missing"}, seen)
 		}
-		if !checks.SelfImprovementWithReviewRollbackOnly {
+		if !checks.SelfImprovementRollbackEvidencePresent {
+			missing = appendUniqueStrings(missing, []string{"self-improvement rollback evidence is missing"}, seen)
+		}
+		if !checks.SelfImprovementProposalRemainsProposedOnly {
 			missing = appendUniqueStrings(missing, []string{"self-improvement proposal with review and rollback evidence did not remain proposed-only"}, seen)
 		}
 	}
@@ -846,7 +955,7 @@ func epic7RecordEventGraph(ids epic7FixtureIDs, opts Epic7IssueToPROptions, tria
 		&v39.PlanningProposal{CommonNode: epic7Common(ids.planningProposal, v39.TypePlanningProposal, "proposed"), FactoryOrderID: ids.factoryOrder, FactoryOrderVersion: 1, Requirements: []string{ids.requirement}, AcceptanceCriteria: []string{ids.acceptanceCriterion}, Assumptions: []string{"Pull requests are represented as local proposal packets because EventGraph v3.9 has no dedicated PullRequest record.", "All protected actions remain forbidden unless separately authorized outside this fixture."}, ArchitectureOptions: []string{"local_issue_to_pr_proposal_packets"}, RecommendedOptionID: strPtr("local_issue_to_pr_proposal_packets"), TaskDrafts: []string{ids.task}, RequiresHumanReview: true},
 		&v39.ActorInvocation{CommonNode: epic7Common(ids.actorInvocation, v39.TypeActorInvocation, runtimeStatus), TaskID: ids.task, Runtime: "local", ActorID: epic7FixtureActorID, InputContractHash: epic7Hash("epic7-input:" + opts.WorkingDir), OutputContractHash: strPtr(epic7Hash("epic7-output:" + strings.Join(append(proposalArtifactIDs, proofArtifactIDs...), ":")))},
 		&v39.RuntimeEnvelope{CommonNode: epic7Common(ids.runtimeEnvelope, v39.TypeRuntimeEnvelope, "recorded"), RuntimeAdapterID: "local_issue_pr_proposal_fixture", RuntimeAdapterVersion: "1", FactoryRuntimeVersionRef: ids.factoryRuntime, TaskID: ids.task, ActorID: epic7FixtureActorID, AuthorityDecisionRef: "human_authorized_in_chat_2026-06-02_docs_main_" + epic7ShortSHA(epic7DocsMergeSHA), AllowedFiles: []string{"fixtures/epic7/issues/**", "artifacts/issue-pr/**"}, DeniedFiles: []string{".git", "../", ".env", "secrets.env"}, AllowedCommands: []string{"write_issue_fixture", "write_proposal_packet", "write_proof_packet"}, DeniedCommands: []string{"gh pr create", "git push", "git merge", "gh pr merge", "deploy", "protected_execution.run", "capability.activate"}, NetworkPolicy: "disabled", SecretsPolicy: "none", WorkingDirectory: opts.WorkingDir, Timeout: "1s", ResourceLimits: map[string]any{"max_live_prs_created": 0, "max_branch_pushes": 0, "max_repos_mutated": 0}, ExpectedOutputs: []string{"artifacts/issue-pr/proposals/*.json", "artifacts/issue-pr/proof-of-work/*.json"}, OutputContract: map[string]any{"mode": string(opts.Mode), "gate": "gate_h_issue_to_pr_proposal"}, TraceRequiredPaths: []string{"FactoryOrder -> Requirement -> AcceptanceCriterion -> Task", "Task -> ActorInvocation", "Task -> RuntimeEnvelope -> RuntimeResult", "Task -> Artifact", "Task -> TestCase -> TestRun -> GateResult"}, PostRunValidationPlan: []string{"epic7EvaluateGateH", "go test ./..."}, EnvelopeHash: epic7Hash("epic7-envelope:" + string(opts.Mode))},
-		&v39.RuntimeResult{CommonNode: epic7Common(ids.runtimeResult, v39.TypeRuntimeResult, runtimeStatus), InvocationID: ids.runtimeEnvelope, RuntimeAdapterID: "local_issue_pr_proposal_fixture", StartedAt: createdAt, CompletedAt: createdAt.Add(time.Second), ExitStatus: runtimeStatus, ArtifactRefs: append(proposalArtifactIDs, proofArtifactIDs...), ChangedFiles: []string{}, CommandLog: epic7CommandLog(trials, opts), NetworkAccessLog: []string{}, SecretAccessLog: []string{}, PolicyDecisionRefs: []string{"proposal_only_boundary"}, PostRunValidationRefs: []string{ids.testRun}},
+		&v39.RuntimeResult{CommonNode: epic7Common(ids.runtimeResult, v39.TypeRuntimeResult, runtimeStatus), InvocationID: ids.runtimeEnvelope, RuntimeAdapterID: "local_issue_pr_proposal_fixture", StartedAt: createdAt, CompletedAt: createdAt.Add(time.Second), ExitStatus: runtimeStatus, ArtifactRefs: append(proposalArtifactIDs, proofArtifactIDs...), ChangedFiles: epic7RuntimeChangedFiles(trials), CommandLog: epic7CommandLog(trials, opts), NetworkAccessLog: []string{}, SecretAccessLog: []string{}, PolicyDecisionRefs: []string{"proposal_only_boundary"}, PostRunValidationRefs: []string{ids.testRun}},
 		&v39.TestCase{CommonNode: epic7Common(ids.testCase, v39.TypeTestCase, "active"), AcceptanceCriterionID: &ids.acceptanceCriterion, RequirementID: &ids.requirement, Name: "Epic 7 issue-to-PR proposal Gate H evidence", TestType: "unit", Path: strPtr("work/epic7_issue_pr_autonomy_test.go")},
 		&v39.TestRun{CommonNode: epic7Common(ids.testRun, v39.TypeTestRun, testRunStatus), TestCaseID: &ids.testCase, ActorInvocationID: &ids.actorInvocation, Command: "go test ./..."},
 		&v39.GateResult{CommonNode: epic7Common(ids.gateResult, v39.TypeGateResult, validation.Status), FactoryOrderID: ids.factoryOrder, ReleaseCandidateID: &ids.releaseCandidate, GateName: "gate_h_issue_to_pr_proposal_autonomy", EvidenceRefs: append([]string{ids.testRun}, append(proposalArtifactIDs, proofArtifactIDs...)...)},
@@ -917,6 +1026,10 @@ func epic7TrialRecords(trials []Epic7TrialEvidence) []v39.Record {
 		prBodyArtifact := "art_epic7_pr_body_" + trial.TrialID
 		branchArtifact := "art_epic7_branch_plan_" + trial.TrialID
 		validationArtifact := "art_epic7_validation_plan_" + trial.TrialID
+		codeChanges := make([]v39.Record, 0, len(trial.Proposal.ChangedFileIntent))
+		for index, intent := range trial.Proposal.ChangedFileIntent {
+			codeChanges = append(codeChanges, &v39.CodeChange{CommonNode: epic7Common(epic7CodeChangeID(trial.TrialID, index), v39.TypeCodeChange, epic7CodeChangeStatus(trial)), ArtifactID: patchArtifact, ActorInvocationID: "invoke_epic7_issue_pr_proposal", Repo: intent.Repo, Path: intent.Path, BeforeHash: strPtr("sha256:fixture_base"), AfterHash: epic7Hash(epic7Patch(def)), ChangeType: intent.ChangeType})
+		}
 		records = append(records,
 			&v39.Artifact{CommonNode: epic7Common(issueArtifact, v39.TypeArtifact, boolArtifactStatus(trial.Checks.IssueFixturePresent)), TaskID: strPtr("tsk_epic7_issue_pr_autonomy"), ArtifactType: "document", Path: &trial.IssueFixtureRef, ContentHash: strPtr(epic7Hash(trial.IssueFixture.Title + trial.IssueFixture.Body))},
 			&v39.Artifact{CommonNode: epic7Common(proposalArtifact, v39.TypeArtifact, boolArtifactStatus(trial.Checks.ProposalPacketPresent)), TaskID: strPtr("tsk_epic7_issue_pr_autonomy"), ArtifactType: "document", Path: &trial.ProposalPacketRef, ContentHash: strPtr(epic7Hash(trial.Proposal.ProposedPRTitle + trial.Proposal.ProposedPRBody))},
@@ -925,8 +1038,8 @@ func epic7TrialRecords(trials []Epic7TrialEvidence) []v39.Record {
 			&v39.Artifact{CommonNode: epic7Common(prBodyArtifact, v39.TypeArtifact, "verified"), TaskID: strPtr("tsk_epic7_issue_pr_autonomy"), ArtifactType: "document", Path: &trial.PRBodyRef, ContentHash: strPtr(epic7Hash(trial.Proposal.ProposedPRBody))},
 			&v39.Artifact{CommonNode: epic7Common(branchArtifact, v39.TypeArtifact, "verified"), TaskID: strPtr("tsk_epic7_issue_pr_autonomy"), ArtifactType: "config", Path: &trial.BranchPlanRef, ContentHash: strPtr(epic7Hash(trial.Proposal.ProposedBranchName))},
 			&v39.Artifact{CommonNode: epic7Common(validationArtifact, v39.TypeArtifact, "verified"), TaskID: strPtr("tsk_epic7_issue_pr_autonomy"), ArtifactType: "test", Path: &trial.ValidationPlanRef, ContentHash: strPtr(epic7Hash(epic7ValidationPlan(def)))},
-			&v39.CodeChange{CommonNode: epic7Common("change_epic7_"+trial.TrialID, v39.TypeCodeChange, epic7CodeChangeStatus(trial)), ArtifactID: patchArtifact, ActorInvocationID: "invoke_epic7_issue_pr_proposal", Repo: trial.Proposal.ChangedFileIntent[0].Repo, Path: trial.Proposal.ChangedFileIntent[0].Path, BeforeHash: strPtr("sha256:fixture_base"), AfterHash: epic7Hash(epic7Patch(def)), ChangeType: trial.Proposal.ChangedFileIntent[0].ChangeType},
 		)
+		records = append(records, codeChanges...)
 		if trial.RepairEvidenceRef != "" {
 			repairArtifact := "art_epic7_repair_" + trial.TrialID
 			records = append(records, &v39.Artifact{CommonNode: epic7Common(repairArtifact, v39.TypeArtifact, "verified"), TaskID: strPtr("tsk_epic7_issue_pr_autonomy"), ArtifactType: "report", Path: &trial.RepairEvidenceRef, ContentHash: strPtr(epic7Hash("repair:" + trial.TrialID))})
@@ -934,6 +1047,22 @@ func epic7TrialRecords(trials []Epic7TrialEvidence) []v39.Record {
 		if trial.RollbackEvidenceRef != "" {
 			rollbackArtifact := "art_epic7_rollback_" + trial.TrialID
 			records = append(records, &v39.Artifact{CommonNode: epic7Common(rollbackArtifact, v39.TypeArtifact, "verified"), TaskID: strPtr("tsk_epic7_issue_pr_autonomy"), ArtifactType: "report", Path: &trial.RollbackEvidenceRef, ContentHash: strPtr(epic7Hash("rollback:" + trial.TrialID))})
+		}
+		if trial.HumanReviewEvidenceRef != "" {
+			humanReviewArtifact := "art_epic7_human_review_" + trial.TrialID
+			humanReviewRecord := "review_epic7_" + trial.TrialID
+			records = append(records,
+				&v39.Artifact{CommonNode: epic7Common(humanReviewArtifact, v39.TypeArtifact, "verified"), TaskID: strPtr("tsk_epic7_issue_pr_autonomy"), ArtifactType: "report", Path: &trial.HumanReviewEvidenceRef, ContentHash: strPtr(epic7Hash("human-review:" + trial.TrialID))},
+				&v39.HumanReview{CommonNode: epic7Common(humanReviewRecord, v39.TypeHumanReview, "approved"), ReviewerActorID: epic7FixtureHumanActorID, ReviewerRole: "maintainer", Rationale: "Human reviewer approves proposal-only self-improvement with rollback evidence; no self-apply, merge, or capability activation is authorized."},
+			)
+		}
+		if trial.MultiRepoAuthority != nil {
+			grant := trial.MultiRepoAuthority
+			records = append(records,
+				&v39.AuthorityRequest{CommonNode: epic7Common(grant.AuthorityRequestID, v39.TypeAuthorityRequest, "recorded"), ActorID: epic7FixtureActorID, ActorRole: "local_proposal_generator", Action: "multi_repo.proposal_packet", TargetType: "proposal_packet", TargetID: proposalArtifact, RiskClass: "high", Reason: grant.Summary, ProposedCommand: strPtr("write local multi-repo proposal packet"), EvidenceRefs: []string{proposalArtifact, proofArtifact}},
+				&v39.AuthorityDecision{CommonNode: epic7Common(grant.AuthorityDecisionID, v39.TypeAuthorityDecision, "approved"), AuthorityRequestID: grant.AuthorityRequestID, DeciderActorID: epic7FixtureHumanActorID, DeciderRole: "maintainer", Decision: grant.Decision, Reason: grant.Summary, Scope: append([]string(nil), grant.Scope...), Conditions: []string{"proposal-only", "no live GitHub mutation", "no branch push", "no merge", "no deploy"}},
+				&v39.HumanApproval{CommonNode: epic7Common(grant.HumanApprovalID, v39.TypeHumanApproval, "approved"), RequestRef: grant.AuthorityRequestID, ApproverActorID: epic7FixtureHumanActorID, ApproverRole: "maintainer", Decision: "approved", Reason: grant.Summary},
+			)
 		}
 		for _, action := range trial.AuthorityBoundary {
 			records = append(records,
@@ -964,12 +1093,32 @@ func epic7AppendEdges(graph *v39.InMemoryStore, ids epic7FixtureIDs, trials []Ep
 			edges = append(edges, epic7Edge("task_"+artifactID, v39.EdgeProduced, ids.task, artifactID, createdAt))
 		}
 		edges = append(edges, epic7Edge("plan_proposal_"+trial.TrialID, v39.EdgeProduced, ids.planningProposal, "art_epic7_proposal_"+trial.TrialID, createdAt))
-		edges = append(edges, epic7Edge("change_patch_"+trial.TrialID, v39.EdgeModified, "change_epic7_"+trial.TrialID, "art_epic7_patch_"+trial.TrialID, createdAt))
+		for index := range trial.Proposal.ChangedFileIntent {
+			codeChangeID := epic7CodeChangeID(trial.TrialID, index)
+			edges = append(edges, epic7Edge("change_patch_"+trial.TrialID+"_"+fmt.Sprint(index), v39.EdgeModified, codeChangeID, "art_epic7_patch_"+trial.TrialID, createdAt))
+		}
 		if trial.RepairEvidenceRef != "" {
 			edges = append(edges, epic7Edge("task_repair_"+trial.TrialID, v39.EdgeProduced, ids.task, "art_epic7_repair_"+trial.TrialID, createdAt))
 		}
 		if trial.RollbackEvidenceRef != "" {
 			edges = append(edges, epic7Edge("task_rollback_"+trial.TrialID, v39.EdgeProduced, ids.task, "art_epic7_rollback_"+trial.TrialID, createdAt))
+		}
+		if trial.HumanReviewEvidenceRef != "" {
+			humanReviewArtifact := "art_epic7_human_review_" + trial.TrialID
+			humanReviewRecord := "review_epic7_" + trial.TrialID
+			edges = append(edges,
+				epic7Edge("task_human_review_artifact_"+trial.TrialID, v39.EdgeProduced, ids.task, humanReviewArtifact, createdAt),
+				epic7Edge("proposal_human_review_"+trial.TrialID, v39.EdgeApprovedBy, "art_epic7_proposal_"+trial.TrialID, humanReviewRecord, createdAt),
+				epic7Edge("human_review_artifact_"+trial.TrialID, v39.EdgeProduced, humanReviewRecord, humanReviewArtifact, createdAt),
+			)
+		}
+		if trial.MultiRepoAuthority != nil {
+			grant := trial.MultiRepoAuthority
+			edges = append(edges,
+				epic7Edge("invoke_multi_repo_auth_"+trial.TrialID, v39.EdgeRequestedAuthority, ids.actorInvocation, grant.AuthorityRequestID, createdAt),
+				epic7Edge("multi_repo_auth_decision_"+trial.TrialID, v39.EdgeDecidedBy, grant.AuthorityRequestID, grant.AuthorityDecisionID, createdAt),
+				epic7Edge("multi_repo_auth_human_"+trial.TrialID, v39.EdgeApprovedBy, grant.AuthorityRequestID, grant.HumanApprovalID, createdAt),
+			)
 		}
 		for _, action := range trial.AuthorityBoundary {
 			edges = append(edges,
@@ -1059,6 +1208,19 @@ func epic7AggregateForbiddenActions(trials []Epic7TrialEvidence) []Epic7Protecte
 		return nil
 	}
 	return epic7ForbiddenActionRefs(trials[0].AuthorityBoundary)
+}
+
+func epic7RuntimeChangedFiles(trials []Epic7TrialEvidence) []string {
+	var out []string
+	for _, trial := range trials {
+		if !trial.Proposal.Applied {
+			continue
+		}
+		for _, intent := range trial.Proposal.ChangedFileIntent {
+			out = append(out, intent.Repo+":"+intent.Path)
+		}
+	}
+	return out
 }
 
 func epic7ForbiddenActionRefs(actions []Epic7ProtectedActionRef) []Epic7ProtectedActionRef {
@@ -1200,11 +1362,7 @@ func epic7Edge(suffix, typ, from, to string, createdAt time.Time) v39.CommonEdge
 }
 
 func epic7FixtureTime() time.Time {
-	t, err := time.Parse(time.RFC3339, epic7FixtureTimeRFC)
-	if err != nil {
-		panic(err)
-	}
-	return t
+	return time.Date(2026, 6, 2, 8, 0, 0, 0, time.UTC)
 }
 
 func epic7Hash(value string) string {
@@ -1217,6 +1375,13 @@ func epic7CodeChangeStatus(trial Epic7TrialEvidence) string {
 		return "applied"
 	}
 	return "proposed"
+}
+
+func epic7CodeChangeID(trialID string, index int) string {
+	if index == 0 {
+		return "change_epic7_" + trialID
+	}
+	return fmt.Sprintf("change_epic7_%s_%d", trialID, index+1)
 }
 
 func epic7CertificationID(cert *v39.Certification) string {

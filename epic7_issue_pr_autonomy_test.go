@@ -2,6 +2,8 @@ package work_test
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -42,6 +44,10 @@ func TestEpic7IssueToPRProposalTrialsLocalEvidence(t *testing.T) {
 	}
 	assertEpic7MultiRepoAuthorityEvidence(t, run)
 	assertEpic7SelfImprovementEvidence(t, run)
+	assertEpic7RepairEvidence(t, run)
+	assertEpic7CodeChangeEvidence(t, run)
+	assertEpic7LocalFilesystemBoundary(t, run)
+	assertEpic7RuntimeChangedFiles(t, run, nil)
 	assertEpic7ProofJSONShape(t, run)
 	assertEpic7NoExecutionReceipt(t, run)
 }
@@ -71,6 +77,7 @@ func TestEpic7IssueToPRProposalTrialsRejectsAppliedPatch(t *testing.T) {
 	if !containsString(run.GateHValidation.Missing, "proposed-only boundary failed for trial_3_bug_fix_with_tests_and_repair_proposal") {
 		t.Fatalf("missing = %#v; want proposed-only failure", run.GateHValidation.Missing)
 	}
+	assertEpic7RuntimeChangedFiles(t, run, []string{"transpara-ai/work:proposal_validator.go", "transpara-ai/work:proposal_validator_test.go"})
 }
 
 func TestEpic7IssueToPRProposalTrialsRejectsForbiddenActions(t *testing.T) {
@@ -81,6 +88,7 @@ func TestEpic7IssueToPRProposalTrialsRejectsForbiddenActions(t *testing.T) {
 		work.Epic7ActionPullRequestMerge,
 		work.Epic7ActionProductionDeploy,
 		work.Epic7ActionProtectedExecutionRun,
+		work.Epic7ActionCapabilityActivate,
 	} {
 		t.Run(string(action), func(t *testing.T) {
 			run := runEpic7(t, work.Epic7IssueToPROptions{CompletedForbiddenActions: []work.Epic7ProtectedAction{action}})
@@ -88,7 +96,22 @@ func TestEpic7IssueToPRProposalTrialsRejectsForbiddenActions(t *testing.T) {
 			if !containsString(run.GateHValidation.Missing, "forbidden action completed: "+string(action)) {
 				t.Fatalf("missing = %#v; want forbidden action %s", run.GateHValidation.Missing, action)
 			}
+			for _, trial := range run.Projection.Trials {
+				if !containsString(run.GateHValidation.Missing, "forbidden action separation failed for "+trial.TrialID) {
+					t.Fatalf("missing = %#v; want forbidden action propagated to %s", run.GateHValidation.Missing, trial.TrialID)
+				}
+			}
 		})
+	}
+}
+
+func TestEpic7IssueToPRProposalTrialsRejectsMissingProtectedActionBoundary(t *testing.T) {
+	run := runEpic7(t, work.Epic7IssueToPROptions{OmitProtectedAction: work.Epic7ActionCapabilityActivate})
+	assertEpic7Rejected(t, run)
+	for _, trial := range run.Projection.Trials {
+		if !containsString(run.GateHValidation.Missing, "forbidden action separation failed for "+trial.TrialID) {
+			t.Fatalf("missing = %#v; want missing protected action propagated to %s", run.GateHValidation.Missing, trial.TrialID)
+		}
 	}
 }
 
@@ -106,24 +129,80 @@ func TestEpic7IssueToPRProposalTrialsRejectsExecutionReceipt(t *testing.T) {
 func TestEpic7IssueToPRProposalTrialsRejectsMissingMultiRepoAuthority(t *testing.T) {
 	run := runEpic7(t, work.Epic7IssueToPROptions{MissingMultiRepoAuthority: true})
 	assertEpic7Rejected(t, run)
-	if !containsString(run.GateHValidation.Missing, "multi-repo proposal without explicit authority was not rejected") {
+	if !containsString(run.GateHValidation.Missing, "multi-repo proposal authority evidence is missing") {
 		t.Fatalf("missing = %#v; want multi-repo authority blocker", run.GateHValidation.Missing)
+	}
+	trial := findEpic7Trial(t, run, "trial_4_multi_repo_proposal_requires_explicit_authority")
+	if trial.MultiRepoAuthority != nil || trial.ProofOfWorkPacket.MultiRepoAuthority != nil {
+		t.Fatalf("multi-repo authority = %#v proof=%#v; want absent evidence", trial.MultiRepoAuthority, trial.ProofOfWorkPacket.MultiRepoAuthority)
 	}
 }
 
-func TestEpic7IssueToPRProposalTrialsRejectsMissingSelfImprovementReviewOrRollback(t *testing.T) {
-	for name, opts := range map[string]work.Epic7IssueToPROptions{
-		"review":   {MissingSelfImprovementReview: true},
-		"rollback": {MissingSelfImprovementRollback: true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			run := runEpic7(t, opts)
-			assertEpic7Rejected(t, run)
-			if !containsString(run.GateHValidation.Missing, "self-improvement proposal with review and rollback evidence did not remain proposed-only") &&
-				!containsString(run.GateHValidation.Missing, "self-improvement proposal without human review was not rejected") {
-				t.Fatalf("missing = %#v; want self-improvement blocker", run.GateHValidation.Missing)
-			}
-		})
+func TestEpic7IssueToPRProposalTrialsRejectsMissingRepairEvidence(t *testing.T) {
+	run := runEpic7(t, work.Epic7IssueToPROptions{MissingRepairEvidence: true})
+	assertEpic7Rejected(t, run)
+	if !containsString(run.GateHValidation.Missing, "repair evidence missing for trial_3_bug_fix_with_tests_and_repair_proposal") {
+		t.Fatalf("missing = %#v; want repair evidence blocker", run.GateHValidation.Missing)
+	}
+	trial := findEpic7Trial(t, run, "trial_3_bug_fix_with_tests_and_repair_proposal")
+	if trial.RepairEvidenceRef != "" {
+		t.Fatalf("repair evidence ref = %q; want absent", trial.RepairEvidenceRef)
+	}
+	if trial.ProofOfWorkPacket.RepairEvidence == nil || trial.ProofOfWorkPacket.RepairEvidence.Status != "missing" {
+		t.Fatalf("repair proof = %#v; want missing proof item", trial.ProofOfWorkPacket.RepairEvidence)
+	}
+}
+
+func TestEpic7IssueToPRProposalTrialsRejectsMissingRepairTestUpdateIntent(t *testing.T) {
+	run := runEpic7(t, work.Epic7IssueToPROptions{MissingRepairTestUpdateIntent: true})
+	assertEpic7Rejected(t, run)
+	if !containsString(run.GateHValidation.Missing, "repair proposed test update missing for trial_3_bug_fix_with_tests_and_repair_proposal") {
+		t.Fatalf("missing = %#v; want repair test update blocker", run.GateHValidation.Missing)
+	}
+	trial := findEpic7Trial(t, run, "trial_3_bug_fix_with_tests_and_repair_proposal")
+	for _, intent := range trial.Proposal.ChangedFileIntent {
+		if strings.HasSuffix(intent.Path, "_test.go") {
+			t.Fatalf("changed-file intents = %#v; want no test update intent in negative seam", trial.Proposal.ChangedFileIntent)
+		}
+	}
+}
+
+func TestEpic7IssueToPRProposalTrialsRejectsMissingSelfImprovementReview(t *testing.T) {
+	run := runEpic7(t, work.Epic7IssueToPROptions{MissingSelfImprovementReview: true})
+	assertEpic7Rejected(t, run)
+	if !containsString(run.GateHValidation.Missing, "self-improvement human review evidence is missing") {
+		t.Fatalf("missing = %#v; want human review blocker", run.GateHValidation.Missing)
+	}
+	trial := findEpic7Trial(t, run, "trial_5_self_improvement_proposal_human_reviewed_rollback_bound")
+	if trial.HumanReviewEvidenceRef != "" {
+		t.Fatalf("human review ref = %q; want absent", trial.HumanReviewEvidenceRef)
+	}
+	if trial.ProofOfWorkPacket.HumanReviewEvidence == nil || trial.ProofOfWorkPacket.HumanReviewEvidence.Status != "missing" {
+		t.Fatalf("human review proof = %#v; want missing proof item", trial.ProofOfWorkPacket.HumanReviewEvidence)
+	}
+	if trial.ProofOfWorkPacket.RollbackEvidence == nil || trial.ProofOfWorkPacket.RollbackEvidence.Status != "recorded" {
+		t.Fatalf("rollback proof = %#v; want rollback still recorded", trial.ProofOfWorkPacket.RollbackEvidence)
+	}
+	if records := run.EventGraph.ByType(v39.TypeHumanReview); len(records) != 0 {
+		t.Fatalf("HumanReview records = %#v; want none when review evidence is missing", records)
+	}
+}
+
+func TestEpic7IssueToPRProposalTrialsRejectsMissingSelfImprovementRollback(t *testing.T) {
+	run := runEpic7(t, work.Epic7IssueToPROptions{MissingSelfImprovementRollback: true})
+	assertEpic7Rejected(t, run)
+	if !containsString(run.GateHValidation.Missing, "self-improvement rollback evidence is missing") {
+		t.Fatalf("missing = %#v; want rollback blocker", run.GateHValidation.Missing)
+	}
+	trial := findEpic7Trial(t, run, "trial_5_self_improvement_proposal_human_reviewed_rollback_bound")
+	if trial.RollbackEvidenceRef != "" {
+		t.Fatalf("rollback ref = %q; want absent", trial.RollbackEvidenceRef)
+	}
+	if trial.ProofOfWorkPacket.RollbackEvidence == nil || trial.ProofOfWorkPacket.RollbackEvidence.Status != "missing" {
+		t.Fatalf("rollback proof = %#v; want missing proof item", trial.ProofOfWorkPacket.RollbackEvidence)
+	}
+	if trial.ProofOfWorkPacket.HumanReviewEvidence == nil || trial.ProofOfWorkPacket.HumanReviewEvidence.Status != "recorded" {
+		t.Fatalf("human review proof = %#v; want human review still recorded", trial.ProofOfWorkPacket.HumanReviewEvidence)
 	}
 }
 
@@ -204,24 +283,147 @@ func assertEpic7TrialProposedOnly(t *testing.T, trial work.Epic7TrialEvidence) {
 func assertEpic7MultiRepoAuthorityEvidence(t *testing.T, run work.Epic7IssueToPRRun) {
 	t.Helper()
 	trial := findEpic7Trial(t, run, "trial_4_multi_repo_proposal_requires_explicit_authority")
-	if !trial.Checks.MultiRepoWithoutAuthorityRejected || !trial.Checks.MultiRepoWithExplicitAuthorityOnly {
-		t.Fatalf("multi-repo checks = %#v; want rejected-without-authority and proposed-only-with-authority", trial.Checks)
+	if !trial.Checks.ExplicitMultiRepoAuthorityRecorded || !trial.Checks.MultiRepoProposalRemainsProposedOnly {
+		t.Fatalf("multi-repo checks = %#v; want explicit authority and proposed-only-with-authority", trial.Checks)
 	}
 	if len(trial.Proposal.ChangedFileIntent) < 2 {
 		t.Fatalf("multi-repo intents = %#v; want at least two repos", trial.Proposal.ChangedFileIntent)
 	}
+	if trial.MultiRepoAuthority == nil {
+		t.Fatalf("multi-repo authority is nil; want explicit authority grant")
+	}
+	if !containsString(trial.MultiRepoAuthority.Scope, "transpara-ai/work:proposal-only") || !containsString(trial.MultiRepoAuthority.Scope, "transpara-ai/docs:proposal-only") {
+		t.Fatalf("multi-repo scope = %#v; want Work and docs proposal-only", trial.MultiRepoAuthority.Scope)
+	}
+	assertEpic7GraphRecord(t, run, trial.MultiRepoAuthority.AuthorityRequestID, v39.TypeAuthorityRequest)
+	assertEpic7GraphRecord(t, run, trial.MultiRepoAuthority.AuthorityDecisionID, v39.TypeAuthorityDecision)
+	assertEpic7GraphRecord(t, run, trial.MultiRepoAuthority.HumanApprovalID, v39.TypeHumanApproval)
+	assertEpic7Edge(t, run.EventGraph.EdgesFrom(run.ActorInvocationID), v39.EdgeRequestedAuthority, trial.MultiRepoAuthority.AuthorityRequestID)
+	assertEpic7Edge(t, run.EventGraph.EdgesFrom(trial.MultiRepoAuthority.AuthorityRequestID), v39.EdgeDecidedBy, trial.MultiRepoAuthority.AuthorityDecisionID)
+	assertEpic7Edge(t, run.EventGraph.EdgesFrom(trial.MultiRepoAuthority.AuthorityRequestID), v39.EdgeApprovedBy, trial.MultiRepoAuthority.HumanApprovalID)
 }
 
 func assertEpic7SelfImprovementEvidence(t *testing.T, run work.Epic7IssueToPRRun) {
 	t.Helper()
 	trial := findEpic7Trial(t, run, "trial_5_self_improvement_proposal_human_reviewed_rollback_bound")
-	if !trial.Checks.SelfImprovementWithoutReviewRejected || !trial.Checks.SelfImprovementWithReviewRollbackOnly {
+	if !trial.Checks.SelfImprovementHumanReviewPresent || !trial.Checks.SelfImprovementRollbackEvidencePresent || !trial.Checks.SelfImprovementProposalRemainsProposedOnly {
 		t.Fatalf("self-improvement checks = %#v; want review and rollback boundary", trial.Checks)
 	}
-	if trial.RollbackEvidenceRef == "" {
-		t.Fatalf("rollback ref is empty; want rollback evidence")
+	if trial.HumanReviewEvidenceRef == "" || trial.RollbackEvidenceRef == "" {
+		t.Fatalf("human review ref = %q rollback ref = %q; want both evidence refs", trial.HumanReviewEvidenceRef, trial.RollbackEvidenceRef)
 	}
+	assertFileExists(t, trial.HumanReviewEvidenceRef)
 	assertFileExists(t, trial.RollbackEvidenceRef)
+	assertEpic7GraphRecord(t, run, "review_epic7_"+trial.TrialID, v39.TypeHumanReview)
+	assertEpic7GraphRecord(t, run, "art_epic7_human_review_"+trial.TrialID, v39.TypeArtifact)
+}
+
+func assertEpic7RepairEvidence(t *testing.T, run work.Epic7IssueToPRRun) {
+	t.Helper()
+	trial := findEpic7Trial(t, run, "trial_3_bug_fix_with_tests_and_repair_proposal")
+	if !trial.Checks.RepairEvidencePresent || !trial.Checks.RepairTestUpdateIntentPresent {
+		t.Fatalf("repair checks = %#v; want evidence and test update intent", trial.Checks)
+	}
+	if trial.RepairEvidenceRef == "" {
+		t.Fatalf("repair ref is empty; want repair evidence")
+	}
+	assertFileExists(t, trial.RepairEvidenceRef)
+	if trial.ProofOfWorkPacket.RepairEvidence == nil || trial.ProofOfWorkPacket.RepairEvidence.Status != "recorded" {
+		t.Fatalf("repair proof = %#v; want recorded proof item", trial.ProofOfWorkPacket.RepairEvidence)
+	}
+	foundTestIntent := false
+	for _, intent := range trial.Proposal.ChangedFileIntent {
+		if intent.Path == "proposal_validator_test.go" && intent.ChangeType == "update" {
+			foundTestIntent = true
+		}
+	}
+	if !foundTestIntent {
+		t.Fatalf("changed-file intents = %#v; want proposed test update", trial.Proposal.ChangedFileIntent)
+	}
+	assertEpic7GraphRecord(t, run, "art_epic7_repair_"+trial.TrialID, v39.TypeArtifact)
+}
+
+func assertEpic7CodeChangeEvidence(t *testing.T, run work.Epic7IssueToPRRun) {
+	t.Helper()
+	records := run.EventGraph.ByType(v39.TypeCodeChange)
+	if len(records) != 7 {
+		t.Fatalf("CodeChange records = %d; want one per changed-file intent", len(records))
+	}
+	seen := map[string]bool{}
+	for _, record := range records {
+		codeChange := record.(*v39.CodeChange)
+		seen[codeChange.Repo+":"+codeChange.Path] = true
+	}
+	for _, want := range []string{
+		"transpara-ai/docs:dark-factory/v3.9/implementation/operators/gate-h-handoff.md",
+		"transpara-ai/work:proposal_validator.go",
+		"transpara-ai/work:proposal_validator_test.go",
+		"transpara-ai/docs:dark-factory/v3.9/implementation/operators/gate-h-followup.md",
+		"transpara-ai/work:issue_pr_proposal_generator.go",
+	} {
+		if !seen[want] {
+			t.Fatalf("CodeChange refs = %#v; want %s", seen, want)
+		}
+	}
+}
+
+func assertEpic7LocalFilesystemBoundary(t *testing.T, run work.Epic7IssueToPRRun) {
+	t.Helper()
+	root := filepath.Dir(filepath.Dir(filepath.Dir(run.LocalArtifacts.IssueDir)))
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == root {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if entry.IsDir() {
+			switch {
+			case rel == "fixtures", rel == "fixtures/epic7", rel == "fixtures/epic7/issues":
+				return nil
+			case rel == "artifacts", rel == "artifacts/issue-pr":
+				return nil
+			case strings.HasPrefix(rel, "artifacts/issue-pr/"):
+				return nil
+			default:
+				t.Fatalf("unexpected local directory %s under fixture root", rel)
+			}
+		}
+		if !strings.HasPrefix(rel, "fixtures/epic7/issues/") && !strings.HasPrefix(rel, "artifacts/issue-pr/") {
+			t.Fatalf("unexpected local file %s under fixture root", rel)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk local fixture root: %v", err)
+	}
+}
+
+func assertEpic7RuntimeChangedFiles(t *testing.T, run work.Epic7IssueToPRRun, want []string) {
+	t.Helper()
+	record, err := run.EventGraph.Get(run.RuntimeResultID)
+	if err != nil {
+		t.Fatalf("get runtime result: %v", err)
+	}
+	runtimeResult, ok := record.(*v39.RuntimeResult)
+	if !ok {
+		t.Fatalf("runtime result type = %T; want RuntimeResult", record)
+	}
+	if len(want) == 0 {
+		if len(runtimeResult.ChangedFiles) != 0 {
+			t.Fatalf("changed files = %#v; want none for proposed-only run", runtimeResult.ChangedFiles)
+		}
+		return
+	}
+	for _, item := range want {
+		if !containsString(runtimeResult.ChangedFiles, item) {
+			t.Fatalf("changed files = %#v; want %s", runtimeResult.ChangedFiles, item)
+		}
+	}
 }
 
 func assertEpic7ProofJSONShape(t *testing.T, run work.Epic7IssueToPRRun) {
@@ -265,6 +467,22 @@ func assertEpic7ProofJSONShape(t *testing.T, run work.Epic7IssueToPRRun) {
 				ValidationPlan struct {
 					ArtifactRef string `json:"artifact_ref"`
 				} `json:"validation_plan"`
+				RepairEvidence *struct {
+					Status      string `json:"status"`
+					ArtifactRef string `json:"artifact_ref"`
+				} `json:"repair_evidence"`
+				RollbackEvidence *struct {
+					Status      string `json:"status"`
+					ArtifactRef string `json:"artifact_ref"`
+				} `json:"rollback_evidence"`
+				HumanReviewEvidence *struct {
+					Status      string `json:"status"`
+					ArtifactRef string `json:"artifact_ref"`
+				} `json:"human_review_evidence"`
+				MultiRepoAuthority *struct {
+					Decision string   `json:"decision"`
+					Scope    []string `json:"scope"`
+				} `json:"multi_repo_authority"`
 				ForbiddenActionSeparation []struct {
 					Action string `json:"action"`
 					Status string `json:"status"`
@@ -294,6 +512,23 @@ func assertEpic7ProofJSONShape(t *testing.T, run work.Epic7IssueToPRRun) {
 		if len(trial.ProofOfWorkPacket.ForbiddenActionSeparation) != 7 {
 			t.Fatalf("%s forbidden separation count = %d; want 7", trial.TrialID, len(trial.ProofOfWorkPacket.ForbiddenActionSeparation))
 		}
+		switch trial.TrialID {
+		case "trial_3_bug_fix_with_tests_and_repair_proposal":
+			if trial.ProofOfWorkPacket.RepairEvidence == nil || trial.ProofOfWorkPacket.RepairEvidence.Status != "recorded" || trial.ProofOfWorkPacket.RepairEvidence.ArtifactRef == "" {
+				t.Fatalf("%s repair proof = %#v; want recorded artifact", trial.TrialID, trial.ProofOfWorkPacket.RepairEvidence)
+			}
+		case "trial_4_multi_repo_proposal_requires_explicit_authority":
+			if trial.ProofOfWorkPacket.MultiRepoAuthority == nil || trial.ProofOfWorkPacket.MultiRepoAuthority.Decision != "ApprovalRequired" || len(trial.ProofOfWorkPacket.MultiRepoAuthority.Scope) != 2 {
+				t.Fatalf("%s multi-repo proof = %#v; want explicit authority", trial.TrialID, trial.ProofOfWorkPacket.MultiRepoAuthority)
+			}
+		case "trial_5_self_improvement_proposal_human_reviewed_rollback_bound":
+			if trial.ProofOfWorkPacket.HumanReviewEvidence == nil || trial.ProofOfWorkPacket.HumanReviewEvidence.Status != "recorded" || trial.ProofOfWorkPacket.HumanReviewEvidence.ArtifactRef == "" {
+				t.Fatalf("%s human review proof = %#v; want recorded artifact", trial.TrialID, trial.ProofOfWorkPacket.HumanReviewEvidence)
+			}
+			if trial.ProofOfWorkPacket.RollbackEvidence == nil || trial.ProofOfWorkPacket.RollbackEvidence.Status != "recorded" || trial.ProofOfWorkPacket.RollbackEvidence.ArtifactRef == "" {
+				t.Fatalf("%s rollback proof = %#v; want recorded artifact", trial.TrialID, trial.ProofOfWorkPacket.RollbackEvidence)
+			}
+		}
 	}
 	if len(decoded.ProofOfWorkPacket.ResidualRisks) != 3 {
 		t.Fatalf("residual risks = %#v; want R-001/R-002/R-003", decoded.ProofOfWorkPacket.ResidualRisks)
@@ -310,6 +545,28 @@ func assertEpic7NoExecutionReceipt(t *testing.T, run work.Epic7IssueToPRRun) {
 	if records := run.EventGraph.ByType(v39.TypeExecutionReceipt); len(records) != 0 {
 		t.Fatalf("ExecutionReceipt records = %#v; want none", records)
 	}
+}
+
+func assertEpic7GraphRecord(t *testing.T, run work.Epic7IssueToPRRun, id, typ string) v39.Record {
+	t.Helper()
+	record, err := run.EventGraph.Get(id)
+	if err != nil {
+		t.Fatalf("get %s: %v", id, err)
+	}
+	if record.GetCommon().Type != typ {
+		t.Fatalf("%s type = %s; want %s", id, record.GetCommon().Type, typ)
+	}
+	return record
+}
+
+func assertEpic7Edge(t *testing.T, edges []v39.CommonEdge, typ, toID string) {
+	t.Helper()
+	for _, edge := range edges {
+		if edge.Type == typ && edge.ToID == toID {
+			return
+		}
+	}
+	t.Fatalf("edges = %#v; want %s edge to %s", edges, typ, toID)
 }
 
 func findEpic7Trial(t *testing.T, run work.Epic7IssueToPRRun, id string) work.Epic7TrialEvidence {
