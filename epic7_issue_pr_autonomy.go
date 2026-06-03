@@ -1,6 +1,7 @@
 package work
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	v39 "github.com/transpara-ai/eventgraph/go/pkg/darkfactory/v39"
@@ -31,19 +33,50 @@ const (
 )
 
 const (
+	Epic11DocsDraftPRLiveMutationMode Epic11DocsDraftPRMode = "docs_draft_pr_live_mutation"
+)
+
+const (
+	Epic11ActionPullRequestCreate = "pull_request.create"
+)
+
+const (
+	Epic11TargetRepository = "transpara-ai/docs"
+	Epic11TargetBaseRef    = "main"
+	Epic11HeadRefPrefix    = "codex/"
+	Epic11PolicyBundleID   = "df-v3.9.20-docs-draft-pr-create-only"
+	Epic11PolicyAdapterID  = "work-live-github-pr-policy-adapter"
+)
+
+const (
 	epic7FixtureActorID      = "act_epic7_issue_pr_proposer"
 	epic7FixtureHumanActorID = "act_epic7_human_reviewer"
 	epic7KnowledgeSourceRef  = "knowledge:dark-factory/v3.9/implementation/epics/epic-07-gate-h-issue-to-pr-autonomy-trials/01-work-issue-to-pr-autonomy-implementation-authorization-v3.9.md"
 	epic7DocsPRRef           = "transpara-ai/docs#87"
 	epic7DocsMergeSHA        = "b2f09a3b70ccfac124d3ab8e5e0bb21523860c29"
 	epic7DocsReviewedHead    = "08c413f754c48ef647f5972d100452788206ee63"
+
+	epic11FixtureActorID     = "act_epic11_docs_draft_pr_creator"
+	epic11HumanActorID       = "act_epic11_human_authorizer"
+	epic11KnowledgeSourceRef = "knowledge:dark-factory/v3.9/implementation/epics/epic-11-docs-draft-pr-live-mutation/01-work-docs-draft-pr-live-mutation-implementation-authorization-v3.9.md"
+	epic11DocsPRRef          = "transpara-ai/docs#95"
+	epic11DocsMergeSHA       = "b21e2eca5ce547eebef83a1a392f5ca790c3e44d"
+	epic11DocsReviewedHead   = "b4f9844ecad41a8dc1298e3ac19df3a4e7ac9071"
+
+	epic11AuthorityReservationArtifactLabel = "epic11_docs_draft_pr_authority_reservation"
+	epic11ExecutionReceiptArtifactLabel     = "epic11_docs_draft_pr_execution_receipt"
 )
+
+var epic11AuthorityReservationMu sync.Mutex
 
 // Epic7IssueToPRMode selects the authorized Gate H fixture mode.
 type Epic7IssueToPRMode string
 
 // Epic7ProtectedAction names the protected-action boundary exercised by Gate H.
 type Epic7ProtectedAction string
+
+// Epic11DocsDraftPRMode selects the authorized Epic 11 live-mutation seam.
+type Epic11DocsDraftPRMode string
 
 // Epic7IssueToPROptions keeps the fixture local, proposed-only, and caller-bounded.
 type Epic7IssueToPROptions struct {
@@ -66,6 +99,34 @@ type Epic7IssueToPROptions struct {
 	MissingSelfImprovementReview   bool
 	MissingSelfImprovementRollback bool
 	OmitProtectedAction            Epic7ProtectedAction
+}
+
+// Epic11PullRequestCreator is the only live side-effect interface for Epic 11.
+// Production callers provide a GitHub-backed implementation; tests provide a
+// fake. Work validates authority and policy evidence before this interface is called.
+type Epic11PullRequestCreator interface {
+	CreateDraftPullRequest(context.Context, Epic11DraftPullRequestMutation) (Epic11DraftPullRequestResult, error)
+}
+
+// Epic11DocsDraftPROptions keeps the live mutation tightly scoped to docs#95.
+type Epic11DocsDraftPROptions struct {
+	Source         types.ActorID
+	ConversationID types.ConversationID
+	Causes         []types.EventID
+	WorkingDir     string
+	Mode           Epic11DocsDraftPRMode
+
+	Client Epic11PullRequestCreator
+	Now    time.Time
+
+	Target            Epic11DraftPullRequestTarget
+	AuthorityRequest  Epic11AuthorityRequestEvidence
+	AuthorityDecision Epic11AuthorityDecisionEvidence
+	PolicyDecision    Epic11PolicyDecisionEvidence
+
+	// PriorExecutionReceiptRefs is an optional caller-provided defense-in-depth
+	// check. Work also scans durable receipt artifacts before any GitHub call.
+	PriorExecutionReceiptRefs []string
 }
 
 // Epic7IssueToPRRun is the local evidence packet for the bounded Gate H trials.
@@ -102,6 +163,25 @@ type Epic7IssueToPRRun struct {
 	LocalArtifacts        Epic7LocalArtifacts
 }
 
+// Epic11DocsDraftPRRun is the evidence packet for a guarded docs draft PR creation.
+type Epic11DocsDraftPRRun struct {
+	Mode              Epic11DocsDraftPRMode
+	WorkTask          Task
+	WorkProjection    TaskProjection
+	EventGraph        *v39.InMemoryStore
+	Target            Epic11DraftPullRequestTarget
+	PolicyBundleID    string
+	PolicyBundleHash  string
+	AuthorityRequest  v39.AuthorityRequest
+	AuthorityDecision v39.AuthorityDecision
+	PolicyDecision    v39.PolicyEngineAdapterDecision
+	AuthorityReserve  Epic11AuthorityReservationEvidence
+	ExecutionReceipt  v39.ExecutionReceipt
+	ReceiptEvidence   Epic11ExecutionReceiptEvidence
+	MutationResult    Epic11DraftPullRequestResult
+	Projection        Epic11DocsDraftPRProjection
+}
+
 type Epic7LocalArtifacts struct {
 	IssueDir       string
 	ProposalDir    string
@@ -115,6 +195,164 @@ type Epic7LocalArtifacts struct {
 	HumanReviewDir string
 }
 
+type Epic11DraftPullRequestTarget struct {
+	Repository             string   `json:"repository"`
+	BaseRef                string   `json:"base_ref"`
+	BaseSHA                string   `json:"base_sha"`
+	HeadRef                string   `json:"head_ref"`
+	HeadSHA                string   `json:"head_sha"`
+	HeadExistsOnOrigin     bool     `json:"head_exists_on_origin"`
+	Title                  string   `json:"title"`
+	Body                   string   `json:"body"`
+	ChangedFiles           []string `json:"changed_files"`
+	ValidationEvidenceRefs []string `json:"validation_evidence_refs"`
+	Draft                  bool     `json:"draft"`
+	MaintainerCanModify    bool     `json:"maintainer_can_modify"`
+	RollbackInstructions   string   `json:"rollback_instructions"`
+}
+
+type Epic11AuthorityRequestEvidence struct {
+	ID                     string    `json:"id"`
+	ActorID                string    `json:"actor_id"`
+	ActorRole              string    `json:"actor_role"`
+	Action                 string    `json:"action"`
+	TargetRepository       string    `json:"target_repository"`
+	BaseRef                string    `json:"base_ref"`
+	BaseSHA                string    `json:"base_sha"`
+	HeadRef                string    `json:"head_ref"`
+	HeadSHA                string    `json:"head_sha"`
+	TitleHash              string    `json:"title_hash"`
+	BodyHash               string    `json:"body_hash"`
+	ChangedFiles           []string  `json:"changed_files"`
+	ValidationEvidenceRefs []string  `json:"validation_evidence_refs"`
+	PolicyBundleID         string    `json:"policy_bundle_id"`
+	PolicyBundleHash       string    `json:"policy_bundle_hash"`
+	RollbackInstructions   string    `json:"rollback_instructions"`
+	SingleUseNonce         string    `json:"single_use_nonce"`
+	RequestedAt            time.Time `json:"requested_at"`
+	ExpiresAt              time.Time `json:"expires_at"`
+}
+
+type Epic11AuthorityDecisionEvidence struct {
+	ID                     string    `json:"id"`
+	AuthorityRequestID     string    `json:"authority_request_id"`
+	ActorID                string    `json:"actor_id"`
+	ActorRole              string    `json:"actor_role"`
+	DeciderActorID         string    `json:"decider_actor_id"`
+	DeciderRole            string    `json:"decider_role"`
+	Decision               string    `json:"decision"`
+	Action                 string    `json:"action"`
+	TargetRepository       string    `json:"target_repository"`
+	BaseRef                string    `json:"base_ref"`
+	BaseSHA                string    `json:"base_sha"`
+	HeadRef                string    `json:"head_ref"`
+	HeadSHA                string    `json:"head_sha"`
+	TitleHash              string    `json:"title_hash"`
+	BodyHash               string    `json:"body_hash"`
+	ChangedFiles           []string  `json:"changed_files"`
+	ValidationEvidenceRefs []string  `json:"validation_evidence_refs"`
+	PolicyBundleID         string    `json:"policy_bundle_id"`
+	PolicyBundleHash       string    `json:"policy_bundle_hash"`
+	RollbackInstructions   string    `json:"rollback_instructions"`
+	SingleUseNonce         string    `json:"single_use_nonce"`
+	ExpiresAt              time.Time `json:"expires_at"`
+}
+
+type Epic11PolicyDecisionEvidence struct {
+	DecisionID           string         `json:"decision_id"`
+	AdapterID            string         `json:"adapter_id"`
+	AdapterVersion       string         `json:"adapter_version"`
+	PolicyBundleID       string         `json:"policy_bundle_id"`
+	PolicyBundleHash     string         `json:"policy_bundle_hash"`
+	ProtectedActionType  string         `json:"protected_action_type"`
+	ActorID              string         `json:"actor_id"`
+	ResourceRefs         []string       `json:"resource_refs"`
+	InputFacts           map[string]any `json:"input_facts"`
+	RawDecision          string         `json:"raw_decision"`
+	CanonicalDecision    string         `json:"canonical_decision"`
+	ReasonCodes          []string       `json:"reason_codes"`
+	EvidenceRefs         []string       `json:"evidence_refs"`
+	LatencyMS            float64        `json:"latency_ms"`
+	AuthorityDecisionRef string         `json:"authority_decision_ref"`
+}
+
+type Epic11DraftPullRequestMutation struct {
+	Repository          string `json:"repository"`
+	BaseRef             string `json:"base_ref"`
+	BaseSHA             string `json:"base_sha"`
+	HeadRef             string `json:"head_ref"`
+	HeadSHA             string `json:"head_sha"`
+	Title               string `json:"title"`
+	Body                string `json:"body"`
+	TitleHash           string `json:"title_hash"`
+	BodyHash            string `json:"body_hash"`
+	Draft               bool   `json:"draft"`
+	MaintainerCanModify bool   `json:"maintainer_can_modify"`
+}
+
+type Epic11DraftPullRequestResult struct {
+	Repository                   string    `json:"repository"`
+	Number                       int       `json:"number"`
+	URL                          string    `json:"url"`
+	GitHubResponseIDOrEquivalent string    `json:"github_response_id_or_equivalent"`
+	BaseRef                      string    `json:"base_ref"`
+	BaseSHA                      string    `json:"base_sha"`
+	HeadRef                      string    `json:"head_ref"`
+	HeadSHA                      string    `json:"head_sha"`
+	Draft                        bool      `json:"draft"`
+	State                        string    `json:"state"`
+	CreatedAt                    time.Time `json:"created_at"`
+}
+
+type Epic11ExecutionReceiptEvidence struct {
+	ReceiptID                      string    `json:"receipt_id"`
+	AuthorityRequestRef            string    `json:"authority_request_ref"`
+	AuthorityDecisionRef           string    `json:"authority_decision_ref"`
+	PolicyEngineAdapterDecisionRef string    `json:"policy_engine_adapter_decision_ref"`
+	SingleUseNonce                 string    `json:"single_use_nonce"`
+	ActorID                        string    `json:"actor_id"`
+	ActorRole                      string    `json:"actor_role"`
+	Action                         string    `json:"action"`
+	TargetRepository               string    `json:"target_repository"`
+	BaseRef                        string    `json:"base_ref"`
+	BaseSHA                        string    `json:"base_sha"`
+	HeadRef                        string    `json:"head_ref"`
+	HeadSHA                        string    `json:"head_sha"`
+	Draft                          bool      `json:"draft"`
+	PRNumber                       int       `json:"pr_number"`
+	PRURL                          string    `json:"pr_url"`
+	TitleHash                      string    `json:"title_hash"`
+	BodyHash                       string    `json:"body_hash"`
+	GitHubResponseIDOrEquivalent   string    `json:"github_response_id_or_equivalent"`
+	Result                         string    `json:"result"`
+	Timestamp                      time.Time `json:"timestamp"`
+	ValidationEvidenceRefs         []string  `json:"validation_evidence_refs"`
+	RollbackInstructions           string    `json:"rollback_instructions"`
+}
+
+type Epic11AuthorityReservationEvidence struct {
+	ReservationID                  string    `json:"reservation_id"`
+	TaskRef                        string    `json:"task_ref"`
+	AuthorityRequestRef            string    `json:"authority_request_ref"`
+	AuthorityDecisionRef           string    `json:"authority_decision_ref"`
+	PolicyEngineAdapterDecisionRef string    `json:"policy_engine_adapter_decision_ref"`
+	SingleUseNonce                 string    `json:"single_use_nonce"`
+	ActorID                        string    `json:"actor_id"`
+	ActorRole                      string    `json:"actor_role"`
+	Action                         string    `json:"action"`
+	TargetRepository               string    `json:"target_repository"`
+	BaseRef                        string    `json:"base_ref"`
+	BaseSHA                        string    `json:"base_sha"`
+	HeadRef                        string    `json:"head_ref"`
+	HeadSHA                        string    `json:"head_sha"`
+	Draft                          bool      `json:"draft"`
+	TitleHash                      string    `json:"title_hash"`
+	BodyHash                       string    `json:"body_hash"`
+	Result                         string    `json:"result"`
+	Timestamp                      time.Time `json:"timestamp"`
+	RollbackInstructions           string    `json:"rollback_instructions"`
+}
+
 type Epic7IssueToPRProjection struct {
 	GeneratedAt       string                    `json:"generated_at"`
 	Source            string                    `json:"source"`
@@ -124,6 +362,19 @@ type Epic7IssueToPRProjection struct {
 	AuditReport       Epic7AuditEvidence        `json:"audit_report"`
 	ProofOfWorkPacket Epic7ProofOfWorkAggregate `json:"proof_of_work_packet"`
 	Errors            []string                  `json:"errors,omitempty"`
+}
+
+type Epic11DocsDraftPRProjection struct {
+	GeneratedAt      string                         `json:"generated_at"`
+	Source           string                         `json:"source"`
+	Mode             Epic11DocsDraftPRMode          `json:"mode"`
+	Target           Epic11DraftPullRequestTarget   `json:"target"`
+	PolicyBundleID   string                         `json:"policy_bundle_id"`
+	PolicyBundleHash string                         `json:"policy_bundle_hash"`
+	MutationResult   Epic11DraftPullRequestResult   `json:"mutation_result"`
+	ReceiptEvidence  Epic11ExecutionReceiptEvidence `json:"receipt_evidence"`
+	ForbiddenActions []string                       `json:"forbidden_actions"`
+	EventGraphRefs   []string                       `json:"event_graph_refs"`
 }
 
 type Epic7GateHValidation struct {
@@ -266,6 +517,801 @@ type Epic7ProofOfWorkItem struct {
 	Summary     string   `json:"summary"`
 	ArtifactRef string   `json:"artifact_ref,omitempty"`
 	Refs        []string `json:"refs,omitempty"`
+}
+
+// Epic11DocsDraftPRPolicyBundleHash returns the hash of the built-in policy
+// document that constrains the docs draft-PR live mutation.
+func Epic11DocsDraftPRPolicyBundleHash() string {
+	return epic7Hash(epic11PolicyBundleDocument())
+}
+
+// RunEpic11DocsDraftPRLiveMutation creates one live draft PR only after the
+// merged docs#95 authority, the just-in-time human decision, and the policy
+// adapter decision all match the exact target.
+func RunEpic11DocsDraftPRLiveMutation(ctx context.Context, ts *TaskStore, opts Epic11DocsDraftPROptions) (Epic11DocsDraftPRRun, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	opts = epic11NormalizeOptions(opts)
+	if err := epic11ValidateOptions(ts, opts); err != nil {
+		return Epic11DocsDraftPRRun{}, err
+	}
+
+	ids := epic11IDs(opts)
+	task, err := ts.CreateV39(opts.Source, TaskCreateOptions{
+		Title:                  "Epic 11 Docs Draft PR Live Mutation",
+		Description:            "Create one draft PR in transpara-ai/docs only after exact just-in-time authority and policy evidence match.",
+		CanonicalTaskID:        ids.task,
+		FactoryOrderID:         ids.factoryOrder,
+		RequirementIDs:         []string{ids.requirement},
+		AcceptanceCriterionIDs: []string{ids.acceptanceCriterion},
+		Cell:                   "cell_epic11_docs_draft_pr_live_mutation",
+		RiskClass:              "high",
+		ExpectedOutputs:        []string{"artifacts/epic11/docs-draft-pr/projection.json", "artifacts/epic11/docs-draft-pr/execution_receipt.json"},
+	}, opts.Causes, opts.ConversationID)
+	if err != nil {
+		return Epic11DocsDraftPRRun{}, err
+	}
+	causes := append(append([]types.EventID(nil), opts.Causes...), task.ID)
+	for _, status := range []TaskStatus{StatusReady, StatusRunning} {
+		if err := ts.TransitionTask(opts.Source, task.ID, status, "Epic 11 docs draft PR live mutation lifecycle", nil, causes, opts.ConversationID); err != nil {
+			return Epic11DocsDraftPRRun{}, err
+		}
+	}
+
+	authorityReservation, err := epic11ReserveAuthorityUse(ts, opts, task.ID, causes)
+	if err != nil {
+		if blockErr := ts.TransitionTask(opts.Source, task.ID, StatusPolicyBlocked, "Epic 11 authority reservation failed before GitHub call: "+err.Error(), []string{ids.authorityRequest, ids.authorityDecision, ids.policyDecision}, causes, opts.ConversationID); blockErr != nil {
+			return Epic11DocsDraftPRRun{}, fmt.Errorf("reserve authority use: %w; policy block task: %v", err, blockErr)
+		}
+		return Epic11DocsDraftPRRun{}, err
+	}
+
+	mutation := epic11Mutation(opts)
+	result, err := opts.Client.CreateDraftPullRequest(ctx, mutation)
+	if err != nil {
+		if failErr := ts.TransitionTask(opts.Source, task.ID, StatusFailed, "Epic 11 draft PR client returned before confirmed draft PR creation: "+err.Error(), []string{ids.authorityRequest, ids.authorityDecision, ids.policyDecision}, causes, opts.ConversationID); failErr != nil {
+			return Epic11DocsDraftPRRun{}, fmt.Errorf("create draft PR: %w; fail task: %v", err, failErr)
+		}
+		return Epic11DocsDraftPRRun{}, fmt.Errorf("create draft PR: %w", err)
+	}
+	if err := epic11ValidateMutationResult(opts.Target, result); err != nil {
+		if failErr := ts.TransitionTask(opts.Source, task.ID, StatusFailed, "Epic 11 draft PR response failed post-confirmation validation: "+err.Error(), []string{ids.authorityRequest, ids.authorityDecision, ids.policyDecision}, causes, opts.ConversationID); failErr != nil {
+			return Epic11DocsDraftPRRun{}, fmt.Errorf("validate draft PR response: %w; fail task: %v", err, failErr)
+		}
+		return Epic11DocsDraftPRRun{}, err
+	}
+
+	receiptEvidence := epic11ReceiptEvidence(ids, opts, result)
+	receiptArtifactBody, err := epic11ReceiptArtifactBody(receiptEvidence)
+	if err != nil {
+		return Epic11DocsDraftPRRun{}, err
+	}
+	if err := ts.AddArtifact(opts.Source, task.ID, epic11ExecutionReceiptArtifactLabel, "application/json", receiptArtifactBody, causes, opts.ConversationID); err != nil {
+		return Epic11DocsDraftPRRun{}, err
+	}
+	graph, records, err := epic11RecordEventGraph(ids, opts, result, receiptEvidence)
+	if err != nil {
+		return Epic11DocsDraftPRRun{}, err
+	}
+	projection := epic11BuildProjection(ids, opts, result, receiptEvidence)
+	if err := epic11WriteEvidence(opts.WorkingDir, opts, result, receiptEvidence, projection); err != nil {
+		return Epic11DocsDraftPRRun{}, err
+	}
+	if err := ts.AttachVerificationEvidence(opts.Source, task.ID, VerificationEvidence{
+		TestCaseIDs:   []string{ids.testCase},
+		TestRunIDs:    []string{ids.testRun},
+		GateResultIDs: []string{ids.gateResult},
+	}, "Epic 11 docs draft PR live mutation evidence attached", causes, opts.ConversationID); err != nil {
+		return Epic11DocsDraftPRRun{}, err
+	}
+	if err := ts.TransitionTask(opts.Source, task.ID, StatusVerified, "Epic 11 draft PR creation evidence recorded", []string{ids.testRun, ids.gateResult, ids.executionReceipt}, causes, opts.ConversationID); err != nil {
+		return Epic11DocsDraftPRRun{}, err
+	}
+	if err := ts.TransitionTask(opts.Source, task.ID, StatusCertified, "Epic 11 docs draft PR live mutation certified for the single authorized draft PR creation", []string{ids.certification, ids.executionReceipt}, causes, opts.ConversationID); err != nil {
+		return Epic11DocsDraftPRRun{}, err
+	}
+	workProjection, err := ts.ProjectTask(task.ID)
+	if err != nil {
+		return Epic11DocsDraftPRRun{}, err
+	}
+
+	return Epic11DocsDraftPRRun{
+		Mode:              opts.Mode,
+		WorkTask:          task,
+		WorkProjection:    workProjection,
+		EventGraph:        graph,
+		Target:            opts.Target,
+		PolicyBundleID:    Epic11PolicyBundleID,
+		PolicyBundleHash:  Epic11DocsDraftPRPolicyBundleHash(),
+		AuthorityRequest:  records.AuthorityRequest,
+		AuthorityDecision: records.AuthorityDecision,
+		PolicyDecision:    records.PolicyDecision,
+		AuthorityReserve:  authorityReservation,
+		ExecutionReceipt:  records.ExecutionReceipt,
+		ReceiptEvidence:   receiptEvidence,
+		MutationResult:    result,
+		Projection:        projection,
+	}, nil
+}
+
+type epic11FixtureIDs struct {
+	factoryOrder        string
+	requirement         string
+	acceptanceCriterion string
+	task                string
+	actorIdentity       string
+	humanActorIdentity  string
+	actorInvocation     string
+	runtimeEnvelope     string
+	runtimeResult       string
+	knowledgeReference  string
+	authorityRequest    string
+	authorityDecision   string
+	humanApproval       string
+	policyDecision      string
+	executionReceipt    string
+	testCase            string
+	testRun             string
+	gateResult          string
+	factoryRuntime      string
+	releaseCandidate    string
+	certification       string
+	auditReport         string
+}
+
+type epic11GraphRecords struct {
+	AuthorityRequest  v39.AuthorityRequest
+	AuthorityDecision v39.AuthorityDecision
+	PolicyDecision    v39.PolicyEngineAdapterDecision
+	ExecutionReceipt  v39.ExecutionReceipt
+}
+
+func epic11NormalizeOptions(opts Epic11DocsDraftPROptions) Epic11DocsDraftPROptions {
+	if opts.Mode == "" {
+		opts.Mode = Epic11DocsDraftPRLiveMutationMode
+	}
+	if opts.Now.IsZero() {
+		opts.Now = time.Now().UTC()
+	}
+	return opts
+}
+
+func epic11ValidateOptions(ts *TaskStore, opts Epic11DocsDraftPROptions) error {
+	if ts == nil {
+		return errors.New("task store is required")
+	}
+	if opts.Source.IsZero() {
+		return errors.New("source actor is required")
+	}
+	if opts.ConversationID.Value() == "" {
+		return errors.New("conversation ID is required")
+	}
+	if strings.TrimSpace(opts.WorkingDir) == "" {
+		return errors.New("working directory is required")
+	}
+	if opts.Mode != Epic11DocsDraftPRLiveMutationMode {
+		return fmt.Errorf("unsupported Epic 11 mode %q", opts.Mode)
+	}
+	if opts.Client == nil {
+		return errors.New("pull request creator is required")
+	}
+	if len(opts.PriorExecutionReceiptRefs) > 0 {
+		return fmt.Errorf("authority decision already used by receipt refs: %s", strings.Join(opts.PriorExecutionReceiptRefs, ","))
+	}
+	if err := epic11ValidateTarget(opts.Target); err != nil {
+		return err
+	}
+	if err := epic11ValidateAuthorityRequest(opts); err != nil {
+		return err
+	}
+	if err := epic11ValidateAuthorityDecision(opts); err != nil {
+		return err
+	}
+	priorAuthorityUseRefs, err := epic11PriorAuthorityUseRefs(ts, opts.AuthorityDecision.ID, opts.AuthorityDecision.SingleUseNonce)
+	if err != nil {
+		return err
+	}
+	if len(priorAuthorityUseRefs) > 0 {
+		return fmt.Errorf("authority decision already used by durable authority refs: %s", strings.Join(priorAuthorityUseRefs, ","))
+	}
+	if err := epic11ValidatePolicyDecision(opts); err != nil {
+		return err
+	}
+	return nil
+}
+
+func epic11ValidateTarget(target Epic11DraftPullRequestTarget) error {
+	if target.Repository != Epic11TargetRepository {
+		return fmt.Errorf("target repository %q is not authorized", target.Repository)
+	}
+	if target.BaseRef != Epic11TargetBaseRef {
+		return fmt.Errorf("target base ref %q is not authorized", target.BaseRef)
+	}
+	if strings.TrimSpace(target.BaseSHA) == "" {
+		return errors.New("target base SHA is required")
+	}
+	if !strings.HasPrefix(target.HeadRef, Epic11HeadRefPrefix) || target.HeadRef == Epic11HeadRefPrefix {
+		return fmt.Errorf("target head ref %q must match %s*", target.HeadRef, Epic11HeadRefPrefix)
+	}
+	if strings.TrimSpace(target.HeadSHA) == "" {
+		return errors.New("target head SHA is required")
+	}
+	if !target.HeadExistsOnOrigin {
+		return errors.New("head branch must already exist on origin")
+	}
+	if !target.Draft {
+		return errors.New("draft=true is required")
+	}
+	if !target.MaintainerCanModify {
+		return errors.New("maintainer_can_modify=true is required")
+	}
+	if strings.TrimSpace(target.Title) == "" {
+		return errors.New("PR title is required")
+	}
+	if strings.TrimSpace(target.Body) == "" {
+		return errors.New("PR body is required")
+	}
+	if len(target.ChangedFiles) == 0 {
+		return errors.New("changed file list is required")
+	}
+	for _, path := range target.ChangedFiles {
+		clean, err := cleanRuntimeRelativePath(path)
+		if err != nil {
+			return fmt.Errorf("changed file %q is invalid: %w", path, err)
+		}
+		if clean != path {
+			return fmt.Errorf("changed file %q must be normalized", path)
+		}
+		if !strings.HasPrefix(clean, "dark-factory/") {
+			return fmt.Errorf("changed file %q is outside dark-factory/", path)
+		}
+	}
+	if len(target.ValidationEvidenceRefs) == 0 {
+		return errors.New("validation evidence refs are required")
+	}
+	if strings.TrimSpace(target.RollbackInstructions) == "" {
+		return errors.New("rollback instructions are required")
+	}
+	return nil
+}
+
+func epic11ValidateAuthorityRequest(opts Epic11DocsDraftPROptions) error {
+	req := opts.AuthorityRequest
+	target := opts.Target
+	for field, value := range map[string]string{
+		"authority request ID":         req.ID,
+		"authority request actor ID":   req.ActorID,
+		"authority request actor role": req.ActorRole,
+		"authority request nonce":      req.SingleUseNonce,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s is required", field)
+		}
+	}
+	if req.ActorID != opts.Source.Value() {
+		return fmt.Errorf("authority request actor %q does not match source %q", req.ActorID, opts.Source.Value())
+	}
+	if req.Action != Epic11ActionPullRequestCreate {
+		return fmt.Errorf("authority request action %q is not authorized", req.Action)
+	}
+	if err := epic11EvidenceMatchesTarget("authority request", req.TargetRepository, req.BaseRef, req.BaseSHA, req.HeadRef, req.HeadSHA, req.TitleHash, req.BodyHash, req.PolicyBundleID, req.PolicyBundleHash, req.RollbackInstructions, req.ChangedFiles, req.ValidationEvidenceRefs, target); err != nil {
+		return err
+	}
+	if req.RequestedAt.IsZero() {
+		return errors.New("authority request requested_at is required")
+	}
+	if req.ExpiresAt.IsZero() {
+		return errors.New("authority request expiry is required")
+	}
+	if !opts.Now.Before(req.ExpiresAt) {
+		return errors.New("authority request is expired")
+	}
+	return nil
+}
+
+func epic11ValidateAuthorityDecision(opts Epic11DocsDraftPROptions) error {
+	decision := opts.AuthorityDecision
+	req := opts.AuthorityRequest
+	target := opts.Target
+	for field, value := range map[string]string{
+		"authority decision ID":               decision.ID,
+		"authority decision request ID":       decision.AuthorityRequestID,
+		"authority decision actor ID":         decision.ActorID,
+		"authority decision actor role":       decision.ActorRole,
+		"authority decision decider actor ID": decision.DeciderActorID,
+		"authority decision decider role":     decision.DeciderRole,
+		"authority decision nonce":            decision.SingleUseNonce,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s is required", field)
+		}
+	}
+	if decision.AuthorityRequestID != req.ID {
+		return fmt.Errorf("authority decision request ID %q does not match %q", decision.AuthorityRequestID, req.ID)
+	}
+	if decision.ActorID != req.ActorID || decision.ActorRole != req.ActorRole {
+		return errors.New("authority decision actor does not match authority request actor")
+	}
+	if !epic11AuthorityDecisionApproved(decision.Decision) {
+		return fmt.Errorf("authority decision %q is not approved for the protected action", decision.Decision)
+	}
+	if decision.Action != req.Action {
+		return fmt.Errorf("authority decision action %q does not match request action %q", decision.Action, req.Action)
+	}
+	if err := epic11EvidenceMatchesTarget("authority decision", decision.TargetRepository, decision.BaseRef, decision.BaseSHA, decision.HeadRef, decision.HeadSHA, decision.TitleHash, decision.BodyHash, decision.PolicyBundleID, decision.PolicyBundleHash, decision.RollbackInstructions, decision.ChangedFiles, decision.ValidationEvidenceRefs, target); err != nil {
+		return err
+	}
+	if decision.SingleUseNonce != req.SingleUseNonce {
+		return errors.New("authority decision nonce does not match authority request nonce")
+	}
+	if decision.ExpiresAt.IsZero() {
+		return errors.New("authority decision expiry is required")
+	}
+	if !opts.Now.Before(decision.ExpiresAt) {
+		return errors.New("authority decision is expired")
+	}
+	return nil
+}
+
+func epic11ValidatePolicyDecision(opts Epic11DocsDraftPROptions) error {
+	decision := opts.PolicyDecision
+	for field, value := range map[string]string{
+		"policy decision ID":            decision.DecisionID,
+		"policy adapter version":        decision.AdapterVersion,
+		"policy raw decision":           decision.RawDecision,
+		"policy authority decision ref": decision.AuthorityDecisionRef,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s is required", field)
+		}
+	}
+	if decision.AdapterID != Epic11PolicyAdapterID {
+		return fmt.Errorf("policy adapter %q is not authorized", decision.AdapterID)
+	}
+	if decision.PolicyBundleID != Epic11PolicyBundleID {
+		return fmt.Errorf("policy bundle ID %q is not authorized", decision.PolicyBundleID)
+	}
+	if decision.PolicyBundleHash != Epic11DocsDraftPRPolicyBundleHash() {
+		return errors.New("policy bundle hash is missing, stale, mismatched, or placeholder")
+	}
+	if decision.ProtectedActionType != Epic11ActionPullRequestCreate {
+		return fmt.Errorf("policy action %q is not authorized", decision.ProtectedActionType)
+	}
+	if decision.ActorID != opts.AuthorityRequest.ActorID {
+		return errors.New("policy actor does not match authority request actor")
+	}
+	if decision.AuthorityDecisionRef != opts.AuthorityDecision.ID {
+		return errors.New("policy decision is not linked to the authority decision")
+	}
+	if decision.CanonicalDecision != "approval_required" {
+		return fmt.Errorf("policy canonical decision %q does not approve the required human-gated action", decision.CanonicalDecision)
+	}
+	if decision.LatencyMS < 0 {
+		return errors.New("policy latency must be >= 0")
+	}
+	if len(decision.ReasonCodes) == 0 {
+		return errors.New("policy reason codes are required")
+	}
+	if len(decision.EvidenceRefs) == 0 {
+		return errors.New("policy evidence refs are required")
+	}
+	if len(decision.InputFacts) == 0 {
+		return errors.New("policy input facts are required")
+	}
+	return nil
+}
+
+func epic11EvidenceMatchesTarget(label, repo, baseRef, baseSHA, headRef, headSHA, titleHash, bodyHash, policyBundleID, policyBundleHash, rollback string, changedFiles, validationRefs []string, target Epic11DraftPullRequestTarget) error {
+	if repo != target.Repository {
+		return fmt.Errorf("%s repository %q does not match target %q", label, repo, target.Repository)
+	}
+	if baseRef != target.BaseRef || baseSHA != target.BaseSHA {
+		return fmt.Errorf("%s base ref/SHA does not match target", label)
+	}
+	if headRef != target.HeadRef || headSHA != target.HeadSHA {
+		return fmt.Errorf("%s head ref/SHA does not match target", label)
+	}
+	if titleHash != epic7Hash(target.Title) {
+		return fmt.Errorf("%s title hash does not match target title", label)
+	}
+	if bodyHash != epic7Hash(target.Body) {
+		return fmt.Errorf("%s body hash does not match target body", label)
+	}
+	if !equalStringSlices(changedFiles, target.ChangedFiles) {
+		return fmt.Errorf("%s changed file list does not match target", label)
+	}
+	if !equalStringSlices(validationRefs, target.ValidationEvidenceRefs) {
+		return fmt.Errorf("%s validation evidence refs do not match target", label)
+	}
+	if policyBundleID != Epic11PolicyBundleID {
+		return fmt.Errorf("%s policy bundle ID %q is not authorized", label, policyBundleID)
+	}
+	if policyBundleHash != Epic11DocsDraftPRPolicyBundleHash() {
+		return fmt.Errorf("%s policy bundle hash is missing, stale, mismatched, or placeholder", label)
+	}
+	if rollback != target.RollbackInstructions {
+		return fmt.Errorf("%s rollback instructions do not match target", label)
+	}
+	return nil
+}
+
+func epic11ValidateMutationResult(target Epic11DraftPullRequestTarget, result Epic11DraftPullRequestResult) error {
+	if result.Repository != target.Repository {
+		return fmt.Errorf("created PR repository %q does not match %q", result.Repository, target.Repository)
+	}
+	if result.Number <= 0 {
+		return errors.New("created PR number is required")
+	}
+	if strings.TrimSpace(result.URL) == "" {
+		return errors.New("created PR URL is required")
+	}
+	if strings.TrimSpace(result.GitHubResponseIDOrEquivalent) == "" {
+		return errors.New("GitHub response ID is required")
+	}
+	if result.BaseRef != target.BaseRef || result.BaseSHA != target.BaseSHA {
+		return errors.New("created PR base ref/SHA does not match target")
+	}
+	if result.HeadRef != target.HeadRef || result.HeadSHA != target.HeadSHA {
+		return errors.New("created PR head ref/SHA does not match target")
+	}
+	if !result.Draft {
+		return errors.New("created PR is not draft")
+	}
+	if result.State != "open" {
+		return fmt.Errorf("created PR state %q is not open", result.State)
+	}
+	if result.CreatedAt.IsZero() {
+		return errors.New("created PR timestamp is required")
+	}
+	return nil
+}
+
+func epic11Mutation(opts Epic11DocsDraftPROptions) Epic11DraftPullRequestMutation {
+	target := opts.Target
+	return Epic11DraftPullRequestMutation{
+		Repository:          target.Repository,
+		BaseRef:             target.BaseRef,
+		BaseSHA:             target.BaseSHA,
+		HeadRef:             target.HeadRef,
+		HeadSHA:             target.HeadSHA,
+		Title:               target.Title,
+		Body:                target.Body,
+		TitleHash:           epic7Hash(target.Title),
+		BodyHash:            epic7Hash(target.Body),
+		Draft:               true,
+		MaintainerCanModify: target.MaintainerCanModify,
+	}
+}
+
+func epic11ReserveAuthorityUse(ts *TaskStore, opts Epic11DocsDraftPROptions, taskID types.EventID, causes []types.EventID) (Epic11AuthorityReservationEvidence, error) {
+	epic11AuthorityReservationMu.Lock()
+	defer epic11AuthorityReservationMu.Unlock()
+
+	priorAuthorityUseRefs, err := epic11PriorAuthorityUseRefs(ts, opts.AuthorityDecision.ID, opts.AuthorityDecision.SingleUseNonce)
+	if err != nil {
+		return Epic11AuthorityReservationEvidence{}, err
+	}
+	if len(priorAuthorityUseRefs) > 0 {
+		return Epic11AuthorityReservationEvidence{}, fmt.Errorf("authority decision already used by durable authority refs: %s", strings.Join(priorAuthorityUseRefs, ","))
+	}
+
+	reservation := epic11AuthorityReservationEvidence(opts, taskID)
+	body, err := epic11AuthorityReservationArtifactBody(reservation)
+	if err != nil {
+		return Epic11AuthorityReservationEvidence{}, err
+	}
+	if err := ts.AddArtifact(opts.Source, taskID, epic11AuthorityReservationArtifactLabel, "application/json", body, causes, opts.ConversationID); err != nil {
+		return Epic11AuthorityReservationEvidence{}, fmt.Errorf("reserve Epic 11 authority use: %w", err)
+	}
+	return reservation, nil
+}
+
+func epic11PriorAuthorityUseRefs(ts *TaskStore, authorityDecisionID, singleUseNonce string) ([]string, error) {
+	var refs []string
+	after := types.None[types.Cursor]()
+	for {
+		page, err := ts.store.ByType(EventTypeTaskArtifact, 1000, after)
+		if err != nil {
+			return nil, fmt.Errorf("fetch Epic 11 authority use artifacts: %w", err)
+		}
+		for _, ev := range page.Items() {
+			content, ok := ev.Content().(TaskArtifactContent)
+			if !ok {
+				continue
+			}
+			switch content.Label {
+			case epic11AuthorityReservationArtifactLabel:
+				var reservation Epic11AuthorityReservationEvidence
+				if err := json.Unmarshal([]byte(content.Body), &reservation); err != nil {
+					return nil, fmt.Errorf("decode Epic 11 authority reservation artifact %s: %w", ev.ID().Value(), err)
+				}
+				if reservation.AuthorityDecisionRef == authorityDecisionID || reservation.SingleUseNonce == singleUseNonce {
+					refs = append(refs, ev.ID().Value()+":"+reservation.ReservationID)
+				}
+			case epic11ExecutionReceiptArtifactLabel:
+				var receipt Epic11ExecutionReceiptEvidence
+				if err := json.Unmarshal([]byte(content.Body), &receipt); err != nil {
+					return nil, fmt.Errorf("decode Epic 11 execution receipt artifact %s: %w", ev.ID().Value(), err)
+				}
+				if receipt.AuthorityDecisionRef == authorityDecisionID || receipt.SingleUseNonce == singleUseNonce {
+					refs = append(refs, ev.ID().Value()+":"+receipt.ReceiptID)
+				}
+			}
+		}
+		if !page.HasMore() {
+			break
+		}
+		after = page.Cursor()
+		if after.IsNone() {
+			return nil, errors.New("fetch Epic 11 authority use artifacts: page has more results but no cursor")
+		}
+	}
+	return refs, nil
+}
+
+func epic11AuthorityReservationArtifactBody(reservation Epic11AuthorityReservationEvidence) (string, error) {
+	body, err := json.MarshalIndent(reservation, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal Epic 11 authority reservation artifact: %w", err)
+	}
+	return string(body), nil
+}
+
+func epic11ReceiptArtifactBody(receipt Epic11ExecutionReceiptEvidence) (string, error) {
+	body, err := json.MarshalIndent(receipt, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal Epic 11 execution receipt artifact: %w", err)
+	}
+	return string(body), nil
+}
+
+func epic11AuthorityReservationEvidence(opts Epic11DocsDraftPROptions, taskID types.EventID) Epic11AuthorityReservationEvidence {
+	return Epic11AuthorityReservationEvidence{
+		ReservationID:                  "reserve_epic11_docs_draft_pr_create_" + epic7Hash(opts.AuthorityDecision.ID+":"+opts.AuthorityDecision.SingleUseNonce),
+		TaskRef:                        taskID.Value(),
+		AuthorityRequestRef:            opts.AuthorityRequest.ID,
+		AuthorityDecisionRef:           opts.AuthorityDecision.ID,
+		PolicyEngineAdapterDecisionRef: opts.PolicyDecision.DecisionID,
+		SingleUseNonce:                 opts.AuthorityDecision.SingleUseNonce,
+		ActorID:                        opts.AuthorityRequest.ActorID,
+		ActorRole:                      opts.AuthorityRequest.ActorRole,
+		Action:                         Epic11ActionPullRequestCreate,
+		TargetRepository:               opts.Target.Repository,
+		BaseRef:                        opts.Target.BaseRef,
+		BaseSHA:                        opts.Target.BaseSHA,
+		HeadRef:                        opts.Target.HeadRef,
+		HeadSHA:                        opts.Target.HeadSHA,
+		Draft:                          true,
+		TitleHash:                      epic7Hash(opts.Target.Title),
+		BodyHash:                       epic7Hash(opts.Target.Body),
+		Result:                         "reserved",
+		Timestamp:                      opts.Now,
+		RollbackInstructions:           opts.Target.RollbackInstructions,
+	}
+}
+
+func epic11ReceiptEvidence(ids epic11FixtureIDs, opts Epic11DocsDraftPROptions, result Epic11DraftPullRequestResult) Epic11ExecutionReceiptEvidence {
+	return Epic11ExecutionReceiptEvidence{
+		ReceiptID:                      ids.executionReceipt,
+		AuthorityRequestRef:            opts.AuthorityRequest.ID,
+		AuthorityDecisionRef:           opts.AuthorityDecision.ID,
+		PolicyEngineAdapterDecisionRef: opts.PolicyDecision.DecisionID,
+		SingleUseNonce:                 opts.AuthorityDecision.SingleUseNonce,
+		ActorID:                        opts.AuthorityRequest.ActorID,
+		ActorRole:                      opts.AuthorityRequest.ActorRole,
+		Action:                         Epic11ActionPullRequestCreate,
+		TargetRepository:               opts.Target.Repository,
+		BaseRef:                        opts.Target.BaseRef,
+		BaseSHA:                        opts.Target.BaseSHA,
+		HeadRef:                        opts.Target.HeadRef,
+		HeadSHA:                        opts.Target.HeadSHA,
+		Draft:                          true,
+		PRNumber:                       result.Number,
+		PRURL:                          result.URL,
+		TitleHash:                      epic7Hash(opts.Target.Title),
+		BodyHash:                       epic7Hash(opts.Target.Body),
+		GitHubResponseIDOrEquivalent:   result.GitHubResponseIDOrEquivalent,
+		Result:                         "succeeded",
+		Timestamp:                      result.CreatedAt,
+		ValidationEvidenceRefs:         cloneStrings(opts.Target.ValidationEvidenceRefs),
+		RollbackInstructions:           opts.Target.RollbackInstructions,
+	}
+}
+
+func epic11RecordEventGraph(ids epic11FixtureIDs, opts Epic11DocsDraftPROptions, result Epic11DraftPullRequestResult, receipt Epic11ExecutionReceiptEvidence) (*v39.InMemoryStore, epic11GraphRecords, error) {
+	graph := v39.NewInMemoryStore()
+	createdAt := opts.Now
+	receiptRef := ids.executionReceipt
+	decisionRef := opts.AuthorityDecision.ID
+	targetID := epic11TargetID(opts.Target)
+	authRequest := v39.AuthorityRequest{CommonNode: epic11Common(ids.authorityRequest, v39.TypeAuthorityRequest, "recorded", createdAt), ActorID: opts.AuthorityRequest.ActorID, ActorRole: opts.AuthorityRequest.ActorRole, Action: Epic11ActionPullRequestCreate, TargetType: "pull_request", TargetID: targetID, RiskClass: "high", Reason: "Create one draft PR in transpara-ai/docs under merged docs#95 and exact just-in-time authority.", ProposedCommand: strPtr("create draft pull request only; no ready, merge, push, update, close, or rollback mutation"), EvidenceRefs: append([]string{epic11DocsPRRef, ids.knowledgeReference}, opts.Target.ValidationEvidenceRefs...), ExpiresAt: &opts.AuthorityRequest.ExpiresAt}
+	authDecision := v39.AuthorityDecision{CommonNode: epic11Common(ids.authorityDecision, v39.TypeAuthorityDecision, "approved", createdAt), AuthorityRequestID: opts.AuthorityRequest.ID, DeciderActorID: opts.AuthorityDecision.DeciderActorID, DeciderRole: opts.AuthorityDecision.DeciderRole, Decision: "ApprovalRequired", Reason: "Explicit human approval grants exactly one draft PR creation and no other mutation.", Scope: []string{Epic11ActionPullRequestCreate, opts.Target.Repository, opts.Target.BaseRef, opts.Target.BaseSHA, opts.Target.HeadRef, opts.Target.HeadSHA, epic7Hash(opts.Target.Title), epic7Hash(opts.Target.Body), Epic11PolicyBundleID, Epic11DocsDraftPRPolicyBundleHash(), opts.AuthorityDecision.SingleUseNonce}, Conditions: []string{"draft=true", "single-use", "head branch already exists on origin", "changed files under dark-factory/", "no PR ready/merge/update/close", "no branch push", "manual rollback instructions only"}, ExpiresAt: &opts.AuthorityDecision.ExpiresAt}
+	policyDecision := v39.PolicyEngineAdapterDecision{CommonNode: epic11Common(ids.policyDecision, v39.TypePolicyEngineAdapterDecision, "recorded", createdAt), DecisionID: opts.PolicyDecision.DecisionID, AdapterID: opts.PolicyDecision.AdapterID, AdapterVersion: opts.PolicyDecision.AdapterVersion, PolicyBundleID: opts.PolicyDecision.PolicyBundleID, PolicyBundleHash: opts.PolicyDecision.PolicyBundleHash, ProtectedActionType: opts.PolicyDecision.ProtectedActionType, ActorID: opts.PolicyDecision.ActorID, ResourceRefs: cloneStrings(opts.PolicyDecision.ResourceRefs), InputFacts: cloneMap(opts.PolicyDecision.InputFacts), RawDecision: opts.PolicyDecision.RawDecision, CanonicalDecision: opts.PolicyDecision.CanonicalDecision, ReasonCodes: cloneStrings(opts.PolicyDecision.ReasonCodes), EvidenceRefs: cloneStrings(opts.PolicyDecision.EvidenceRefs), LatencyMS: opts.PolicyDecision.LatencyMS, AuthorityDecisionRef: &decisionRef, ExecutionReceiptRef: &receiptRef}
+	executionReceipt := v39.ExecutionReceipt{CommonNode: epic11Common(ids.executionReceipt, v39.TypeExecutionReceipt, "recorded", createdAt), AuthorityDecisionID: opts.AuthorityDecision.ID, ActorInvocationID: &ids.actorInvocation, Action: Epic11ActionPullRequestCreate, TargetID: fmt.Sprintf("%s#%d", opts.Target.Repository, result.Number), Result: "succeeded", EvidenceRefs: []string{ids.runtimeResult, ids.policyDecision, opts.PolicyDecision.DecisionID, result.URL, result.GitHubResponseIDOrEquivalent}}
+	records := []v39.Record{
+		&v39.FactoryOrder{CommonNode: epic11Common(ids.factoryOrder, v39.TypeFactoryOrder, "certified", createdAt), FactoryOrderVersion: 1, SourceIntentHash: "sha256:docs-pr-95-merged-" + epic11DocsMergeSHA, SourceIntentRef: epic11DocsPRRef, RiskClass: "high", ReleasePolicy: "human_approval_required"},
+		&v39.Requirement{CommonNode: epic11Common(ids.requirement, v39.TypeRequirement, "accepted", createdAt), FactoryOrderID: ids.factoryOrder, Text: "Create exactly one draft PR in transpara-ai/docs under just-in-time authority and policy evidence.", Source: "explicit", RiskClass: "high"},
+		&v39.AcceptanceCriterion{CommonNode: epic11Common(ids.acceptanceCriterion, v39.TypeAcceptanceCriterion, "verified", createdAt), RequirementID: ids.requirement, Text: "The GitHub call occurs only after exact AuthorityRequest, AuthorityDecision, PolicyEngineAdapterDecision, and policy bundle evidence match, and the ExecutionReceipt is recorded only after GitHub confirms draft=true.", Source: "explicit", VerificationMethod: "test", RequiredEvidenceType: "authority_policy_execution_receipt_trace", OwnerRole: "maintainer", RiskClass: "high"},
+		&v39.Task{CommonNode: epic11Common(ids.task, v39.TypeTask, "certified", createdAt), FactoryOrderID: &ids.factoryOrder, Cell: "cell_epic11_docs_draft_pr_live_mutation", State: "certified", Priority: 1, RiskClass: "high", AttemptCount: 1},
+		&v39.ActorIdentity{CommonNode: epic11Common(ids.actorIdentity, v39.TypeActorIdentity, "active", createdAt), ActorID: opts.AuthorityRequest.ActorID, ActorType: "agent", IdentityMode: "externally_managed"},
+		&v39.ActorIdentity{CommonNode: epic11Common(ids.humanActorIdentity, v39.TypeActorIdentity, "active", createdAt), ActorID: opts.AuthorityDecision.DeciderActorID, ActorType: "human", IdentityMode: "externally_managed"},
+		&v39.ActorInvocation{CommonNode: epic11Common(ids.actorInvocation, v39.TypeActorInvocation, "succeeded", createdAt), TaskID: ids.task, Runtime: "codex", ActorID: opts.AuthorityRequest.ActorID, InputContractHash: epic7Hash(opts.AuthorityRequest.ID + ":" + opts.AuthorityDecision.ID), OutputContractHash: strPtr(epic7Hash(receipt.PRURL + ":" + receipt.GitHubResponseIDOrEquivalent))},
+		&v39.RuntimeEnvelope{CommonNode: epic11Common(ids.runtimeEnvelope, v39.TypeRuntimeEnvelope, "recorded", createdAt), RuntimeAdapterID: "work_live_github_pr_creator", RuntimeAdapterVersion: opts.PolicyDecision.AdapterVersion, FactoryRuntimeVersionRef: ids.factoryRuntime, TaskID: ids.task, ActorID: opts.AuthorityRequest.ActorID, AuthorityDecisionRef: opts.AuthorityDecision.ID, AllowedFiles: []string{"dark-factory/**"}, DeniedFiles: []string{".git", "../", ".env", "secrets.env"}, AllowedCommands: []string{"pull_request.create:draft"}, DeniedCommands: []string{"pull_request.ready_for_review", "pull_request.merge", "pull_request.close", "pull_request.update", "pull_request.request_review", "issue.comment", "label.mutate", "branch.push", "repo.push.default_branch", "repo.merge.main", "worktree.merge.main", "production.deploy", "secret.access", "upstream.push"}, NetworkPolicy: "restricted", SecretsPolicy: "scoped", WorkingDirectory: opts.WorkingDir, Timeout: "1m", ResourceLimits: map[string]any{"max_pull_requests_created": 1, "target_repository": opts.Target.Repository, "draft_required": true, "network_scope": "github.com/transpara-ai/docs pull_request.create only", "secret_scope": "GitHub token supplied by caller; not read or stored by Work"}, ExpectedOutputs: []string{"open draft pull request URL", "ExecutionReceipt"}, OutputContract: map[string]any{"mode": string(opts.Mode), "action": Epic11ActionPullRequestCreate}, TraceRequiredPaths: []string{"FactoryOrder -> Requirement -> AcceptanceCriterion -> Task", "Task -> ActorInvocation", "ActorInvocation -> AuthorityRequest -> AuthorityDecision -> ExecutionReceipt", "AuthorityDecision -> PolicyEngineAdapterDecision", "Task -> RuntimeEnvelope -> RuntimeResult"}, PostRunValidationPlan: []string{"epic11ValidateOptions", "epic11ValidateMutationResult"}, EnvelopeHash: epic7Hash("epic11-envelope:" + opts.AuthorityRequest.ID + ":" + opts.AuthorityDecision.ID)},
+		&v39.RuntimeResult{CommonNode: epic11Common(ids.runtimeResult, v39.TypeRuntimeResult, "succeeded", createdAt), InvocationID: ids.runtimeEnvelope, RuntimeAdapterID: "work_live_github_pr_creator", StartedAt: createdAt, CompletedAt: result.CreatedAt, ExitStatus: "succeeded", ArtifactRefs: []string{ids.executionReceipt, ids.policyDecision}, ChangedFiles: []string{}, CommandLog: []string{"0:validate_authority_request:succeeded", "1:validate_authority_decision:succeeded", "2:validate_policy_engine_adapter_decision:succeeded", "3:create_draft_pull_request:succeeded", "4:record_execution_receipt:succeeded"}, NetworkAccessLog: []string{"github.com/transpara-ai/docs:pull_request.create:draft_only"}, SecretAccessLog: []string{"github token supplied by caller; not read or stored by Work"}, PolicyDecisionRefs: []string{ids.policyDecision}, PostRunValidationRefs: []string{ids.testRun}},
+		&authRequest,
+		&authDecision,
+		&v39.HumanApproval{CommonNode: epic11Common(ids.humanApproval, v39.TypeHumanApproval, "approved", createdAt), RequestRef: opts.AuthorityRequest.ID, ApproverActorID: opts.AuthorityDecision.DeciderActorID, ApproverRole: opts.AuthorityDecision.DeciderRole, Decision: "approved", Reason: "Approve exactly one draft PR creation in transpara-ai/docs under docs#95."},
+		&policyDecision,
+		&executionReceipt,
+		&v39.FactoryRuntimeVersion{CommonNode: epic11Common(ids.factoryRuntime, v39.TypeFactoryRuntimeVersion, "active", createdAt), RuntimeVersion: "3.9.20-epic11-docs-draft-pr-live-mutation", RuntimeRefs: []string{"work.live_github_pr_creator@" + opts.PolicyDecision.AdapterVersion}},
+		&v39.TestCase{CommonNode: epic11Common(ids.testCase, v39.TypeTestCase, "active", createdAt), AcceptanceCriterionID: &ids.acceptanceCriterion, RequirementID: &ids.requirement, Name: "Epic 11 docs draft PR live mutation evidence", TestType: "unit", Path: strPtr("work/epic7_issue_pr_autonomy_test.go")},
+		&v39.TestRun{CommonNode: epic11Common(ids.testRun, v39.TypeTestRun, "pass", createdAt), TestCaseID: &ids.testCase, ActorInvocationID: &ids.actorInvocation, Command: "go test ./..."},
+		&v39.GateResult{CommonNode: epic11Common(ids.gateResult, v39.TypeGateResult, "pass", createdAt), FactoryOrderID: ids.factoryOrder, ReleaseCandidateID: &ids.releaseCandidate, GateName: "epic11_docs_draft_pr_live_mutation", EvidenceRefs: []string{ids.testRun, ids.authorityRequest, ids.authorityDecision, ids.policyDecision, ids.executionReceipt}},
+		&v39.ReleaseCandidate{CommonNode: epic11Common(ids.releaseCandidate, v39.TypeReleaseCandidate, "certified", createdAt), FactoryOrderID: ids.factoryOrder, FactoryRuntimeVersionID: &ids.factoryRuntime, ArtifactRefs: []string{ids.policyDecision, ids.executionReceipt}},
+		&v39.Certification{CommonNode: epic11Common(ids.certification, v39.TypeCertification, "certified", createdAt), ReleaseCandidateID: ids.releaseCandidate, CertifierActorID: opts.AuthorityDecision.DeciderActorID, Reason: "Epic 11 draft PR creation satisfied exact authority, policy, and receipt evidence for one draft PR only.", EvidenceRefs: []string{ids.gateResult, ids.executionReceipt}},
+		&v39.AuditReport{CommonNode: epic11Common(ids.auditReport, v39.TypeAuditReport, "complete", createdAt), TargetType: "release_candidate", TargetID: ids.releaseCandidate, TraceScore: 1},
+	}
+	if err := epic7AppendRecords(graph, records...); err != nil {
+		return nil, epic11GraphRecords{}, err
+	}
+	if _, err := graph.RecordKnowledgeReference(&v39.KnowledgeReference{AdvisoryReference: v39.AdvisoryReference{CommonNode: epic11Common(ids.knowledgeReference, v39.TypeKnowledgeReference, "recorded", createdAt), ReferenceCreatedAt: createdAt, SourceSystem: "transpara-ai/docs", SourceRef: epic11KnowledgeSourceRef, SourceHashOrImmutableLocator: "sha256:docs-pr-95-merged-" + epic11DocsMergeSHA + "-reviewed-head-" + epic11DocsReviewedHead, RetrievedAt: createdAt, UsedByActor: opts.AuthorityRequest.ActorID, UsedInTask: ids.task, InfluenceSummary: "Epic 11 docs#95 authorized only draft PR creation in transpara-ai/docs with exact JIT authority, policy bundle evidence, and post-confirmation receipt.", RiskScope: "high", TrustLevel: "human_authorized", FreshnessStatus: "current", RedactionState: "none"}}); err != nil {
+		return nil, epic11GraphRecords{}, err
+	}
+	if err := epic11AppendEdges(graph, ids, createdAt); err != nil {
+		return nil, epic11GraphRecords{}, err
+	}
+	return graph, epic11GraphRecords{AuthorityRequest: authRequest, AuthorityDecision: authDecision, PolicyDecision: policyDecision, ExecutionReceipt: executionReceipt}, nil
+}
+
+func epic11AppendEdges(graph *v39.InMemoryStore, ids epic11FixtureIDs, createdAt time.Time) error {
+	edges := []v39.CommonEdge{
+		epic11Edge("fo_req", v39.EdgeRequires, ids.factoryOrder, ids.requirement, createdAt),
+		epic11Edge("req_ac", v39.EdgeRequires, ids.requirement, ids.acceptanceCriterion, createdAt),
+		epic11Edge("ac_task", v39.EdgeDecomposedInto, ids.acceptanceCriterion, ids.task, createdAt),
+		epic11Edge("task_invocation", v39.EdgeInvoked, ids.task, ids.actorInvocation, createdAt),
+		epic11Edge("task_envelope", v39.EdgeUsedEnvelope, ids.task, ids.runtimeEnvelope, createdAt),
+		epic11Edge("envelope_result", v39.EdgeProduced, ids.runtimeEnvelope, ids.runtimeResult, createdAt),
+		epic11Edge("invoke_auth", v39.EdgeRequestedAuthority, ids.actorInvocation, ids.authorityRequest, createdAt),
+		epic11Edge("auth_decision", v39.EdgeDecidedBy, ids.authorityRequest, ids.authorityDecision, createdAt),
+		epic11Edge("auth_human", v39.EdgeApprovedBy, ids.authorityRequest, ids.humanApproval, createdAt),
+		epic11Edge("auth_receipt", v39.EdgeReceiptedBy, ids.authorityDecision, ids.executionReceipt, createdAt),
+		epic11Edge("task_testcase", v39.EdgeVerifies, ids.task, ids.testCase, createdAt),
+		epic11Edge("testcase_testrun", v39.EdgeVerifies, ids.testCase, ids.testRun, createdAt),
+		epic11Edge("testrun_gate", v39.EdgeProduced, ids.testRun, ids.gateResult, createdAt),
+	}
+	for _, edge := range edges {
+		if _, err := graph.AppendEdge(edge); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func epic11BuildProjection(ids epic11FixtureIDs, opts Epic11DocsDraftPROptions, result Epic11DraftPullRequestResult, receipt Epic11ExecutionReceiptEvidence) Epic11DocsDraftPRProjection {
+	return Epic11DocsDraftPRProjection{
+		GeneratedAt:      opts.Now.Format(time.RFC3339),
+		Source:           "work-epic11-docs-draft-pr-live-mutation",
+		Mode:             opts.Mode,
+		Target:           opts.Target,
+		PolicyBundleID:   Epic11PolicyBundleID,
+		PolicyBundleHash: Epic11DocsDraftPRPolicyBundleHash(),
+		MutationResult:   result,
+		ReceiptEvidence:  receipt,
+		ForbiddenActions: []string{"pull_request.ready_for_review", "pull_request.merge", "pull_request.close", "pull_request.update", "pull_request.request_review", "issue.comment", "label.mutate", "branch.push", "repo.push.default_branch", "repo.merge.main", "worktree.merge.main", "production.deploy", "secret.access", "capability.activate", "runtime.invoke.external", "repo.mutate.cross_repo", "upstream.push"},
+		EventGraphRefs:   []string{egRef(v39.TypeAuthorityRequest, ids.authorityRequest), egRef(v39.TypeAuthorityDecision, ids.authorityDecision), egRef(v39.TypePolicyEngineAdapterDecision, ids.policyDecision), egRef(v39.TypeExecutionReceipt, ids.executionReceipt), egRef(v39.TypeGateResult, ids.gateResult)},
+	}
+}
+
+func (p Epic11DocsDraftPRProjection) JSON() ([]byte, error) {
+	return json.MarshalIndent(p, "", "  ")
+}
+
+func epic11WriteEvidence(dir string, opts Epic11DocsDraftPROptions, result Epic11DraftPullRequestResult, receipt Epic11ExecutionReceiptEvidence, projection Epic11DocsDraftPRProjection) error {
+	root := filepath.Join(dir, "artifacts", "epic11", "docs-draft-pr")
+	files := map[string]any{
+		"target.json":             opts.Target,
+		"authority_request.json":  opts.AuthorityRequest,
+		"authority_decision.json": opts.AuthorityDecision,
+		"policy_decision.json":    opts.PolicyDecision,
+		"mutation_result.json":    result,
+		"execution_receipt.json":  receipt,
+		"projection.json":         projection,
+	}
+	for name, value := range files {
+		if err := epic7WriteJSON(filepath.Join(root, name), value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func epic11IDs(opts Epic11DocsDraftPROptions) epic11FixtureIDs {
+	return epic11FixtureIDs{
+		factoryOrder:        "fo_epic11_docs_draft_pr_live_mutation",
+		requirement:         "req_epic11_docs_draft_pr_live_mutation",
+		acceptanceCriterion: "ac_epic11_docs_draft_pr_live_mutation",
+		task:                "tsk_epic11_docs_draft_pr_live_mutation",
+		actorIdentity:       "actor_identity_epic11_docs_draft_pr_creator",
+		humanActorIdentity:  "actor_identity_epic11_human_authorizer",
+		actorInvocation:     "invoke_epic11_docs_draft_pr_create",
+		runtimeEnvelope:     "env_epic11_docs_draft_pr_create",
+		runtimeResult:       "rr_epic11_docs_draft_pr_create",
+		knowledgeReference:  "know_ref_epic11_docs95",
+		authorityRequest:    opts.AuthorityRequest.ID,
+		authorityDecision:   opts.AuthorityDecision.ID,
+		humanApproval:       "human_app_epic11_docs_draft_pr_create",
+		policyDecision:      opts.PolicyDecision.DecisionID,
+		executionReceipt:    "exec_epic11_docs_draft_pr_create",
+		testCase:            "tc_epic11_docs_draft_pr_live_mutation",
+		testRun:             "tr_epic11_docs_draft_pr_live_mutation",
+		gateResult:          "gate_epic11_docs_draft_pr_live_mutation",
+		factoryRuntime:      "frv_epic11_docs_draft_pr_live_mutation",
+		releaseCandidate:    "rc_epic11_docs_draft_pr_live_mutation",
+		certification:       "cert_epic11_docs_draft_pr_live_mutation",
+		auditReport:         "aud_epic11_docs_draft_pr_live_mutation",
+	}
+}
+
+func epic11PolicyBundleDocument() string {
+	return strings.Join([]string{
+		"policy_bundle_id=df-v3.9.20-docs-draft-pr-create-only",
+		"adapter_id=work-live-github-pr-policy-adapter",
+		"allow=pull_request.create",
+		"draft_required=true",
+		"target_repository=transpara-ai/docs",
+		"target_base_branch=main",
+		"target_head_branch_pattern=codex/*",
+		"head_branch_must_already_exist_on_origin=true",
+		"changed_files_prefix=dark-factory/",
+		"max_pull_requests_created_per_run=1",
+		"require_exact_authority_request=true",
+		"require_matching_authority_decision=true",
+		"require_policy_bundle_hash=true",
+		"require_post_confirmation_execution_receipt=true",
+		"forbid=pull_request.ready_for_review,pull_request.merge,pull_request.close,pull_request.update,pull_request.request_review,issue.comment,label.mutate,branch.push,repo.push.default_branch,repo.merge.main,worktree.merge.main,production.deploy,secret.access,capability.activate,runtime.invoke.external,repo.mutate.cross_repo,upstream.push",
+	}, "\n")
+}
+
+func epic11Common(id, typ, status string, createdAt time.Time) v39.CommonNode {
+	return v39.CommonNode{ID: id, Type: typ, CreatedAt: createdAt, CreatedBy: epic11FixtureActorID, Status: &status, IdempotencyKey: "idem_" + id, CorrelationID: "corr_epic11_docs_draft_pr_live_mutation", SourceRefs: []string{epic11DocsPRRef}}
+}
+
+func epic11Edge(suffix, typ, from, to string, createdAt time.Time) v39.CommonEdge {
+	id := "edge_epic11_" + suffix + "_" + from + "_" + to
+	return v39.CommonEdge{ID: id, Type: typ, FromID: from, ToID: to, CreatedAt: createdAt, CreatedBy: epic11FixtureActorID, CorrelationID: "corr_epic11_docs_draft_pr_live_mutation", IdempotencyKey: "idem_" + id}
+}
+
+func epic11TargetID(target Epic11DraftPullRequestTarget) string {
+	return target.Repository + ":" + target.BaseRef + "<-" + target.HeadRef
+}
+
+func epic11AuthorityDecisionApproved(decision string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(decision), "_", ""))
+	return normalized == "approvalrequired" || normalized == "approved"
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // RunEpic7IssueToPRProposalTrials executes the authorized proposal-only Gate H fixture.
