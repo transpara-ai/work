@@ -43,10 +43,17 @@ The GitHub client is not called unless all of the following match exactly:
 - `policy_bundle_id=df-v3.9.20-docs-draft-pr-create-only`
 - the canonical policy bundle hash from `Epic11DocsDraftPRPolicyBundleHash`
 - manual rollback instructions
-- no prior `ExecutionReceipt` refs for the same authority decision
+- no prior durable authority reservation or `ExecutionReceipt` refs for the
+  same authority decision or single-use nonce
 
 The policy canonical decision must be `approval_required`, preserving the
 human-gated action vocabulary already used by EventGraph v3.9.
+
+Before the GitHub client is called, Work records an
+`epic11_docs_draft_pr_authority_reservation` task artifact under an
+in-process reservation lock. Later attempts with the same authority decision
+or nonce fail closed on that reservation even if the original client call
+failed before a post-confirmation receipt could be recorded.
 
 ## Receipt Boundary
 
@@ -112,5 +119,9 @@ The run records EventGraph v3.9 evidence with the existing schema:
 - `FactoryRuntimeVersion`, `TestCase`, `TestRun`, `GateResult`,
   `ReleaseCandidate`, `Certification`, and `AuditReport`
 - `KnowledgeReference` for merged `transpara-ai/docs#95`
+
+Work also records a pre-call task artifact for the authority reservation. That
+artifact is Work-local durable evidence; it does not require an EventGraph
+schema change.
 
 No EventGraph schema changes are required.

@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -258,6 +260,12 @@ func TestEpic11DocsDraftPRLiveMutationCreatesDraftPRAfterAuthorityPolicyAndRecor
 	if run.ReceiptEvidence.AuthorityRequestRef != opts.AuthorityRequest.ID || run.ReceiptEvidence.AuthorityDecisionRef != opts.AuthorityDecision.ID || run.ReceiptEvidence.PolicyEngineAdapterDecisionRef != opts.PolicyDecision.DecisionID {
 		t.Fatalf("receipt refs = %#v; want request/decision/policy refs", run.ReceiptEvidence)
 	}
+	if run.AuthorityReserve.AuthorityRequestRef != opts.AuthorityRequest.ID || run.AuthorityReserve.AuthorityDecisionRef != opts.AuthorityDecision.ID || run.AuthorityReserve.PolicyEngineAdapterDecisionRef != opts.PolicyDecision.DecisionID {
+		t.Fatalf("authority reservation refs = %#v; want request/decision/policy refs", run.AuthorityReserve)
+	}
+	if run.AuthorityReserve.Result != "reserved" || run.AuthorityReserve.SingleUseNonce != opts.AuthorityDecision.SingleUseNonce {
+		t.Fatalf("authority reservation = %#v; want reserved nonce", run.AuthorityReserve)
+	}
 	if run.ReceiptEvidence.SingleUseNonce != opts.AuthorityDecision.SingleUseNonce {
 		t.Fatalf("receipt nonce = %q; want authority decision nonce", run.ReceiptEvidence.SingleUseNonce)
 	}
@@ -386,11 +394,80 @@ func TestEpic11DocsDraftPRLiveMutationBlocksDurableDecisionReuseBeforeGitHubCall
 	secondOpts := validEpic11Options(t, secondClient)
 	secondOpts.Causes = causes
 	_, err = work.RunEpic11DocsDraftPRLiveMutation(context.Background(), ts, secondOpts)
-	if err == nil || !strings.Contains(err.Error(), "authority decision already used by durable receipt refs") {
+	if err == nil || !strings.Contains(err.Error(), "authority decision already used by durable authority refs") {
 		t.Fatalf("second err = %v; want durable reuse rejection", err)
 	}
 	if secondClient.calls != 0 {
 		t.Fatalf("second client calls = %d; want 0 before failed durable reuse guard", secondClient.calls)
+	}
+}
+
+func TestEpic11DocsDraftPRLiveMutationReservationBlocksRetryAfterClientError(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	firstClient := &epic11FakePRClient{err: errors.New("github unavailable")}
+	firstOpts := validEpic11Options(t, firstClient)
+	firstOpts.Causes = causes
+	_, err := work.RunEpic11DocsDraftPRLiveMutation(context.Background(), ts, firstOpts)
+	if err == nil || !strings.Contains(err.Error(), "create draft PR") {
+		t.Fatalf("first err = %v; want client failure after reservation", err)
+	}
+	if firstClient.calls != 1 {
+		t.Fatalf("first client calls = %d; want 1", firstClient.calls)
+	}
+
+	secondClient := &epic11FakePRClient{}
+	secondOpts := validEpic11Options(t, secondClient)
+	secondOpts.Causes = causes
+	_, err = work.RunEpic11DocsDraftPRLiveMutation(context.Background(), ts, secondOpts)
+	if err == nil || !strings.Contains(err.Error(), "authority decision already used by durable authority refs") {
+		t.Fatalf("second err = %v; want reservation reuse rejection", err)
+	}
+	if secondClient.calls != 0 {
+		t.Fatalf("second client calls = %d; want 0 before reservation replay", secondClient.calls)
+	}
+}
+
+func TestEpic11DocsDraftPRLiveMutationReservationBlocksConcurrentSameNonceBeforeGitHubCall(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	firstClient := newEpic11BlockingPRClient()
+	firstOpts := validEpic11Options(t, firstClient)
+	firstOpts.Causes = causes
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := work.RunEpic11DocsDraftPRLiveMutation(context.Background(), ts, firstOpts)
+		firstErr <- err
+	}()
+
+	select {
+	case <-firstClient.entered:
+	case <-time.After(time.Second):
+		t.Fatal("first client was not called after reservation")
+	}
+
+	secondClient := &epic11FakePRClient{}
+	secondOpts := validEpic11Options(t, secondClient)
+	secondOpts.Causes = causes
+	_, err := work.RunEpic11DocsDraftPRLiveMutation(context.Background(), ts, secondOpts)
+	if err == nil || !strings.Contains(err.Error(), "authority decision already used by durable authority refs") {
+		t.Fatalf("second err = %v; want reservation conflict", err)
+	}
+	if secondClient.calls != 0 {
+		t.Fatalf("second client calls = %d; want 0 while first run holds reservation", secondClient.calls)
+	}
+
+	close(firstClient.release)
+	select {
+	case err := <-firstErr:
+		if err != nil {
+			t.Fatalf("first run err = %v; want success", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first run did not finish")
+	}
+	if calls := firstClient.Calls(); calls != 1 {
+		t.Fatalf("first client calls = %d; want 1", calls)
 	}
 }
 
@@ -805,6 +882,52 @@ func (c *epic11FakePRClient) CreateDraftPullRequest(_ context.Context, mutation 
 		State:                        "open",
 		CreatedAt:                    time.Date(2026, 6, 3, 13, 0, 1, 0, time.UTC),
 	}, nil
+}
+
+type epic11BlockingPRClient struct {
+	mu      sync.Mutex
+	calls   int
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newEpic11BlockingPRClient() *epic11BlockingPRClient {
+	return &epic11BlockingPRClient{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (c *epic11BlockingPRClient) CreateDraftPullRequest(ctx context.Context, mutation work.Epic11DraftPullRequestMutation) (work.Epic11DraftPullRequestResult, error) {
+	c.mu.Lock()
+	c.calls++
+	c.mu.Unlock()
+	c.once.Do(func() { close(c.entered) })
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+		return work.Epic11DraftPullRequestResult{}, ctx.Err()
+	}
+	return work.Epic11DraftPullRequestResult{
+		Repository:                   mutation.Repository,
+		Number:                       222,
+		URL:                          "https://github.com/transpara-ai/docs/pull/222",
+		GitHubResponseIDOrEquivalent: "github-pr-node-222",
+		BaseRef:                      mutation.BaseRef,
+		BaseSHA:                      mutation.BaseSHA,
+		HeadRef:                      mutation.HeadRef,
+		HeadSHA:                      mutation.HeadSHA,
+		Draft:                        true,
+		State:                        "open",
+		CreatedAt:                    time.Date(2026, 6, 3, 13, 0, 2, 0, time.UTC),
+	}, nil
+}
+
+func (c *epic11BlockingPRClient) Calls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
 }
 
 func validEpic11Options(t *testing.T, client work.Epic11PullRequestCreator) work.Epic11DocsDraftPROptions {
