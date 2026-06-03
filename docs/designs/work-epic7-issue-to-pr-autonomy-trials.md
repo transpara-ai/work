@@ -47,3 +47,9 @@ merge, deploy, execute protected actions, access secrets, rely on
 `PolicyEngineAdapterDecision`, produce an `ExecutionReceipt` in the certified
 path, mutate another repository, implement capability monitoring, activate a
 capability, or implement Gate I / Gate J behavior.
+
+Epic 11 keeps that Gate H fixture unchanged. The separately authorized
+`RunEpic11DocsDraftPRLiveMutation` seam handles the first live draft PR
+creation path under merged `transpara-ai/docs#95`; it requires exact
+just-in-time authority, policy bundle evidence, and post-confirmation receipt
+evidence before any successful live mutation is recorded.

@@ -1,11 +1,15 @@
 package work_test
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	v39 "github.com/transpara-ai/eventgraph/go/pkg/darkfactory/v39"
 	"github.com/transpara-ai/work"
@@ -227,6 +231,134 @@ func TestEpic7IssueToPRProposalTrialsRejectsUnsafeOptions(t *testing.T) {
 	}
 }
 
+func TestEpic11DocsDraftPRLiveMutationCreatesDraftPRAfterAuthorityPolicyAndRecordsReceipt(t *testing.T) {
+	client := &epic11FakePRClient{}
+	opts := validEpic11Options(t, client)
+	run := runEpic11(t, opts)
+
+	if client.calls != 1 {
+		t.Fatalf("client calls = %d; want 1", client.calls)
+	}
+	if len(client.mutations) != 1 {
+		t.Fatalf("mutations = %#v; want one", client.mutations)
+	}
+	mutation := client.mutations[0]
+	if mutation.Repository != work.Epic11TargetRepository || mutation.BaseRef != work.Epic11TargetBaseRef || mutation.HeadRef != opts.Target.HeadRef || !mutation.Draft {
+		t.Fatalf("mutation = %#v; want authorized draft PR target", mutation)
+	}
+	if mutation.TitleHash != hashForTest(opts.Target.Title) || mutation.BodyHash != hashForTest(opts.Target.Body) {
+		t.Fatalf("mutation hashes = %q/%q; want title/body hashes", mutation.TitleHash, mutation.BodyHash)
+	}
+	if run.WorkProjection.Status != work.StatusCertified {
+		t.Fatalf("work status = %q; want certified", run.WorkProjection.Status)
+	}
+	if run.MutationResult.Number == 0 || !run.MutationResult.Draft || run.MutationResult.State != "open" {
+		t.Fatalf("mutation result = %#v; want open draft PR", run.MutationResult)
+	}
+	if run.ReceiptEvidence.AuthorityRequestRef != opts.AuthorityRequest.ID || run.ReceiptEvidence.AuthorityDecisionRef != opts.AuthorityDecision.ID || run.ReceiptEvidence.PolicyEngineAdapterDecisionRef != opts.PolicyDecision.DecisionID {
+		t.Fatalf("receipt refs = %#v; want request/decision/policy refs", run.ReceiptEvidence)
+	}
+	if run.ReceiptEvidence.Result != "succeeded" || run.ReceiptEvidence.PRURL == "" || !run.ReceiptEvidence.Draft {
+		t.Fatalf("receipt evidence = %#v; want successful draft PR receipt", run.ReceiptEvidence)
+	}
+	if run.PolicyBundleID != work.Epic11PolicyBundleID || run.PolicyBundleHash != work.Epic11DocsDraftPRPolicyBundleHash() {
+		t.Fatalf("policy bundle = %s/%s; want canonical bundle", run.PolicyBundleID, run.PolicyBundleHash)
+	}
+	assertEpic7GraphRecord(t, work.Epic7IssueToPRRun{EventGraph: run.EventGraph}, opts.AuthorityRequest.ID, v39.TypeAuthorityRequest)
+	assertEpic7GraphRecord(t, work.Epic7IssueToPRRun{EventGraph: run.EventGraph}, opts.AuthorityDecision.ID, v39.TypeAuthorityDecision)
+	assertEpic7GraphRecord(t, work.Epic7IssueToPRRun{EventGraph: run.EventGraph}, opts.PolicyDecision.DecisionID, v39.TypePolicyEngineAdapterDecision)
+	assertEpic7GraphRecord(t, work.Epic7IssueToPRRun{EventGraph: run.EventGraph}, run.ExecutionReceipt.CommonNode.ID, v39.TypeExecutionReceipt)
+	assertEpic7Edge(t, run.EventGraph.EdgesFrom(opts.AuthorityRequest.ID), v39.EdgeDecidedBy, opts.AuthorityDecision.ID)
+	assertEpic7Edge(t, run.EventGraph.EdgesFrom(opts.AuthorityDecision.ID), v39.EdgeReceiptedBy, run.ExecutionReceipt.CommonNode.ID)
+	assertFileExists(t, filepath.Join(opts.WorkingDir, "artifacts", "epic11", "docs-draft-pr", "execution_receipt.json"))
+	assertFileExists(t, filepath.Join(opts.WorkingDir, "artifacts", "epic11", "docs-draft-pr", "projection.json"))
+
+	payload, err := run.Projection.JSON()
+	if err != nil {
+		t.Fatalf("projection JSON: %v", err)
+	}
+	var decoded struct {
+		ForbiddenActions []string `json:"forbidden_actions"`
+		ReceiptEvidence  struct {
+			PRURL  string `json:"pr_url"`
+			Result string `json:"result"`
+		} `json:"receipt_evidence"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal projection: %v", err)
+	}
+	for _, forbidden := range []string{"pull_request.merge", "repo.push.default_branch", "worktree.merge.main", "upstream.push"} {
+		if !containsString(decoded.ForbiddenActions, forbidden) {
+			t.Fatalf("forbidden actions = %#v; want %s", decoded.ForbiddenActions, forbidden)
+		}
+	}
+	if decoded.ReceiptEvidence.PRURL == "" || decoded.ReceiptEvidence.Result != "succeeded" {
+		t.Fatalf("decoded receipt = %#v; want succeeded URL", decoded.ReceiptEvidence)
+	}
+}
+
+func TestEpic11DocsDraftPRLiveMutationBlocksBeforeGitHubCall(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(*work.Epic11DocsDraftPROptions)
+		want string
+	}{
+		{name: "missing authority decision", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.AuthorityDecision.ID = "" }, want: "authority decision ID is required"},
+		{name: "expired authority decision", edit: func(opts *work.Epic11DocsDraftPROptions) {
+			opts.AuthorityDecision.ExpiresAt = opts.Now.Add(-time.Minute)
+		}, want: "authority decision is expired"},
+		{name: "different repo", edit: func(opts *work.Epic11DocsDraftPROptions) {
+			opts.AuthorityDecision.TargetRepository = "transpara-ai/work"
+		}, want: "authority decision repository"},
+		{name: "different base sha", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.AuthorityDecision.BaseSHA = "deadbeef" }, want: "authority decision base ref/SHA"},
+		{name: "different head sha", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.AuthorityDecision.HeadSHA = "deadbeef" }, want: "authority decision head ref/SHA"},
+		{name: "title hash mismatch", edit: func(opts *work.Epic11DocsDraftPROptions) {
+			opts.AuthorityRequest.TitleHash = hashForTest("different title")
+		}, want: "authority request title hash"},
+		{name: "missing policy bundle hash", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.PolicyDecision.PolicyBundleHash = "" }, want: "policy bundle hash"},
+		{name: "stale policy bundle hash", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.PolicyDecision.PolicyBundleHash = "sha256:placeholder" }, want: "policy bundle hash"},
+		{name: "policy forbidden", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.PolicyDecision.CanonicalDecision = "forbidden" }, want: "policy canonical decision"},
+		{name: "head absent", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.Target.HeadExistsOnOrigin = false }, want: "head branch must already exist"},
+		{name: "non draft", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.Target.Draft = false }, want: "draft=true is required"},
+		{name: "forbidden action", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.AuthorityRequest.Action = "pull_request.merge" }, want: "authority request action"},
+		{name: "prior receipt reuse", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.PriorExecutionReceiptRefs = []string{"exec_previous"} }, want: "already used"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &epic11FakePRClient{}
+			opts := validEpic11Options(t, client)
+			tc.edit(&opts)
+			s, causes := setupStore(t)
+			ts := newTaskStore(t, s)
+			opts.Causes = causes
+			_, err := work.RunEpic11DocsDraftPRLiveMutation(context.Background(), ts, opts)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v; want containing %q", err, tc.want)
+			}
+			if client.calls != 0 {
+				t.Fatalf("client calls = %d; want 0 before failed guard", client.calls)
+			}
+		})
+	}
+}
+
+func TestEpic11DocsDraftPRLiveMutationRejectsUnexpectedGitHubResponse(t *testing.T) {
+	client := &epic11FakePRClient{}
+	opts := validEpic11Options(t, client)
+	client.result = epic11SuccessfulResult(opts)
+	client.result.Draft = false
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	opts.Causes = causes
+	_, err := work.RunEpic11DocsDraftPRLiveMutation(context.Background(), ts, opts)
+	if err == nil || !strings.Contains(err.Error(), "created PR is not draft") {
+		t.Fatalf("err = %v; want non-draft response rejection", err)
+	}
+	if client.calls != 1 {
+		t.Fatalf("client calls = %d; want 1 for post-response validation", client.calls)
+	}
+}
+
 func runEpic7(t *testing.T, opts work.Epic7IssueToPROptions) work.Epic7IssueToPRRun {
 	t.Helper()
 	s, causes := setupStore(t)
@@ -238,6 +370,18 @@ func runEpic7(t *testing.T, opts work.Epic7IssueToPROptions) work.Epic7IssueToPR
 	run, err := work.RunEpic7IssueToPRProposalTrials(ts, opts)
 	if err != nil {
 		t.Fatalf("RunEpic7IssueToPRProposalTrials: %v", err)
+	}
+	return run
+}
+
+func runEpic11(t *testing.T, opts work.Epic11DocsDraftPROptions) work.Epic11DocsDraftPRRun {
+	t.Helper()
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	opts.Causes = causes
+	run, err := work.RunEpic11DocsDraftPRLiveMutation(context.Background(), ts, opts)
+	if err != nil {
+		t.Fatalf("RunEpic11DocsDraftPRLiveMutation: %v", err)
 	}
 	return run
 }
@@ -578,4 +722,149 @@ func findEpic7Trial(t *testing.T, run work.Epic7IssueToPRRun, id string) work.Ep
 	}
 	t.Fatalf("trial %s not found", id)
 	return work.Epic7TrialEvidence{}
+}
+
+type epic11FakePRClient struct {
+	calls     int
+	mutations []work.Epic11DraftPullRequestMutation
+	result    work.Epic11DraftPullRequestResult
+	err       error
+}
+
+func (c *epic11FakePRClient) CreateDraftPullRequest(_ context.Context, mutation work.Epic11DraftPullRequestMutation) (work.Epic11DraftPullRequestResult, error) {
+	c.calls++
+	c.mutations = append(c.mutations, mutation)
+	if c.err != nil {
+		return work.Epic11DraftPullRequestResult{}, c.err
+	}
+	if c.result.Number != 0 || c.result.URL != "" {
+		return c.result, nil
+	}
+	return work.Epic11DraftPullRequestResult{
+		Repository:                   mutation.Repository,
+		Number:                       111,
+		URL:                          "https://github.com/transpara-ai/docs/pull/111",
+		GitHubResponseIDOrEquivalent: "github-pr-node-111",
+		BaseRef:                      mutation.BaseRef,
+		BaseSHA:                      mutation.BaseSHA,
+		HeadRef:                      mutation.HeadRef,
+		HeadSHA:                      mutation.HeadSHA,
+		Draft:                        true,
+		State:                        "open",
+		CreatedAt:                    time.Date(2026, 6, 3, 13, 0, 1, 0, time.UTC),
+	}, nil
+}
+
+func validEpic11Options(t *testing.T, client work.Epic11PullRequestCreator) work.Epic11DocsDraftPROptions {
+	t.Helper()
+	now := time.Date(2026, 6, 3, 13, 0, 0, 0, time.UTC)
+	target := work.Epic11DraftPullRequestTarget{
+		Repository:             work.Epic11TargetRepository,
+		BaseRef:                work.Epic11TargetBaseRef,
+		BaseSHA:                "b21e2eca5ce547eebef83a1a392f5ca790c3e44d",
+		HeadRef:                "codex/epic-11-docs-draft-pr-live-mutation-fixture",
+		HeadSHA:                "b4f9844ecad41a8dc1298e3ac19df3a4e7ac9071",
+		HeadExistsOnOrigin:     true,
+		Title:                  "[codex] Epic 11 fixture draft PR",
+		Body:                   "## Summary\n\nFixture body for the guarded Epic 11 draft PR creation seam.\n",
+		ChangedFiles:           []string{"dark-factory/v3.9/implementation/epics/epic-11-docs-draft-pr-live-mutation/README.md"},
+		ValidationEvidenceRefs: []string{"git diff --check", "go test ./...", "make verify"},
+		Draft:                  true,
+		MaintainerCanModify:    true,
+		RollbackInstructions:   "Manual rollback only: human may close the draft PR in GitHub after a separately authorized mutation.",
+	}
+	req := work.Epic11AuthorityRequestEvidence{
+		ID:                     "auth_req_epic11_docs_draft_pr_create",
+		ActorID:                testActor.Value(),
+		ActorRole:              "codex",
+		Action:                 work.Epic11ActionPullRequestCreate,
+		TargetRepository:       target.Repository,
+		BaseRef:                target.BaseRef,
+		BaseSHA:                target.BaseSHA,
+		HeadRef:                target.HeadRef,
+		HeadSHA:                target.HeadSHA,
+		TitleHash:              hashForTest(target.Title),
+		BodyHash:               hashForTest(target.Body),
+		ChangedFiles:           append([]string(nil), target.ChangedFiles...),
+		ValidationEvidenceRefs: append([]string(nil), target.ValidationEvidenceRefs...),
+		PolicyBundleID:         work.Epic11PolicyBundleID,
+		PolicyBundleHash:       work.Epic11DocsDraftPRPolicyBundleHash(),
+		RollbackInstructions:   target.RollbackInstructions,
+		SingleUseNonce:         "nonce-epic11-docs-draft-pr-create",
+		RequestedAt:            now.Add(-time.Minute),
+		ExpiresAt:              now.Add(time.Hour),
+	}
+	decision := work.Epic11AuthorityDecisionEvidence{
+		ID:                     "auth_dec_epic11_docs_draft_pr_create",
+		AuthorityRequestID:     req.ID,
+		ActorID:                req.ActorID,
+		ActorRole:              req.ActorRole,
+		DeciderActorID:         "act_human_epic11_authorizer",
+		DeciderRole:            "maintainer",
+		Decision:               "ApprovalRequired",
+		Action:                 req.Action,
+		TargetRepository:       req.TargetRepository,
+		BaseRef:                req.BaseRef,
+		BaseSHA:                req.BaseSHA,
+		HeadRef:                req.HeadRef,
+		HeadSHA:                req.HeadSHA,
+		TitleHash:              req.TitleHash,
+		BodyHash:               req.BodyHash,
+		ChangedFiles:           append([]string(nil), req.ChangedFiles...),
+		ValidationEvidenceRefs: append([]string(nil), req.ValidationEvidenceRefs...),
+		PolicyBundleID:         req.PolicyBundleID,
+		PolicyBundleHash:       req.PolicyBundleHash,
+		RollbackInstructions:   req.RollbackInstructions,
+		SingleUseNonce:         req.SingleUseNonce,
+		ExpiresAt:              now.Add(time.Hour),
+	}
+	policy := work.Epic11PolicyDecisionEvidence{
+		DecisionID:           "padc_epic11_docs_draft_pr_create",
+		AdapterID:            work.Epic11PolicyAdapterID,
+		AdapterVersion:       "1.0.0",
+		PolicyBundleID:       work.Epic11PolicyBundleID,
+		PolicyBundleHash:     work.Epic11DocsDraftPRPolicyBundleHash(),
+		ProtectedActionType:  work.Epic11ActionPullRequestCreate,
+		ActorID:              req.ActorID,
+		ResourceRefs:         []string{target.Repository, target.BaseRef, target.HeadRef},
+		InputFacts:           map[string]any{"repository": target.Repository, "base_sha": target.BaseSHA, "head_sha": target.HeadSHA, "draft": target.Draft},
+		RawDecision:          "allow draft PR creation only after exact JIT authority match",
+		CanonicalDecision:    "approval_required",
+		ReasonCodes:          []string{"docs95_authorized", "exact_target_match", "draft_required", "single_use_nonce"},
+		EvidenceRefs:         []string{req.ID, decision.ID, "transpara-ai/docs#95"},
+		LatencyMS:            1,
+		AuthorityDecisionRef: decision.ID,
+	}
+	return work.Epic11DocsDraftPROptions{
+		Source:            testActor,
+		ConversationID:    testConv,
+		WorkingDir:        t.TempDir(),
+		Client:            client,
+		Now:               now,
+		Target:            target,
+		AuthorityRequest:  req,
+		AuthorityDecision: decision,
+		PolicyDecision:    policy,
+	}
+}
+
+func epic11SuccessfulResult(opts work.Epic11DocsDraftPROptions) work.Epic11DraftPullRequestResult {
+	return work.Epic11DraftPullRequestResult{
+		Repository:                   opts.Target.Repository,
+		Number:                       111,
+		URL:                          "https://github.com/transpara-ai/docs/pull/111",
+		GitHubResponseIDOrEquivalent: "github-pr-node-111",
+		BaseRef:                      opts.Target.BaseRef,
+		BaseSHA:                      opts.Target.BaseSHA,
+		HeadRef:                      opts.Target.HeadRef,
+		HeadSHA:                      opts.Target.HeadSHA,
+		Draft:                        true,
+		State:                        "open",
+		CreatedAt:                    opts.Now.Add(time.Second),
+	}
+}
+
+func hashForTest(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }

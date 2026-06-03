@@ -24,6 +24,7 @@ repo.delete
 repo.push.default_branch
 repo.merge.main
 repo.mutate.cross_repo
+pull_request.create
 agent.spawn.persistent
 agent.retire
 agent.revoke
@@ -42,3 +43,4 @@ license.change
 - Phase gate names may describe project workflow, but authority-gated side effects must use the canonical action names above.
 - `repo.merge.main` is distinct from `repo.push.default_branch`; approval for one does not approve the other.
 - `repo.mutate.cross_repo` is the canonical spelling for multi-repo mutation; do not use `repo.mutate_cross_repo`.
+- `pull_request.create` is the Epic 11 live mutation vocabulary for creating one draft pull request. It does not imply `pull_request.ready_for_review`, `pull_request.merge`, `pull_request.update`, `pull_request.close`, review requests, labels, comments, branch push, default-branch push, or rollback mutation authority.
