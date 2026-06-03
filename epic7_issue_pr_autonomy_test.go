@@ -258,16 +258,25 @@ func TestEpic11DocsDraftPRLiveMutationCreatesDraftPRAfterAuthorityPolicyAndRecor
 	if run.ReceiptEvidence.AuthorityRequestRef != opts.AuthorityRequest.ID || run.ReceiptEvidence.AuthorityDecisionRef != opts.AuthorityDecision.ID || run.ReceiptEvidence.PolicyEngineAdapterDecisionRef != opts.PolicyDecision.DecisionID {
 		t.Fatalf("receipt refs = %#v; want request/decision/policy refs", run.ReceiptEvidence)
 	}
+	if run.ReceiptEvidence.SingleUseNonce != opts.AuthorityDecision.SingleUseNonce {
+		t.Fatalf("receipt nonce = %q; want authority decision nonce", run.ReceiptEvidence.SingleUseNonce)
+	}
 	if run.ReceiptEvidence.Result != "succeeded" || run.ReceiptEvidence.PRURL == "" || !run.ReceiptEvidence.Draft {
 		t.Fatalf("receipt evidence = %#v; want successful draft PR receipt", run.ReceiptEvidence)
 	}
 	if run.PolicyBundleID != work.Epic11PolicyBundleID || run.PolicyBundleHash != work.Epic11DocsDraftPRPolicyBundleHash() {
 		t.Fatalf("policy bundle = %s/%s; want canonical bundle", run.PolicyBundleID, run.PolicyBundleHash)
 	}
-	assertEpic7GraphRecord(t, work.Epic7IssueToPRRun{EventGraph: run.EventGraph}, opts.AuthorityRequest.ID, v39.TypeAuthorityRequest)
-	assertEpic7GraphRecord(t, work.Epic7IssueToPRRun{EventGraph: run.EventGraph}, opts.AuthorityDecision.ID, v39.TypeAuthorityDecision)
-	assertEpic7GraphRecord(t, work.Epic7IssueToPRRun{EventGraph: run.EventGraph}, opts.PolicyDecision.DecisionID, v39.TypePolicyEngineAdapterDecision)
-	assertEpic7GraphRecord(t, work.Epic7IssueToPRRun{EventGraph: run.EventGraph}, run.ExecutionReceipt.CommonNode.ID, v39.TypeExecutionReceipt)
+	for _, record := range []v39.Record{
+		assertEpic7GraphRecord(t, work.Epic7IssueToPRRun{EventGraph: run.EventGraph}, opts.AuthorityRequest.ID, v39.TypeAuthorityRequest),
+		assertEpic7GraphRecord(t, work.Epic7IssueToPRRun{EventGraph: run.EventGraph}, opts.AuthorityDecision.ID, v39.TypeAuthorityDecision),
+		assertEpic7GraphRecord(t, work.Epic7IssueToPRRun{EventGraph: run.EventGraph}, opts.PolicyDecision.DecisionID, v39.TypePolicyEngineAdapterDecision),
+		assertEpic7GraphRecord(t, work.Epic7IssueToPRRun{EventGraph: run.EventGraph}, run.ExecutionReceipt.CommonNode.ID, v39.TypeExecutionReceipt),
+	} {
+		if err := record.Validate(); err != nil {
+			t.Fatalf("%s schema validation: %v", record.GetCommon().ID, err)
+		}
+	}
 	assertEpic7Edge(t, run.EventGraph.EdgesFrom(opts.AuthorityRequest.ID), v39.EdgeDecidedBy, opts.AuthorityDecision.ID)
 	assertEpic7Edge(t, run.EventGraph.EdgesFrom(opts.AuthorityDecision.ID), v39.EdgeReceiptedBy, run.ExecutionReceipt.CommonNode.ID)
 	assertFileExists(t, filepath.Join(opts.WorkingDir, "artifacts", "epic11", "docs-draft-pr", "execution_receipt.json"))
@@ -315,12 +324,29 @@ func TestEpic11DocsDraftPRLiveMutationBlocksBeforeGitHubCall(t *testing.T) {
 		{name: "title hash mismatch", edit: func(opts *work.Epic11DocsDraftPROptions) {
 			opts.AuthorityRequest.TitleHash = hashForTest("different title")
 		}, want: "authority request title hash"},
+		{name: "body hash mismatch", edit: func(opts *work.Epic11DocsDraftPROptions) {
+			opts.AuthorityDecision.BodyHash = hashForTest("different body")
+		}, want: "authority decision body hash"},
+		{name: "expired authority request", edit: func(opts *work.Epic11DocsDraftPROptions) {
+			opts.AuthorityRequest.ExpiresAt = opts.Now.Add(-time.Minute)
+		}, want: "authority request is expired"},
+		{name: "actor differs from source", edit: func(opts *work.Epic11DocsDraftPROptions) {
+			opts.AuthorityRequest.ActorID = "act_other_epic11_actor"
+		}, want: "authority request actor"},
 		{name: "missing policy bundle hash", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.PolicyDecision.PolicyBundleHash = "" }, want: "policy bundle hash"},
+		{name: "policy bundle ID mismatch", edit: func(opts *work.Epic11DocsDraftPROptions) {
+			opts.PolicyDecision.PolicyBundleID = "df-v3.9.20-wrong-bundle"
+		}, want: "policy bundle ID"},
 		{name: "stale policy bundle hash", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.PolicyDecision.PolicyBundleHash = "sha256:placeholder" }, want: "policy bundle hash"},
 		{name: "policy forbidden", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.PolicyDecision.CanonicalDecision = "forbidden" }, want: "policy canonical decision"},
 		{name: "head absent", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.Target.HeadExistsOnOrigin = false }, want: "head branch must already exist"},
 		{name: "non draft", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.Target.Draft = false }, want: "draft=true is required"},
-		{name: "forbidden action", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.AuthorityRequest.Action = "pull_request.merge" }, want: "authority request action"},
+		{name: "nonce mismatch", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.AuthorityDecision.SingleUseNonce = "nonce-other" }, want: "authority decision nonce"},
+		{name: "forbidden merge action", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.AuthorityRequest.Action = "pull_request.merge" }, want: "authority request action"},
+		{name: "forbidden branch push action", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.AuthorityRequest.Action = "branch.push" }, want: "authority request action"},
+		{name: "forbidden policy default branch push action", edit: func(opts *work.Epic11DocsDraftPROptions) {
+			opts.PolicyDecision.ProtectedActionType = "repo.push.default_branch"
+		}, want: "policy action"},
 		{name: "prior receipt reuse", edit: func(opts *work.Epic11DocsDraftPROptions) { opts.PriorExecutionReceiptRefs = []string{"exec_previous"} }, want: "already used"},
 	}
 	for _, tc := range tests {
@@ -339,6 +365,32 @@ func TestEpic11DocsDraftPRLiveMutationBlocksBeforeGitHubCall(t *testing.T) {
 				t.Fatalf("client calls = %d; want 0 before failed guard", client.calls)
 			}
 		})
+	}
+}
+
+func TestEpic11DocsDraftPRLiveMutationBlocksDurableDecisionReuseBeforeGitHubCall(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	firstClient := &epic11FakePRClient{}
+	firstOpts := validEpic11Options(t, firstClient)
+	firstOpts.Causes = causes
+	firstRun, err := work.RunEpic11DocsDraftPRLiveMutation(context.Background(), ts, firstOpts)
+	if err != nil {
+		t.Fatalf("first RunEpic11DocsDraftPRLiveMutation: %v", err)
+	}
+	if firstClient.calls != 1 || firstRun.ReceiptEvidence.AuthorityDecisionRef != firstOpts.AuthorityDecision.ID {
+		t.Fatalf("first run calls=%d receipt=%#v; want one successful receipt", firstClient.calls, firstRun.ReceiptEvidence)
+	}
+
+	secondClient := &epic11FakePRClient{}
+	secondOpts := validEpic11Options(t, secondClient)
+	secondOpts.Causes = causes
+	_, err = work.RunEpic11DocsDraftPRLiveMutation(context.Background(), ts, secondOpts)
+	if err == nil || !strings.Contains(err.Error(), "authority decision already used by durable receipt refs") {
+		t.Fatalf("second err = %v; want durable reuse rejection", err)
+	}
+	if secondClient.calls != 0 {
+		t.Fatalf("second client calls = %d; want 0 before failed durable reuse guard", secondClient.calls)
 	}
 }
 

@@ -61,6 +61,8 @@ const (
 	epic11DocsPRRef          = "transpara-ai/docs#95"
 	epic11DocsMergeSHA       = "b21e2eca5ce547eebef83a1a392f5ca790c3e44d"
 	epic11DocsReviewedHead   = "b4f9844ecad41a8dc1298e3ac19df3a4e7ac9071"
+
+	epic11ExecutionReceiptArtifactLabel = "epic11_docs_draft_pr_execution_receipt"
 )
 
 // Epic7IssueToPRMode selects the authorized Gate H fixture mode.
@@ -118,9 +120,8 @@ type Epic11DocsDraftPROptions struct {
 	AuthorityDecision Epic11AuthorityDecisionEvidence
 	PolicyDecision    Epic11PolicyDecisionEvidence
 
-	// PriorExecutionReceiptRefs must be populated by the production caller from
-	// durable evidence lookup. Any prior receipt means the single-use authority
-	// has already been spent and the GitHub call is blocked.
+	// PriorExecutionReceiptRefs is an optional caller-provided defense-in-depth
+	// check. Work also scans durable receipt artifacts before any GitHub call.
 	PriorExecutionReceiptRefs []string
 }
 
@@ -303,6 +304,7 @@ type Epic11ExecutionReceiptEvidence struct {
 	AuthorityRequestRef            string    `json:"authority_request_ref"`
 	AuthorityDecisionRef           string    `json:"authority_decision_ref"`
 	PolicyEngineAdapterDecisionRef string    `json:"policy_engine_adapter_decision_ref"`
+	SingleUseNonce                 string    `json:"single_use_nonce"`
 	ActorID                        string    `json:"actor_id"`
 	ActorRole                      string    `json:"actor_role"`
 	Action                         string    `json:"action"`
@@ -545,6 +547,13 @@ func RunEpic11DocsDraftPRLiveMutation(ctx context.Context, ts *TaskStore, opts E
 	}
 
 	receiptEvidence := epic11ReceiptEvidence(ids, opts, result)
+	receiptArtifactBody, err := epic11ReceiptArtifactBody(receiptEvidence)
+	if err != nil {
+		return Epic11DocsDraftPRRun{}, err
+	}
+	if err := ts.AddArtifact(opts.Source, task.ID, epic11ExecutionReceiptArtifactLabel, "application/json", receiptArtifactBody, causes, opts.ConversationID); err != nil {
+		return Epic11DocsDraftPRRun{}, err
+	}
 	graph, records, err := epic11RecordEventGraph(ids, opts, result, receiptEvidence)
 	if err != nil {
 		return Epic11DocsDraftPRRun{}, err
@@ -661,6 +670,13 @@ func epic11ValidateOptions(ts *TaskStore, opts Epic11DocsDraftPROptions) error {
 	}
 	if err := epic11ValidateAuthorityDecision(opts); err != nil {
 		return err
+	}
+	priorReceiptRefs, err := epic11PriorExecutionReceiptRefs(ts, opts.AuthorityDecision.ID, opts.AuthorityDecision.SingleUseNonce)
+	if err != nil {
+		return err
+	}
+	if len(priorReceiptRefs) > 0 {
+		return fmt.Errorf("authority decision already used by durable receipt refs: %s", strings.Join(priorReceiptRefs, ","))
 	}
 	if err := epic11ValidatePolicyDecision(opts); err != nil {
 		return err
@@ -931,12 +947,53 @@ func epic11Mutation(opts Epic11DocsDraftPROptions) Epic11DraftPullRequestMutatio
 	}
 }
 
+func epic11PriorExecutionReceiptRefs(ts *TaskStore, authorityDecisionID, singleUseNonce string) ([]string, error) {
+	var refs []string
+	after := types.None[types.Cursor]()
+	for {
+		page, err := ts.store.ByType(EventTypeTaskArtifact, 1000, after)
+		if err != nil {
+			return nil, fmt.Errorf("fetch Epic 11 execution receipt artifacts: %w", err)
+		}
+		for _, ev := range page.Items() {
+			content, ok := ev.Content().(TaskArtifactContent)
+			if !ok || content.Label != epic11ExecutionReceiptArtifactLabel {
+				continue
+			}
+			var receipt Epic11ExecutionReceiptEvidence
+			if err := json.Unmarshal([]byte(content.Body), &receipt); err != nil {
+				return nil, fmt.Errorf("decode Epic 11 execution receipt artifact %s: %w", ev.ID().Value(), err)
+			}
+			if receipt.AuthorityDecisionRef == authorityDecisionID || receipt.SingleUseNonce == singleUseNonce {
+				refs = append(refs, ev.ID().Value()+":"+receipt.ReceiptID)
+			}
+		}
+		if !page.HasMore() {
+			break
+		}
+		after = page.Cursor()
+		if after.IsNone() {
+			return nil, errors.New("fetch Epic 11 execution receipt artifacts: page has more results but no cursor")
+		}
+	}
+	return refs, nil
+}
+
+func epic11ReceiptArtifactBody(receipt Epic11ExecutionReceiptEvidence) (string, error) {
+	body, err := json.MarshalIndent(receipt, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal Epic 11 execution receipt artifact: %w", err)
+	}
+	return string(body), nil
+}
+
 func epic11ReceiptEvidence(ids epic11FixtureIDs, opts Epic11DocsDraftPROptions, result Epic11DraftPullRequestResult) Epic11ExecutionReceiptEvidence {
 	return Epic11ExecutionReceiptEvidence{
 		ReceiptID:                      ids.executionReceipt,
 		AuthorityRequestRef:            opts.AuthorityRequest.ID,
 		AuthorityDecisionRef:           opts.AuthorityDecision.ID,
 		PolicyEngineAdapterDecisionRef: opts.PolicyDecision.DecisionID,
+		SingleUseNonce:                 opts.AuthorityDecision.SingleUseNonce,
 		ActorID:                        opts.AuthorityRequest.ActorID,
 		ActorRole:                      opts.AuthorityRequest.ActorRole,
 		Action:                         Epic11ActionPullRequestCreate,
