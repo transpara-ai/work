@@ -428,6 +428,49 @@ func TestEpic11DocsDraftPRLiveMutationReservationBlocksRetryAfterClientError(t *
 	}
 }
 
+func TestEpic11DocsDraftPRLiveMutationMalformedDurableAuthorityArtifactsFailClosed(t *testing.T) {
+	tests := []struct {
+		name  string
+		label string
+		want  string
+	}{
+		{
+			name:  "malformed reservation artifact",
+			label: "epic11_docs_draft_pr_authority_reservation",
+			want:  "decode Epic 11 authority reservation artifact",
+		},
+		{
+			name:  "malformed receipt artifact",
+			label: "epic11_docs_draft_pr_execution_receipt",
+			want:  "decode Epic 11 execution receipt artifact",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, causes := setupStore(t)
+			ts := newTaskStore(t, s)
+			task, err := ts.Create(testActor, "Malformed Epic 11 durable artifact", "", causes, testConv)
+			if err != nil {
+				t.Fatalf("Create poison task: %v", err)
+			}
+			if err := ts.AddArtifact(testActor, task.ID, tc.label, "application/json", "{not-json", causes, testConv); err != nil {
+				t.Fatalf("AddArtifact poison: %v", err)
+			}
+
+			client := &epic11FakePRClient{}
+			opts := validEpic11Options(t, client)
+			opts.Causes = causes
+			_, err = work.RunEpic11DocsDraftPRLiveMutation(context.Background(), ts, opts)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v; want containing %q", err, tc.want)
+			}
+			if client.calls != 0 {
+				t.Fatalf("client calls = %d; want 0 for malformed durable artifact", client.calls)
+			}
+		})
+	}
+}
+
 func TestEpic11DocsDraftPRLiveMutationReservationBlocksConcurrentSameNonceBeforeGitHubCall(t *testing.T) {
 	s, causes := setupStore(t)
 	ts := newTaskStore(t, s)

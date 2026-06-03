@@ -55,6 +55,17 @@ in-process reservation lock. Later attempts with the same authority decision
 or nonce fail closed on that reservation even if the original client call
 failed before a post-confirmation receipt could be recorded.
 
+Malformed authority reservation or receipt artifacts fail closed before the
+GitHub client is called. Recovery from a poisoned durable artifact is an
+operator availability concern, not an automatic mutation. Work enforces
+single-use for the authority decision and nonce it receives; the just-in-time
+approval process must provide a unique nonce for each separately authorized
+attempt.
+
+The durable authority lookup is a paginated Work task-artifact scan for this
+bounded slice. Indexing can be added later as scale work without changing the
+fail-closed authority semantics.
+
 ## Receipt Boundary
 
 `ExecutionReceipt` evidence is created only after the pull-request client
