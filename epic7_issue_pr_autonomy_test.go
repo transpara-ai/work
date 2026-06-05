@@ -376,6 +376,39 @@ func TestEpic11DocsDraftPRLiveMutationBlocksBeforeGitHubCall(t *testing.T) {
 	}
 }
 
+func TestEpic11DocsDraftPRLiveMutationPreflightRejectsMovedHeadBeforeGitHubCall(t *testing.T) {
+	client := &epic11FakePRClient{preflightSHA: "deadbeefmovedheadsha"}
+	opts := validEpic11Options(t, client)
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	opts.Causes = causes
+	_, err := work.RunEpic11DocsDraftPRLiveMutation(context.Background(), ts, opts)
+	if err == nil || !strings.Contains(err.Error(), "does not match approved head SHA") {
+		t.Fatalf("err = %v; want remote head SHA mismatch", err)
+	}
+	if client.calls != 0 {
+		t.Fatalf("client.calls = %d; want 0 (no mutation after preflight rejection)", client.calls)
+	}
+	if client.preflightCalls != 1 {
+		t.Fatalf("preflightCalls = %d; want 1", client.preflightCalls)
+	}
+}
+
+func TestEpic11DocsDraftPRLiveMutationPreflightRejectsOutOfScopeFileBeforeGitHubCall(t *testing.T) {
+	client := &epic11FakePRClient{preflightFiles: []string{"secrets.env"}}
+	opts := validEpic11Options(t, client)
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	opts.Causes = causes
+	_, err := work.RunEpic11DocsDraftPRLiveMutation(context.Background(), ts, opts)
+	if err == nil || !strings.Contains(err.Error(), "outside dark-factory/") {
+		t.Fatalf("err = %v; want out-of-scope remote file rejection", err)
+	}
+	if client.calls != 0 {
+		t.Fatalf("client.calls = %d; want 0 (no mutation after preflight rejection)", client.calls)
+	}
+}
+
 func TestEpic11DocsDraftPRLiveMutationBlocksDurableDecisionReuseBeforeGitHubCall(t *testing.T) {
 	s, causes := setupStore(t)
 	ts := newTaskStore(t, s)
@@ -897,10 +930,30 @@ func findEpic7Trial(t *testing.T, run work.Epic7IssueToPRRun, id string) work.Ep
 }
 
 type epic11FakePRClient struct {
-	calls     int
-	mutations []work.Epic11DraftPullRequestMutation
-	result    work.Epic11DraftPullRequestResult
-	err       error
+	calls          int
+	mutations      []work.Epic11DraftPullRequestMutation
+	result         work.Epic11DraftPullRequestResult
+	err            error
+	preflightCalls int
+	preflightSHA   string
+	preflightFiles []string
+	preflightErr   error
+}
+
+func (c *epic11FakePRClient) PreflightHead(_ context.Context, m work.Epic11DraftPullRequestMutation) (work.Epic11RemoteHeadState, error) {
+	c.preflightCalls++
+	if c.preflightErr != nil {
+		return work.Epic11RemoteHeadState{}, c.preflightErr
+	}
+	sha := c.preflightSHA
+	if sha == "" {
+		sha = m.HeadSHA // default: remote matches the approved head SHA
+	}
+	files := c.preflightFiles
+	if files == nil {
+		files = []string{"dark-factory/civic-roles.md"} // default: in scope
+	}
+	return work.Epic11RemoteHeadState{HeadSHA: sha, ChangedFiles: files}, nil
 }
 
 func (c *epic11FakePRClient) CreateDraftPullRequest(_ context.Context, mutation work.Epic11DraftPullRequestMutation) (work.Epic11DraftPullRequestResult, error) {
@@ -965,6 +1018,10 @@ func (c *epic11BlockingPRClient) CreateDraftPullRequest(ctx context.Context, mut
 		State:                        "open",
 		CreatedAt:                    time.Date(2026, 6, 3, 13, 0, 2, 0, time.UTC),
 	}, nil
+}
+
+func (c *epic11BlockingPRClient) PreflightHead(_ context.Context, m work.Epic11DraftPullRequestMutation) (work.Epic11RemoteHeadState, error) {
+	return work.Epic11RemoteHeadState{HeadSHA: m.HeadSHA, ChangedFiles: []string{"dark-factory/civic-roles.md"}}, nil
 }
 
 func (c *epic11BlockingPRClient) Calls() int {

@@ -104,7 +104,19 @@ type Epic7IssueToPROptions struct {
 // Epic11PullRequestCreator is the only live side-effect interface for Epic 11.
 // Production callers provide a GitHub-backed implementation; tests provide a
 // fake. Work validates authority and policy evidence before this interface is called.
+// Epic11RemoteHeadState is the remote state of the head ref observed at
+// preflight time. It binds the approved head SHA and the dark-factory/ diff
+// scope to the actual remote before the irreversible draft-PR creation.
+type Epic11RemoteHeadState struct {
+	HeadSHA      string   `json:"head_sha"`
+	ChangedFiles []string `json:"changed_files"`
+}
+
 type Epic11PullRequestCreator interface {
+	// PreflightHead reports the remote head SHA and the base...head changed-file
+	// list, so the caller can verify them against the approved target before any
+	// mutation. It performs no mutation.
+	PreflightHead(context.Context, Epic11DraftPullRequestMutation) (Epic11RemoteHeadState, error)
 	CreateDraftPullRequest(context.Context, Epic11DraftPullRequestMutation) (Epic11DraftPullRequestResult, error)
 }
 
@@ -568,6 +580,24 @@ func RunEpic11DocsDraftPRLiveMutation(ctx context.Context, ts *TaskStore, opts E
 	}
 
 	mutation := epic11Mutation(opts)
+
+	// Bind the approved head SHA and dark-factory/ diff scope to the live remote
+	// before the irreversible create. A moved branch or an out-of-scope file
+	// fails closed here, so the PR side-effect never fires on unapproved content.
+	headState, err := opts.Client.PreflightHead(ctx, mutation)
+	if err != nil {
+		if failErr := ts.TransitionTask(opts.Source, task.ID, StatusFailed, "Epic 11 remote head preflight failed before GitHub mutation: "+err.Error(), []string{ids.authorityRequest, ids.authorityDecision, ids.policyDecision}, causes, opts.ConversationID); failErr != nil {
+			return Epic11DocsDraftPRRun{}, fmt.Errorf("preflight head: %w; fail task: %v", err, failErr)
+		}
+		return Epic11DocsDraftPRRun{}, fmt.Errorf("preflight head: %w", err)
+	}
+	if err := epic11ValidateRemoteHead(opts.Target, headState); err != nil {
+		if failErr := ts.TransitionTask(opts.Source, task.ID, StatusFailed, "Epic 11 remote head preflight rejected the mutation: "+err.Error(), []string{ids.authorityRequest, ids.authorityDecision, ids.policyDecision}, causes, opts.ConversationID); failErr != nil {
+			return Epic11DocsDraftPRRun{}, fmt.Errorf("validate remote head: %w; fail task: %v", err, failErr)
+		}
+		return Epic11DocsDraftPRRun{}, fmt.Errorf("validate remote head: %w", err)
+	}
+
 	result, err := opts.Client.CreateDraftPullRequest(ctx, mutation)
 	if err != nil {
 		if failErr := ts.TransitionTask(opts.Source, task.ID, StatusFailed, "Epic 11 draft PR client returned before confirmed draft PR creation: "+err.Error(), []string{ids.authorityRequest, ids.authorityDecision, ids.policyDecision}, causes, opts.ConversationID); failErr != nil {
@@ -982,6 +1012,28 @@ func epic11Mutation(opts Epic11DocsDraftPROptions) Epic11DraftPullRequestMutatio
 		Draft:               true,
 		MaintainerCanModify: target.MaintainerCanModify,
 	}
+}
+
+// epic11ValidateRemoteHead fails closed unless the live remote head SHA matches
+// the approved head SHA and every file in the base...head diff is under
+// dark-factory/. It binds the authorized decision to the actual remote state so
+// a moved branch or an out-of-scope file cannot reach the create call.
+func epic11ValidateRemoteHead(target Epic11DraftPullRequestTarget, state Epic11RemoteHeadState) error {
+	if strings.TrimSpace(state.HeadSHA) == "" {
+		return errors.New("remote head SHA is empty")
+	}
+	if state.HeadSHA != target.HeadSHA {
+		return fmt.Errorf("remote head SHA %q does not match approved head SHA %q", state.HeadSHA, target.HeadSHA)
+	}
+	if len(state.ChangedFiles) == 0 {
+		return errors.New("remote head diff is empty")
+	}
+	for _, path := range state.ChangedFiles {
+		if !strings.HasPrefix(path, "dark-factory/") {
+			return fmt.Errorf("remote changed file %q is outside dark-factory/", path)
+		}
+	}
+	return nil
 }
 
 func epic11ReserveAuthorityUse(ts *TaskStore, opts Epic11DocsDraftPROptions, taskID types.EventID, causes []types.EventID) (Epic11AuthorityReservationEvidence, error) {

@@ -1,6 +1,7 @@
 package work
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/transpara-ai/eventgraph/go/pkg/types"
@@ -62,6 +63,18 @@ func idSuffix(id string) string {
 // the task is assignable to the Implementer. Coordination thereafter is via the
 // civic roles on the shared graph.
 func SeedFactoryOrder(ts *TaskStore, source types.ActorID, order FactoryOrder, causes []types.EventID, convID types.ConversationID) (Task, error) {
+	// Readiness checks gate-label presence, not body content, so a blank gate
+	// would let an order go ready with no contract. Reject empty gates up front.
+	if strings.TrimSpace(order.DefinitionOfDone) == "" {
+		return Task{}, fmt.Errorf("factory order %q: definition_of_done is required", order.ID)
+	}
+	if strings.TrimSpace(order.AcceptanceCriteria) == "" {
+		return Task{}, fmt.Errorf("factory order %q: acceptance_criteria is required", order.ID)
+	}
+	if strings.TrimSpace(order.TestPlan) == "" {
+		return Task{}, fmt.Errorf("factory order %q: test_plan is required", order.ID)
+	}
+
 	risk := order.RiskClass
 	if risk == "" {
 		risk = "low"

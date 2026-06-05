@@ -75,6 +75,37 @@ func TestEpic11GitHubClientCreatesDraftPR(t *testing.T) {
 	}
 }
 
+func TestEpic11GitHubClientPreflightHeadReturnsSHAAndFiles(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "/commits/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"sha": "remotesha"})
+		case strings.Contains(r.URL.Path, "/compare/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"files": []map[string]any{{"filename": "dark-factory/civic-roles.md"}},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := work.NewEpic11GitHubPullRequestCreator("test-token", work.WithEpic11GitHubBaseURL(srv.URL))
+	state, err := client.PreflightHead(context.Background(), work.Epic11DraftPullRequestMutation{
+		Repository: "transpara-ai/docs", BaseRef: "main", HeadRef: "codex/civic-roles", HeadSHA: "remotesha",
+	})
+	if err != nil {
+		t.Fatalf("PreflightHead: %v", err)
+	}
+	if state.HeadSHA != "remotesha" {
+		t.Fatalf("HeadSHA = %q; want remotesha", state.HeadSHA)
+	}
+	if len(state.ChangedFiles) != 1 || state.ChangedFiles[0] != "dark-factory/civic-roles.md" {
+		t.Fatalf("ChangedFiles = %v; want [dark-factory/civic-roles.md]", state.ChangedFiles)
+	}
+}
+
 func TestEpic11GitHubClientEmptyTokenErrors(t *testing.T) {
 	client := work.NewEpic11GitHubPullRequestCreator("")
 	_, err := client.CreateDraftPullRequest(context.Background(), work.Epic11DraftPullRequestMutation{

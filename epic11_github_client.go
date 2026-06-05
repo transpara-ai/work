@@ -134,3 +134,64 @@ func (c *Epic11GitHubPullRequestCreator) CreateDraftPullRequest(ctx context.Cont
 		CreatedAt:                    gh.CreatedAt,
 	}, nil
 }
+
+// PreflightHead fetches the remote head ref SHA and the base...head changed-file
+// list via the GitHub REST API, so the caller can bind the approved head SHA and
+// the dark-factory/ diff scope to the live remote before creating the PR. It
+// performs no mutation.
+func (c *Epic11GitHubPullRequestCreator) PreflightHead(ctx context.Context, m Epic11DraftPullRequestMutation) (Epic11RemoteHeadState, error) {
+	if c.token == "" {
+		return Epic11RemoteHeadState{}, fmt.Errorf("epic11 github client: empty token")
+	}
+	owner, repo, ok := strings.Cut(m.Repository, "/")
+	if !ok {
+		return Epic11RemoteHeadState{}, fmt.Errorf("epic11 github client: repository %q is not owner/repo", m.Repository)
+	}
+
+	var commit struct {
+		SHA string `json:"sha"`
+	}
+	if err := c.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/commits/%s", c.baseURL, owner, repo, m.HeadRef), &commit); err != nil {
+		return Epic11RemoteHeadState{}, fmt.Errorf("epic11 github client: head ref: %w", err)
+	}
+
+	var cmp struct {
+		Files []struct {
+			Filename string `json:"filename"`
+		} `json:"files"`
+	}
+	if err := c.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/compare/%s...%s", c.baseURL, owner, repo, m.BaseRef, m.HeadRef), &cmp); err != nil {
+		return Epic11RemoteHeadState{}, fmt.Errorf("epic11 github client: compare: %w", err)
+	}
+	files := make([]string, 0, len(cmp.Files))
+	for _, f := range cmp.Files {
+		files = append(files, f.Filename)
+	}
+	return Epic11RemoteHeadState{HeadSHA: commit.SHA, ChangedFiles: files}, nil
+}
+
+// getJSON performs an authenticated GET and decodes a 200 response body into v.
+func (c *Epic11GitHubPullRequestCreator) getJSON(ctx context.Context, url string, v any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		var ghErr struct {
+			Message string `json:"message"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&ghErr)
+		return fmt.Errorf("github returned %s: %s", resp.Status, ghErr.Message)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+	return nil
+}
