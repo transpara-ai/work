@@ -1,7 +1,6 @@
 package work_test
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/transpara-ai/work"
@@ -80,34 +79,86 @@ func TestSeedFactoryOrderSynthesizesDefaults(t *testing.T) {
 	}
 }
 
-func TestSeedFactoryOrderRejectsEmptyReadinessGates(t *testing.T) {
-	base := work.FactoryOrder{
-		ID:                 "fo_empty_gate",
-		Title:              "Empty gate check",
-		Intent:             "Verify empty readiness gates are rejected before a task is seeded.",
-		DefinitionOfDone:   "d",
-		AcceptanceCriteria: "a",
-		TestPlan:           "t",
+func TestSeedFactoryOrderAllowsAbsentGates(t *testing.T) {
+	// D: gate bodies are optional at seed. The planner attaches any that are
+	// absent, and Readiness (not the seed) enforces non-empty. So seeding an
+	// order without definition_of_done/acceptance_criteria/test_plan must
+	// succeed and yield a NOT-ready task whose missing gates are exactly the
+	// three readiness gates.
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	order := work.FactoryOrder{
+		ID:     "fo_absent_gates",
+		Title:  "Absent gates",
+		Intent: "Seed without gate bodies; the planner fills them later.",
+		// DefinitionOfDone / AcceptanceCriteria / TestPlan intentionally empty.
 	}
-	tests := []struct {
-		name string
-		edit func(*work.FactoryOrder)
-		want string
-	}{
-		{"blank definition of done", func(o *work.FactoryOrder) { o.DefinitionOfDone = "  " }, "definition_of_done is required"},
-		{"empty acceptance criteria", func(o *work.FactoryOrder) { o.AcceptanceCriteria = "" }, "acceptance_criteria is required"},
-		{"empty test plan", func(o *work.FactoryOrder) { o.TestPlan = "" }, "test_plan is required"},
+	task, err := work.SeedFactoryOrder(ts, testActor, order, causes, testConv)
+	if err != nil {
+		t.Fatalf("SeedFactoryOrder with absent gates: %v", err)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			s, causes := setupStore(t)
-			ts := newTaskStore(t, s)
-			order := base
-			tc.edit(&order)
-			_, err := work.SeedFactoryOrder(ts, testActor, order, causes, testConv)
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("err = %v; want containing %q", err, tc.want)
-			}
-		})
+	readiness, err := ts.Readiness(task.ID)
+	if err != nil {
+		t.Fatalf("Readiness: %v", err)
+	}
+	if readiness.Ready {
+		t.Fatalf("task should not be ready with absent gates")
+	}
+	if len(readiness.MissingGates) != 3 {
+		t.Fatalf("MissingGates = %v, want all 3 readiness gates", readiness.MissingGates)
+	}
+}
+
+func TestReadinessTreatsEmptyGateBodyAsMissing(t *testing.T) {
+	// D defense-in-depth: a required gate artifact with an empty body does NOT
+	// satisfy readiness — only a non-empty body does. A label-only (empty)
+	// artifact must not mark a task ready; the planner must attach a real body.
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	task, err := work.SeedFactoryOrder(ts, testActor, work.FactoryOrder{
+		ID: "fo_empty_body", Title: "Empty body", Intent: "x",
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("SeedFactoryOrder: %v", err)
+	}
+
+	addArtifact := func(label, body string) {
+		t.Helper()
+		if err := ts.AddArtifact(testActor, task.ID, label, "text/markdown", body, causes, testConv); err != nil {
+			t.Fatalf("AddArtifact %s: %v", label, err)
+		}
+	}
+	// Two real gates and one whitespace-only (empty) body.
+	addArtifact(work.GateAcceptanceCriteria, "real acceptance criteria")
+	addArtifact(work.GateTestPlan, "real test plan")
+	addArtifact(work.GateDefinitionOfDone, "   ")
+
+	r, err := ts.Readiness(task.ID)
+	if err != nil {
+		t.Fatalf("Readiness: %v", err)
+	}
+	if r.Ready {
+		t.Fatalf("task ready despite empty definition_of_done body; missing=%v present=%v", r.MissingGates, r.PresentGates)
+	}
+	missingDOD := false
+	for _, g := range r.MissingGates {
+		if g == work.GateDefinitionOfDone {
+			missingDOD = true
+		}
+	}
+	if !missingDOD {
+		t.Fatalf("MissingGates = %v, want it to include %s", r.MissingGates, work.GateDefinitionOfDone)
+	}
+
+	// Filling the body with real content makes the task ready.
+	addArtifact(work.GateDefinitionOfDone, "real definition of done")
+	r2, err := ts.Readiness(task.ID)
+	if err != nil {
+		t.Fatalf("Readiness after fill: %v", err)
+	}
+	if !r2.Ready {
+		t.Fatalf("task not ready after filling definition_of_done: missing %v", r2.MissingGates)
 	}
 }
