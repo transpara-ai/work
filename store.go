@@ -1611,7 +1611,11 @@ func (ts *TaskStore) Readiness(taskID types.EventID) (TaskReadiness, error) {
 			continue
 		}
 		label := normalizeGateLabel(c.Label)
-		if isRequiredGateLabel(label) {
+		// A required gate counts as present only when its body is non-empty: a
+		// label-only (empty) artifact does not satisfy readiness. This is where the
+		// non-empty gate contract is enforced (D), regardless of whether the seed
+		// or the planner attached the gate.
+		if isRequiredGateLabel(label) && strings.TrimSpace(c.Body) != "" {
 			present[label] = true
 		}
 	}

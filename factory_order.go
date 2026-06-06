@@ -1,7 +1,6 @@
 package work
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/transpara-ai/eventgraph/go/pkg/types"
@@ -63,18 +62,10 @@ func idSuffix(id string) string {
 // the task is assignable to the Implementer. Coordination thereafter is via the
 // civic roles on the shared graph.
 func SeedFactoryOrder(ts *TaskStore, source types.ActorID, order FactoryOrder, causes []types.EventID, convID types.ConversationID) (Task, error) {
-	// Readiness checks gate-label presence, not body content, so a blank gate
-	// would let an order go ready with no contract. Reject empty gates up front.
-	if strings.TrimSpace(order.DefinitionOfDone) == "" {
-		return Task{}, fmt.Errorf("factory order %q: definition_of_done is required", order.ID)
-	}
-	if strings.TrimSpace(order.AcceptanceCriteria) == "" {
-		return Task{}, fmt.Errorf("factory order %q: acceptance_criteria is required", order.ID)
-	}
-	if strings.TrimSpace(order.TestPlan) == "" {
-		return Task{}, fmt.Errorf("factory order %q: test_plan is required", order.ID)
-	}
-
+	// Gate bodies are OPTIONAL at seed: the planner attaches any that are absent,
+	// and Readiness — not the seed — enforces that each required gate has a
+	// non-empty body before the task can be assigned. So empty gates are not
+	// rejected here; the empty ones are simply not written (see the gates loop).
 	risk := order.RiskClass
 	if risk == "" {
 		risk = "low"
@@ -123,6 +114,12 @@ func SeedFactoryOrder(ts *TaskStore, source types.ActorID, order FactoryOrder, c
 		{GateTestPlan, "text/markdown", order.TestPlan},
 	}
 	for _, g := range gates {
+		// A required gate with no body is left unwritten — the planner attaches it
+		// later, and Readiness keeps the task not-ready until a non-empty body
+		// exists. (order_kind is not a readiness gate, so it is always written.)
+		if isRequiredGateLabel(g.label) && strings.TrimSpace(g.body) == "" {
+			continue
+		}
 		if err := ts.AddArtifact(source, task.ID, g.label, g.mime, g.body, artifactCauses, convID); err != nil {
 			return Task{}, err
 		}
