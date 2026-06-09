@@ -175,22 +175,91 @@ func TestSeedFactoryOrderRecordsStructuredModelOverrides(t *testing.T) {
 	if override.ResolvedProvider != "anthropic" || override.AuthMode != "api-key" || override.MaxCostPerCallUSD == nil || *override.MaxCostPerCallUSD != maxCost {
 		t.Fatalf("resolved override = %+v, want anthropic/api-key with cost cap", override)
 	}
+
+	replayed := newTaskStore(t, s)
+	projection, err := replayed.ProjectTask(task.ID)
+	if err != nil {
+		t.Fatalf("ProjectTask: %v", err)
+	}
+	if len(projection.ModelOverrides) != 1 {
+		t.Fatalf("projected model overrides = %+v, want one", projection.ModelOverrides)
+	}
+	projected := projection.ModelOverrides[0]
+	if projected.Role != "guardian" || projected.ResolvedProvider != "anthropic" || projected.AuthMode != "api-key" {
+		t.Fatalf("projected override = %+v, want guardian anthropic api-key", projected)
+	}
 }
 
 func TestSeedFactoryOrderRejectsInvalidModelOverrides(t *testing.T) {
-	s, causes := setupStore(t)
-	ts := newTaskStore(t, s)
-
-	_, err := work.SeedFactoryOrder(ts, testActor, work.FactoryOrder{
-		ID:    "fo_bad_model_override",
-		Title: "Bad model override",
-		ModelOverrides: []work.FactoryOrderModelOverride{
-			{Role: "guardian", Model: "sonnet"},
-			{Role: "guardian", Model: "opus"},
+	negativeCost := -0.01
+	tests := []struct {
+		name      string
+		overrides []work.FactoryOrderModelOverride
+		wantErr   string
+	}{
+		{
+			name:      "missing role",
+			overrides: []work.FactoryOrderModelOverride{{Model: "sonnet"}},
+			wantErr:   "role is required",
 		},
-	}, causes, testConv)
-	if err == nil || !strings.Contains(err.Error(), "duplicated") {
-		t.Fatalf("expected duplicate-role model override error, got %v", err)
+		{
+			name:      "control character",
+			overrides: []work.FactoryOrderModelOverride{{Role: "guardian", Model: "son\nnet"}},
+			wantErr:   "control characters",
+		},
+		{
+			name: "duplicate role",
+			overrides: []work.FactoryOrderModelOverride{
+				{Role: "guardian", Model: "sonnet"},
+				{Role: "guardian", Model: "opus"},
+			},
+			wantErr: "duplicated",
+		},
+		{
+			name:      "invalid requested auth mode",
+			overrides: []work.FactoryOrderModelOverride{{Role: "guardian", Model: "sonnet", RequestedAuthMode: "oauth"}},
+			wantErr:   "requested_auth_mode",
+		},
+		{
+			name:      "invalid resolved auth mode",
+			overrides: []work.FactoryOrderModelOverride{{Role: "guardian", Model: "sonnet", AuthMode: "oauth"}},
+			wantErr:   "auth_mode",
+		},
+		{
+			name:      "negative cost cap",
+			overrides: []work.FactoryOrderModelOverride{{Role: "guardian", Model: "sonnet", MaxCostPerCallUSD: &negativeCost}},
+			wantErr:   "max_cost_per_call_usd",
+		},
+		{
+			name:      "empty capability",
+			overrides: []work.FactoryOrderModelOverride{{Role: "guardian", Model: "sonnet", RequiredCapabilities: []string{"reasoning", ""}}},
+			wantErr:   "required_capabilities contains empty",
+		},
+		{
+			name:      "capability control character",
+			overrides: []work.FactoryOrderModelOverride{{Role: "guardian", Model: "sonnet", RequiredCapabilities: []string{"cod\ning"}}},
+			wantErr:   "required_capabilities contains control",
+		},
+		{
+			name:      "no substantive override",
+			overrides: []work.FactoryOrderModelOverride{{Role: "guardian"}},
+			wantErr:   "must set model",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, causes := setupStore(t)
+			ts := newTaskStore(t, s)
+
+			_, err := work.SeedFactoryOrder(ts, testActor, work.FactoryOrder{
+				ID:             "fo_bad_model_override",
+				Title:          "Bad model override",
+				ModelOverrides: tt.overrides,
+			}, causes, testConv)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected model override error containing %q, got %v", tt.wantErr, err)
+			}
+		})
 	}
 }
 

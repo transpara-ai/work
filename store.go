@@ -147,6 +147,7 @@ type TaskProjection struct {
 	Blocked             bool
 	Ready               bool
 	Linkage             TaskLinkage
+	ModelOverrides      []FactoryOrderModelOverride
 	Verification        VerificationEvidence
 	FailureRepair       FailureRepairReferences
 	SupersededBy        string
@@ -1373,6 +1374,10 @@ func (ts *TaskStore) ProjectTask(taskID types.EventID) (TaskProjection, error) {
 	if err != nil {
 		return TaskProjection{}, err
 	}
+	modelOverrides, err := ts.projectFactoryOrderModelOverrides(taskID)
+	if err != nil {
+		return TaskProjection{}, err
+	}
 	verification, err := ts.projectVerification(taskID)
 	if err != nil {
 		return TaskProjection{}, err
@@ -1396,6 +1401,7 @@ func (ts *TaskStore) ProjectTask(taskID types.EventID) (TaskProjection, error) {
 		Blocked:             blocked || status == StatusBlocked || status == StatusPolicyBlocked,
 		Ready:               status == StatusReady || (readiness.Ready && status == StatusRepaired),
 		Linkage:             linkage,
+		ModelOverrides:      modelOverrides,
 		Verification:        verification,
 		FailureRepair:       failureRepair,
 		SupersededBy:        supersededBy,

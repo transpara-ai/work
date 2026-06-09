@@ -249,6 +249,33 @@ func validFactoryOrderAuthMode(value string) bool {
 	}
 }
 
+func (ts *TaskStore) projectFactoryOrderModelOverrides(taskID types.EventID) ([]FactoryOrderModelOverride, error) {
+	artifacts, err := ts.ListArtifacts(taskID)
+	if err != nil {
+		return nil, err
+	}
+	var body string
+	for _, artifact := range artifacts {
+		if artifact.Label == FactoryOrderModelOverridesArtifactLabel {
+			body = artifact.Body
+		}
+	}
+	if strings.TrimSpace(body) == "" {
+		return nil, nil
+	}
+	var decoded struct {
+		ModelOverrides []FactoryOrderModelOverride `json:"model_overrides"`
+	}
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		return nil, fmt.Errorf("parse factory order model overrides: %w", err)
+	}
+	normalized, err := normalizeFactoryOrderModelOverrides(decoded.ModelOverrides)
+	if err != nil {
+		return nil, err
+	}
+	return normalized, nil
+}
+
 func normalizeFactoryOrderCapabilities(values []string) []string {
 	if len(values) == 0 {
 		return nil
