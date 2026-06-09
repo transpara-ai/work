@@ -1,6 +1,8 @@
 package work_test
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/transpara-ai/work"
@@ -107,6 +109,88 @@ func TestSeedFactoryOrderAllowsAbsentGates(t *testing.T) {
 	}
 	if len(readiness.MissingGates) != 3 {
 		t.Fatalf("MissingGates = %v, want all 3 readiness gates", readiness.MissingGates)
+	}
+}
+
+func TestSeedFactoryOrderRecordsStructuredModelOverrides(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	maxCost := 0.25
+
+	task, err := work.SeedFactoryOrder(ts, testActor, work.FactoryOrder{
+		ID:                 "fo_model_override",
+		Title:              "Model override",
+		Intent:             "Seed with structured model override.",
+		DefinitionOfDone:   "d",
+		AcceptanceCriteria: "a",
+		TestPlan:           "t",
+		ModelOverrides: []work.FactoryOrderModelOverride{
+			{
+				Role:                 "guardian",
+				Model:                "api-sonnet",
+				RequestedAuthMode:    "api-key",
+				RequiredCapabilities: []string{"reasoning"},
+				MaxCostPerCallUSD:    &maxCost,
+				ResolvedModel:        "api-claude-sonnet-4-6",
+				ResolvedProvider:     "anthropic",
+				AuthMode:             "api-key",
+			},
+		},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("SeedFactoryOrder: %v", err)
+	}
+
+	artifacts, err := ts.ListArtifacts(task.ID)
+	if err != nil {
+		t.Fatalf("ListArtifacts: %v", err)
+	}
+	var body string
+	for _, artifact := range artifacts {
+		if artifact.Label == work.FactoryOrderModelOverridesArtifactLabel {
+			if artifact.MediaType != "application/json" {
+				t.Fatalf("override artifact media type = %q, want application/json", artifact.MediaType)
+			}
+			body = artifact.Body
+			break
+		}
+	}
+	if body == "" {
+		t.Fatalf("missing %s artifact in %+v", work.FactoryOrderModelOverridesArtifactLabel, artifacts)
+	}
+
+	var decoded struct {
+		ModelOverrides []work.FactoryOrderModelOverride `json:"model_overrides"`
+	}
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Fatalf("override artifact is not JSON: %v\n%s", err, body)
+	}
+	if len(decoded.ModelOverrides) != 1 {
+		t.Fatalf("model_overrides = %+v, want one", decoded.ModelOverrides)
+	}
+	override := decoded.ModelOverrides[0]
+	if override.Role != "guardian" || override.Model != "api-sonnet" || override.RequestedAuthMode != "api-key" {
+		t.Fatalf("override = %+v, want guardian api-sonnet api-key", override)
+	}
+	if override.ResolvedProvider != "anthropic" || override.AuthMode != "api-key" || override.MaxCostPerCallUSD == nil || *override.MaxCostPerCallUSD != maxCost {
+		t.Fatalf("resolved override = %+v, want anthropic/api-key with cost cap", override)
+	}
+}
+
+func TestSeedFactoryOrderRejectsInvalidModelOverrides(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	_, err := work.SeedFactoryOrder(ts, testActor, work.FactoryOrder{
+		ID:    "fo_bad_model_override",
+		Title: "Bad model override",
+		ModelOverrides: []work.FactoryOrderModelOverride{
+			{Role: "guardian", Model: "sonnet"},
+			{Role: "guardian", Model: "opus"},
+		},
+	}, causes, testConv)
+	if err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("expected duplicate-role model override error, got %v", err)
 	}
 }
 

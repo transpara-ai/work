@@ -27,6 +27,9 @@ const (
 	GateAcceptanceCriteria = "acceptance_criteria"
 	// GateTestPlan is the task artifact label for executable verification steps.
 	GateTestPlan = "test_plan"
+	// FactoryOrderModelOverridesArtifactLabel carries validated per-order model
+	// override policy as structured JSON, not free-form markdown intent text.
+	FactoryOrderModelOverridesArtifactLabel = "factory_order_model_overrides"
 )
 
 // RequiredReadinessGateLabels returns the artifact labels that must exist before
