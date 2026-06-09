@@ -216,6 +216,14 @@ func TestSeedFactoryOrderRejectsInvalidModelOverrides(t *testing.T) {
 			wantErr: "duplicated",
 		},
 		{
+			name: "duplicate role case variant",
+			overrides: []work.FactoryOrderModelOverride{
+				{Role: "guardian", Model: "sonnet"},
+				{Role: "Guardian", Model: "opus"},
+			},
+			wantErr: "duplicated",
+		},
+		{
 			name:      "invalid requested auth mode",
 			overrides: []work.FactoryOrderModelOverride{{Role: "guardian", Model: "sonnet", RequestedAuthMode: "oauth"}},
 			wantErr:   "requested_auth_mode",

@@ -203,10 +203,11 @@ func normalizeFactoryOrderModelOverrides(overrides []FactoryOrderModelOverride) 
 			hasControlRune(normalized.ResolvedModel) || hasControlRune(normalized.ResolvedProvider) || hasControlRune(normalized.AuthMode) {
 			return nil, fmt.Errorf("model_overrides[%d] contains control characters", i)
 		}
-		if _, duplicate := seen[normalized.Role]; duplicate {
+		roleKey := strings.ToLower(normalized.Role)
+		if _, duplicate := seen[roleKey]; duplicate {
 			return nil, fmt.Errorf("model_overrides[%d].role %q is duplicated", i, normalized.Role)
 		}
-		seen[normalized.Role] = struct{}{}
+		seen[roleKey] = struct{}{}
 		if !validFactoryOrderAuthMode(normalized.RequestedAuthMode) {
 			return nil, fmt.Errorf("model_overrides[%d].requested_auth_mode must be subscription, api-key, or local", i)
 		}
