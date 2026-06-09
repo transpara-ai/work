@@ -1,6 +1,8 @@
 package work_test
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/transpara-ai/work"
@@ -107,6 +109,157 @@ func TestSeedFactoryOrderAllowsAbsentGates(t *testing.T) {
 	}
 	if len(readiness.MissingGates) != 3 {
 		t.Fatalf("MissingGates = %v, want all 3 readiness gates", readiness.MissingGates)
+	}
+}
+
+func TestSeedFactoryOrderRecordsStructuredModelOverrides(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	maxCost := 0.25
+
+	task, err := work.SeedFactoryOrder(ts, testActor, work.FactoryOrder{
+		ID:                 "fo_model_override",
+		Title:              "Model override",
+		Intent:             "Seed with structured model override.",
+		DefinitionOfDone:   "d",
+		AcceptanceCriteria: "a",
+		TestPlan:           "t",
+		ModelOverrides: []work.FactoryOrderModelOverride{
+			{
+				Role:                 "guardian",
+				Model:                "api-sonnet",
+				RequestedAuthMode:    "api-key",
+				RequiredCapabilities: []string{"reasoning"},
+				MaxCostPerCallUSD:    &maxCost,
+				ResolvedModel:        "api-claude-sonnet-4-6",
+				ResolvedProvider:     "anthropic",
+				AuthMode:             "api-key",
+			},
+		},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("SeedFactoryOrder: %v", err)
+	}
+
+	artifacts, err := ts.ListArtifacts(task.ID)
+	if err != nil {
+		t.Fatalf("ListArtifacts: %v", err)
+	}
+	var body string
+	for _, artifact := range artifacts {
+		if artifact.Label == work.FactoryOrderModelOverridesArtifactLabel {
+			if artifact.MediaType != "application/json" {
+				t.Fatalf("override artifact media type = %q, want application/json", artifact.MediaType)
+			}
+			body = artifact.Body
+			break
+		}
+	}
+	if body == "" {
+		t.Fatalf("missing %s artifact in %+v", work.FactoryOrderModelOverridesArtifactLabel, artifacts)
+	}
+
+	var decoded struct {
+		ModelOverrides []work.FactoryOrderModelOverride `json:"model_overrides"`
+	}
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Fatalf("override artifact is not JSON: %v\n%s", err, body)
+	}
+	if len(decoded.ModelOverrides) != 1 {
+		t.Fatalf("model_overrides = %+v, want one", decoded.ModelOverrides)
+	}
+	override := decoded.ModelOverrides[0]
+	if override.Role != "guardian" || override.Model != "api-sonnet" || override.RequestedAuthMode != "api-key" {
+		t.Fatalf("override = %+v, want guardian api-sonnet api-key", override)
+	}
+	if override.ResolvedProvider != "anthropic" || override.AuthMode != "api-key" || override.MaxCostPerCallUSD == nil || *override.MaxCostPerCallUSD != maxCost {
+		t.Fatalf("resolved override = %+v, want anthropic/api-key with cost cap", override)
+	}
+
+	replayed := newTaskStore(t, s)
+	projection, err := replayed.ProjectTask(task.ID)
+	if err != nil {
+		t.Fatalf("ProjectTask: %v", err)
+	}
+	if len(projection.ModelOverrides) != 1 {
+		t.Fatalf("projected model overrides = %+v, want one", projection.ModelOverrides)
+	}
+	projected := projection.ModelOverrides[0]
+	if projected.Role != "guardian" || projected.ResolvedProvider != "anthropic" || projected.AuthMode != "api-key" {
+		t.Fatalf("projected override = %+v, want guardian anthropic api-key", projected)
+	}
+}
+
+func TestSeedFactoryOrderRejectsInvalidModelOverrides(t *testing.T) {
+	negativeCost := -0.01
+	tests := []struct {
+		name      string
+		overrides []work.FactoryOrderModelOverride
+		wantErr   string
+	}{
+		{
+			name:      "missing role",
+			overrides: []work.FactoryOrderModelOverride{{Model: "sonnet"}},
+			wantErr:   "role is required",
+		},
+		{
+			name:      "control character",
+			overrides: []work.FactoryOrderModelOverride{{Role: "guardian", Model: "son\nnet"}},
+			wantErr:   "control characters",
+		},
+		{
+			name: "duplicate role",
+			overrides: []work.FactoryOrderModelOverride{
+				{Role: "guardian", Model: "sonnet"},
+				{Role: "guardian", Model: "opus"},
+			},
+			wantErr: "duplicated",
+		},
+		{
+			name:      "invalid requested auth mode",
+			overrides: []work.FactoryOrderModelOverride{{Role: "guardian", Model: "sonnet", RequestedAuthMode: "oauth"}},
+			wantErr:   "requested_auth_mode",
+		},
+		{
+			name:      "invalid resolved auth mode",
+			overrides: []work.FactoryOrderModelOverride{{Role: "guardian", Model: "sonnet", AuthMode: "oauth"}},
+			wantErr:   "auth_mode",
+		},
+		{
+			name:      "negative cost cap",
+			overrides: []work.FactoryOrderModelOverride{{Role: "guardian", Model: "sonnet", MaxCostPerCallUSD: &negativeCost}},
+			wantErr:   "max_cost_per_call_usd",
+		},
+		{
+			name:      "empty capability",
+			overrides: []work.FactoryOrderModelOverride{{Role: "guardian", Model: "sonnet", RequiredCapabilities: []string{"reasoning", ""}}},
+			wantErr:   "required_capabilities contains empty",
+		},
+		{
+			name:      "capability control character",
+			overrides: []work.FactoryOrderModelOverride{{Role: "guardian", Model: "sonnet", RequiredCapabilities: []string{"cod\ning"}}},
+			wantErr:   "required_capabilities contains control",
+		},
+		{
+			name:      "no substantive override",
+			overrides: []work.FactoryOrderModelOverride{{Role: "guardian"}},
+			wantErr:   "must set model",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, causes := setupStore(t)
+			ts := newTaskStore(t, s)
+
+			_, err := work.SeedFactoryOrder(ts, testActor, work.FactoryOrder{
+				ID:             "fo_bad_model_override",
+				Title:          "Bad model override",
+				ModelOverrides: tt.overrides,
+			}, causes, testConv)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected model override error containing %q, got %v", tt.wantErr, err)
+			}
+		})
 	}
 }
 
