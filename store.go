@@ -806,19 +806,29 @@ func (ts *TaskStore) AddDependency(
 }
 
 // GetDependencies returns all task IDs that the given taskID depends on.
+// It folds EVERY dependency event, paging until exhaustion: this read is
+// load-bearing for the reverse-edge deadlock guard (run findings v11-F1,
+// hive#153), and a bounded read under a safety guard is a fail-open — an edge
+// older than the newest page would become invisible to the guard.
 func (ts *TaskStore) GetDependencies(taskID types.EventID) ([]types.EventID, error) {
-	page, err := ts.store.ByType(EventTypeTaskDependencyAdded, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return nil, fmt.Errorf("fetch dependency events: %w", err)
-	}
 	var deps []types.EventID
-	for _, ev := range page.Items() {
-		c, ok := ev.Content().(TaskDependencyContent)
-		if ok && c.TaskID == taskID {
-			deps = append(deps, c.DependsOnID)
+	after := types.None[types.Cursor]()
+	for {
+		page, err := ts.store.ByType(EventTypeTaskDependencyAdded, 1000, after)
+		if err != nil {
+			return nil, fmt.Errorf("fetch dependency events: %w", err)
 		}
+		for _, ev := range page.Items() {
+			c, ok := ev.Content().(TaskDependencyContent)
+			if ok && c.TaskID == taskID {
+				deps = append(deps, c.DependsOnID)
+			}
+		}
+		if !page.HasMore() {
+			return deps, nil
+		}
+		after = page.Cursor()
 	}
-	return deps, nil
 }
 
 // DirectChildren returns tasks that directly depend on parentID, sorted by the
