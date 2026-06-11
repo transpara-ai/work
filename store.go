@@ -1702,10 +1702,12 @@ func (ts *TaskStore) ListArtifacts(taskID types.EventID) ([]ArtifactEvent, error
 	return artifacts, nil
 }
 
-// ListReopens returns all work.task.reopened events for a task, carrying the
-// reviewer's reason and fix list. The producer's Operate instruction folds
-// these in so a reopened task arrives with its review feedback (run findings
-// v12-F1) — bounded in practice by the reviewer's per-task verdict cap.
+// ListReopens returns a task's work.task.reopened events in CHRONOLOGICAL
+// order (oldest first), carrying the reviewer's reason and fix list. The
+// producer's Operate instruction folds these in as numbered rounds, so the
+// order is load-bearing: ByType pages newest-first, hence the explicit
+// reversal. Bounded in practice by the reviewer's per-task verdict cap
+// (run findings v12-F1).
 func (ts *TaskStore) ListReopens(taskID types.EventID) ([]ReopenEvent, error) {
 	page, err := ts.store.ByType(EventTypeTaskReopened, 1000, types.None[types.Cursor]())
 	if err != nil {
@@ -1725,6 +1727,9 @@ func (ts *TaskStore) ListReopens(taskID types.EventID) ([]ReopenEvent, error) {
 			Issues:     c.Issues,
 			Timestamp:  ev.Timestamp().Value(),
 		})
+	}
+	for i, j := 0, len(reopens)-1; i < j; i, j = i+1, j-1 {
+		reopens[i], reopens[j] = reopens[j], reopens[i]
 	}
 	return reopens, nil
 }

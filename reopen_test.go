@@ -221,6 +221,36 @@ func TestListReopensReturnsFeedback(t *testing.T) {
 	}
 }
 
+func TestListReopensChronological(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	task, err := ts.Create(testActor, "subtask", "do the thing", causes, testConv)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	completeWithArtifact(t, ts, testActor, task.ID, "done", causes, testConv)
+	if err := ts.Reopen(testActor, task.ID, "round 1", nil, causes, testConv); err != nil {
+		t.Fatalf("Reopen 1: %v", err)
+	}
+	if err := ts.Complete(testActor, task.ID, "fixed once", causes, testConv); err != nil {
+		t.Fatalf("re-Complete: %v", err)
+	}
+	if err := ts.Reopen(testActor, task.ID, "round 2", nil, causes, testConv); err != nil {
+		t.Fatalf("Reopen 2: %v", err)
+	}
+
+	reopens, err := ts.ListReopens(task.ID)
+	if err != nil {
+		t.Fatalf("ListReopens: %v", err)
+	}
+	// The Operate instruction numbers these as rounds — chronological order
+	// is load-bearing (ByType pages newest-first; ListReopens must reverse).
+	if len(reopens) != 2 || reopens[0].Reason != "round 1" || reopens[1].Reason != "round 2" {
+		t.Fatalf("reopens must be chronological (oldest first); got %+v", reopens)
+	}
+}
+
 func TestBatchStatusReflectsReopen(t *testing.T) {
 	s, causes := setupStore(t)
 	ts := newTaskStore(t, s)
