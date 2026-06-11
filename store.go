@@ -184,6 +184,16 @@ type CommentEvent struct {
 	Timestamp time.Time
 }
 
+// ReopenEvent holds the data from a work.task.reopened event.
+type ReopenEvent struct {
+	ID         types.EventID
+	TaskID     types.EventID
+	ReopenedBy types.ActorID
+	Reason     string
+	Issues     []string
+	Timestamp  time.Time
+}
+
 // ChildTask records a direct task dependency edge where Task depends on ParentID.
 // In the Work graph this means Task is a child/subtask of ParentID.
 type ChildTask struct {
@@ -497,6 +507,55 @@ func (ts *TaskStore) Complete(
 	return nil
 }
 
+// Reopen records a work.task.reopened event, returning a completed task to the
+// open state — the review→fix return edge (run findings v12-F1). The event
+// references every live completion for the task, so the supersede fold is pure
+// set algebra over explicit CompletionRefs: no event-order comparison anywhere
+// (ByType page order differs across store backends), duplicate reopens are
+// structurally idempotent, and a re-completion is live again by construction.
+//
+// Fail-closed: an unreadable completion state refuses (it cannot be proven the
+// task is completed), and a task with no live completion refuses (only
+// completed work can be reopened — reopening open work would let a reopen
+// masquerade as a no-op and desync callers that emit feedback alongside it).
+// Reason is required: a reopen exists to carry actionable feedback to the
+// producer's next Operate instruction.
+func (ts *TaskStore) Reopen(
+	source types.ActorID,
+	taskID types.EventID,
+	reason string,
+	issues []string,
+	causes []types.EventID,
+	convID types.ConversationID,
+) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("reopen reason is required")
+	}
+	live, err := ts.liveCompletionsByTask()
+	if err != nil {
+		return fmt.Errorf("reopen %s: %w", taskID.Value(), err)
+	}
+	refs := live[taskID]
+	if len(refs) == 0 {
+		return fmt.Errorf("reopen %s: no live completion — only a completed task can be reopened", taskID.Value())
+	}
+	content := TaskReopenedContent{
+		TaskID:         taskID,
+		ReopenedBy:     source,
+		Reason:         reason,
+		Issues:         issues,
+		CompletionRefs: refs,
+	}
+	ev, err := ts.factory.Create(EventTypeTaskReopened, source, content, causes, convID, ts.store, ts.signer)
+	if err != nil {
+		return fmt.Errorf("create reopen event: %w", err)
+	}
+	if _, err := ts.store.Append(ev); err != nil {
+		return fmt.Errorf("append reopen event: %w", err)
+	}
+	return nil
+}
+
 // TransitionTask records a v3.9 lifecycle transition after validating it
 // against the current replayed Work projection.
 func (ts *TaskStore) TransitionTask(
@@ -726,20 +785,17 @@ func (ts *TaskStore) ProjectLegacyTask(taskID types.EventID) (LegacyTaskProjecti
 	if err != nil {
 		return LegacyTaskProjection{}, err
 	}
-	completedPage, err := ts.store.ByType(EventTypeTaskCompleted, 1000, types.None[types.Cursor]())
+	completedIDs, err := ts.liveCompletedIDs()
 	if err != nil {
-		return LegacyTaskProjection{}, fmt.Errorf("fetch completed events: %w", err)
+		return LegacyTaskProjection{}, err
 	}
-	for _, ev := range completedPage.Items() {
-		c, ok := ev.Content().(TaskCompletedContent)
-		if ok && c.TaskID == taskID {
-			return LegacyTaskProjection{
-				TaskID:   taskID,
-				Status:   LegacyStatusCompleted,
-				Assignee: assignee,
-				Ready:    readiness.Ready,
-			}, nil
-		}
+	if completedIDs[taskID] {
+		return LegacyTaskProjection{
+			TaskID:   taskID,
+			Status:   LegacyStatusCompleted,
+			Assignee: assignee,
+			Ready:    readiness.Ready,
+		}, nil
 	}
 
 	blocked, err := ts.IsBlocked(taskID)
@@ -1002,17 +1058,10 @@ func (ts *TaskStore) IsBlocked(taskID types.EventID) (bool, error) {
 		}
 	}
 
-	// Collect all completed task IDs once.
-	completedPage, err := ts.store.ByType(EventTypeTaskCompleted, 1000, types.None[types.Cursor]())
+	// Collect all live completed task IDs once (reopen-aware).
+	completedIDs, err := ts.liveCompletedIDs()
 	if err != nil {
-		return false, fmt.Errorf("fetch completed events: %w", err)
-	}
-	completedIDs := make(map[types.EventID]bool, len(completedPage.Items()))
-	for _, ev := range completedPage.Items() {
-		c, ok := ev.Content().(TaskCompletedContent)
-		if ok {
-			completedIDs[c.TaskID] = true
-		}
+		return false, err
 	}
 
 	for _, depID := range deps {
@@ -1046,21 +1095,67 @@ func (ts *TaskStore) UnblockTask(
 	return nil
 }
 
-// ListOpen returns all tasks that do not have a matching work.task.completed event
-// and are not blocked by an incomplete dependency.
-// It fetches up to 1000 tasks and filters out completed and blocked tasks.
-func (ts *TaskStore) ListOpen() ([]Task, error) {
-	// Collect all completed task IDs.
+// liveCompletionsByTask returns, per task, the completion event IDs whose
+// effect stands: a work.task.completed event is live unless a
+// work.task.reopened event names its EventID in CompletionRefs (the review→fix
+// return edge, run findings v12-F1). Pure set algebra over explicit references
+// — no event-order comparison anywhere, so the fold is identical across store
+// backends regardless of ByType page order. A task with at least one live
+// completion reads as completed. Page budget mirrors the file's existing
+// completion scans (the ByType pagination class is routed G-2.x).
+func (ts *TaskStore) liveCompletionsByTask() (map[types.EventID][]types.EventID, error) {
 	completedPage, err := ts.store.ByType(EventTypeTaskCompleted, 1000, types.None[types.Cursor]())
 	if err != nil {
 		return nil, fmt.Errorf("fetch completed events: %w", err)
 	}
-	completedIDs := make(map[types.EventID]bool, len(completedPage.Items()))
+	reopenedPage, err := ts.store.ByType(EventTypeTaskReopened, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return nil, fmt.Errorf("fetch reopened events: %w", err)
+	}
+	superseded := make(map[types.EventID]bool)
+	for _, ev := range reopenedPage.Items() {
+		if c, ok := ev.Content().(TaskReopenedContent); ok {
+			for _, ref := range c.CompletionRefs {
+				superseded[ref] = true
+			}
+		}
+	}
+	live := make(map[types.EventID][]types.EventID)
 	for _, ev := range completedPage.Items() {
 		c, ok := ev.Content().(TaskCompletedContent)
-		if ok {
-			completedIDs[c.TaskID] = true
+		if !ok || superseded[ev.ID()] {
+			continue
 		}
+		live[c.TaskID] = append(live[c.TaskID], ev.ID())
+	}
+	return live, nil
+}
+
+// liveCompletedIDs returns the set of task IDs with at least one live
+// completion. This is the single completion-state fold shared by every
+// projection (ListOpen, IsBlocked, ProjectLegacyTask, batchStatus) so reopen
+// semantics cannot drift between them.
+func (ts *TaskStore) liveCompletedIDs() (map[types.EventID]bool, error) {
+	live, err := ts.liveCompletionsByTask()
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[types.EventID]bool, len(live))
+	for taskID := range live {
+		ids[taskID] = true
+	}
+	return ids, nil
+}
+
+// ListOpen returns all tasks that do not have a matching work.task.completed event
+// and are not blocked by an incomplete dependency.
+// It fetches up to 1000 tasks and filters out completed and blocked tasks.
+func (ts *TaskStore) ListOpen() ([]Task, error) {
+	// Collect all live completed task IDs (a completion superseded by a
+	// reopen does not count — the task is open again while being fixed).
+	completedIDs, err := ts.liveCompletedIDs()
+	if err != nil {
+		return nil, err
 	}
 
 	// Collect all dependency edges: taskID → dependsOnID.
@@ -1214,16 +1309,10 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 		return nil, nil
 	}
 
-	// Scan 1: completed events → completedIDs set.
-	completedPage, err := ts.store.ByType(EventTypeTaskCompleted, 1000, types.None[types.Cursor]())
+	// Scan 1: completed + reopened events → live completedIDs set.
+	completedIDs, err := ts.liveCompletedIDs()
 	if err != nil {
-		return nil, fmt.Errorf("fetch completed events: %w", err)
-	}
-	completedIDs := make(map[types.EventID]bool, len(completedPage.Items()))
-	for _, ev := range completedPage.Items() {
-		if c, ok := ev.Content().(TaskCompletedContent); ok {
-			completedIDs[c.TaskID] = true
-		}
+		return nil, err
 	}
 
 	// Scan 2: assigned events (newest-first) → current assignee per task.
@@ -1611,6 +1700,38 @@ func (ts *TaskStore) ListArtifacts(taskID types.EventID) ([]ArtifactEvent, error
 		})
 	}
 	return artifacts, nil
+}
+
+// ListReopens returns a task's work.task.reopened events in CHRONOLOGICAL
+// order (oldest first), carrying the reviewer's reason and fix list. The
+// producer's Operate instruction folds these in as numbered rounds, so the
+// order is load-bearing: ByType pages newest-first, hence the explicit
+// reversal. Bounded in practice by the reviewer's per-task verdict cap
+// (run findings v12-F1).
+func (ts *TaskStore) ListReopens(taskID types.EventID) ([]ReopenEvent, error) {
+	page, err := ts.store.ByType(EventTypeTaskReopened, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return nil, fmt.Errorf("fetch reopen events: %w", err)
+	}
+	var reopens []ReopenEvent
+	for _, ev := range page.Items() {
+		c, ok := ev.Content().(TaskReopenedContent)
+		if !ok || c.TaskID != taskID {
+			continue
+		}
+		reopens = append(reopens, ReopenEvent{
+			ID:         ev.ID(),
+			TaskID:     c.TaskID,
+			ReopenedBy: c.ReopenedBy,
+			Reason:     c.Reason,
+			Issues:     c.Issues,
+			Timestamp:  ev.Timestamp().Value(),
+		})
+	}
+	for i, j := 0, len(reopens)-1; i < j; i, j = i+1, j-1 {
+		reopens[i], reopens[j] = reopens[j], reopens[i]
+	}
+	return reopens, nil
 }
 
 // Readiness reconstructs whether a task has the required implementation gates

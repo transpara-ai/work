@@ -43,6 +43,7 @@ var (
 	EventTypeTaskCreated               = types.MustEventType("work.task.created")
 	EventTypeTaskAssigned              = types.MustEventType("work.task.assigned")
 	EventTypeTaskCompleted             = types.MustEventType("work.task.completed")
+	EventTypeTaskReopened              = types.MustEventType("work.task.reopened")
 	EventTypeTaskDependencyAdded       = types.MustEventType("work.task.dependency.added")
 	EventTypeTaskPrioritySet           = types.MustEventType("work.task.priority.set")
 	EventTypeTaskComment               = types.MustEventType("work.task.comment")
@@ -63,6 +64,7 @@ var (
 func allWorkEventTypes() []types.EventType {
 	return []types.EventType{
 		EventTypeTaskCreated, EventTypeTaskAssigned, EventTypeTaskCompleted,
+		EventTypeTaskReopened,
 		EventTypeTaskDependencyAdded, EventTypeTaskPrioritySet, EventTypeTaskComment,
 		EventTypeTaskUnblocked, EventTypeTaskArtifact, EventTypeTaskArtifactWaived,
 		EventTypeTaskFactRequired, EventTypeTaskLifecycleTransitioned, EventTypeTaskLinked,
@@ -121,6 +123,24 @@ type TaskCompletedContent struct {
 }
 
 func (c TaskCompletedContent) EventTypeName() string { return "work.task.completed" }
+
+// TaskReopenedContent is emitted when a completed task is returned to the open
+// state — the review→fix return edge (run findings v12-F1). CompletionRefs
+// names the work.task.completed event IDs this reopen supersedes: a completion
+// is live unless a reopen references it, so a re-completion (a new completion
+// event, never referenced) reads completed again with no event-order
+// comparison anywhere. Reason and Issues carry the reviewer's fix list to the
+// producer's next Operate instruction.
+type TaskReopenedContent struct {
+	workContent
+	TaskID         types.EventID   `json:"TaskID"`
+	ReopenedBy     types.ActorID   `json:"ReopenedBy"`
+	Reason         string          `json:"Reason"`
+	Issues         []string        `json:"Issues,omitempty"`
+	CompletionRefs []types.EventID `json:"CompletionRefs"`
+}
+
+func (c TaskReopenedContent) EventTypeName() string { return "work.task.reopened" }
 
 // TaskDependencyContent is emitted when a dependency is declared between two tasks.
 // It records that TaskID depends on DependsOnID — TaskID cannot start until DependsOnID completes.
@@ -299,6 +319,7 @@ func RegisterEventTypes() {
 	event.RegisterContentUnmarshaler("work.task.created", event.Unmarshal[TaskCreatedContent])
 	event.RegisterContentUnmarshaler("work.task.assigned", event.Unmarshal[TaskAssignedContent])
 	event.RegisterContentUnmarshaler("work.task.completed", event.Unmarshal[TaskCompletedContent])
+	event.RegisterContentUnmarshaler("work.task.reopened", event.Unmarshal[TaskReopenedContent])
 	event.RegisterContentUnmarshaler("work.task.dependency.added", event.Unmarshal[TaskDependencyContent])
 	event.RegisterContentUnmarshaler("work.task.priority.set", event.Unmarshal[TaskPrioritySetContent])
 	event.RegisterContentUnmarshaler("work.task.comment", event.Unmarshal[CommentContent])
