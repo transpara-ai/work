@@ -1569,6 +1569,17 @@ func (ts *TaskStore) AddArtifact(
 	if label == "" {
 		return fmt.Errorf("label is required")
 	}
+	if label == IncidentFollowUpArtifactLabel {
+		if mediaType == "" {
+			mediaType = IncidentFollowUpMediaType
+		}
+		if mediaType != IncidentFollowUpMediaType {
+			return fmt.Errorf("%s artifacts must use media type %s", IncidentFollowUpArtifactLabel, IncidentFollowUpMediaType)
+		}
+		if _, err := parseIncidentFollowUpArtifactBody(body); err != nil {
+			return fmt.Errorf("%s artifact is invalid: %w", IncidentFollowUpArtifactLabel, err)
+		}
+	}
 	if mediaType == "" {
 		mediaType = "text/markdown"
 	}
