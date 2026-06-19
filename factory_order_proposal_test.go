@@ -66,6 +66,27 @@ func TestBuildFactoryOrderDevelopmentProposalRejectsInvalidInputs(t *testing.T) 
 		wantErr string
 	}{
 		{
+			name: "missing source intent",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.SourceIntentRef = ""
+			},
+			wantErr: "source_intent_ref is required",
+		},
+		{
+			name: "missing requester",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.Requester = ""
+			},
+			wantErr: "requester is required",
+		},
+		{
+			name: "missing target head",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.TargetHead = ""
+			},
+			wantErr: "target_head is required",
+		},
+		{
 			name: "missing factory order",
 			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
 				opts.FactoryOrderID = ""
@@ -115,6 +136,34 @@ func TestBuildFactoryOrderDevelopmentProposalRejectsInvalidInputs(t *testing.T) 
 			wantErr: "applied must be false",
 		},
 		{
+			name: "empty validation plan",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.ValidationPlan = nil
+			},
+			wantErr: "validation_plan must be non-empty",
+		},
+		{
+			name: "empty authority boundary",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.AuthorityBoundary = nil
+			},
+			wantErr: "authority_boundary must be non-empty",
+		},
+		{
+			name: "authority boundary missing action",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.AuthorityBoundary[0].Action = ""
+			},
+			wantErr: "authority_boundary[0].action is required",
+		},
+		{
+			name: "authority boundary missing status",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.AuthorityBoundary[0].Status = ""
+			},
+			wantErr: "authority_boundary[0].status is required",
+		},
+		{
 			name: "runtime invocation",
 			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
 				opts.RuntimeInvocationID = "run_df_v40_e7"
@@ -147,7 +196,21 @@ func TestBuildFactoryOrderDevelopmentProposalRejectsInvalidInputs(t *testing.T) 
 			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
 				opts.AuthorityBoundary[0].Status = "authorized"
 			},
-			wantErr: "claims protected action authority",
+			wantErr: "authority_boundary[0].status must be",
+		},
+		{
+			name: "authority boundary claims merge",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.AuthorityBoundary[0].Status = "merged"
+			},
+			wantErr: "authority_boundary[0].status must be",
+		},
+		{
+			name: "authority boundary claims deploy",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.AuthorityBoundary[0].Status = "deployed"
+			},
+			wantErr: "authority_boundary[0].status must be",
 		},
 	}
 
@@ -187,6 +250,8 @@ func TestBuildFactoryOrderDevelopmentProposalCopiesInputs(t *testing.T) {
 
 func validFactoryOrderDevelopmentProposalOptions() work.FactoryOrderDevelopmentProposalOptions {
 	return work.FactoryOrderDevelopmentProposalOptions{
+		// Event 7 implements the proposal accepted by Event 6, so these fixture
+		// IDs intentionally preserve the Event 6 FactoryOrder linkage.
 		SourceIntentRef:       "DF-V4.0-EPIC-006-TRIAL-EVIDENCE",
 		Requester:             "Michael Saucier",
 		TargetRepo:            work.FactoryOrderProposalTargetRepo,

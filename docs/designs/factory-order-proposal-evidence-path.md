@@ -52,8 +52,9 @@ The builder rejects:
 - ExecutionReceipt references
 - native EventGraph write references
 - protected-action claims
-- authority-boundary statuses that claim a protected action is already allowed,
-  authorized, executed, completed, or succeeded
+- authority-boundary statuses outside the explicit non-authorizing allowlist:
+  `not_authorized`, `deferred`, `pending`, `blocked`, `unavailable`, or
+  `requires_authority`
 
 Branch, pull request, CI, RuntimeBroker, ExecutionReceipt, and native EventGraph
 write evidence are recorded as unavailable in the proof-of-work packet. A later

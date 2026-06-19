@@ -234,12 +234,12 @@ func BuildFactoryOrderDevelopmentProposal(opts FactoryOrderDevelopmentProposalOp
 		},
 		ChangedFiles:          cloneChangedFileIntent(changedFiles),
 		Validation:            FactoryOrderProposalProofItem{Label: "validation", Status: factoryOrderProposalStatusUnavailable, Summary: strings.Join(validationPlan, "; ")},
-		Branch:                unavailable("branch", "branch evidence is outside this pure builder"),
-		PullRequest:           unavailable("pull_request", "pull request evidence is outside this pure builder"),
-		CI:                    unavailable("ci", "CI evidence is outside this pure builder"),
-		RuntimeInvocation:     unavailable("runtime_invocation", "RuntimeBroker execution is not authorized"),
-		ExecutionReceipt:      unavailable("execution_receipt", "protected execution did not occur"),
-		NativeEventGraphWrite: unavailable("native_eventgraph_write", "native EventGraph truth requires separate authority"),
+		Branch:                unavailable("branch evidence is outside this pure builder"),
+		PullRequest:           unavailable("pull request evidence is outside this pure builder"),
+		CI:                    unavailable("CI evidence is outside this pure builder"),
+		RuntimeInvocation:     unavailable("RuntimeBroker execution is not authorized"),
+		ExecutionReceipt:      unavailable("protected execution did not occur"),
+		NativeEventGraphWrite: unavailable("native EventGraph truth requires separate authority"),
 		AuthorityBoundary:     cloneAuthorityBoundary(authorityBoundary),
 		TraceGap:              []string{"native EventGraph truth remains unavailable"},
 		ResidualRisks:         []string{"R-001 unresolved", "R-002 unresolved", "R-003 unresolved"},
@@ -349,8 +349,8 @@ func normalizeFactoryOrderDevelopmentProposalOptions(opts FactoryOrderDevelopmen
 		if boundary.Status == "" {
 			return normalized, fmt.Errorf("authority_boundary[%d].status is required", i)
 		}
-		if protectedActionStatusClaimsCompletion(boundary.Status) {
-			return normalized, fmt.Errorf("authority_boundary[%d].status %q claims protected action authority", i, boundary.Status)
+		if !allowedProtectedActionBoundaryStatus(boundary.Status) {
+			return normalized, fmt.Errorf("authority_boundary[%d].status must be not_authorized, deferred, pending, blocked, unavailable, or requires_authority", i)
 		}
 		normalized.AuthorityBoundary[i] = boundary
 	}
@@ -367,17 +367,17 @@ func normalizeFactoryOrderDevelopmentProposalOptions(opts FactoryOrderDevelopmen
 	return normalized, nil
 }
 
-func protectedActionStatusClaimsCompletion(status string) bool {
+func allowedProtectedActionBoundaryStatus(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "allowed", "approved", "authorized", "complete", "completed", "executed", "succeeded":
+	case "blocked", "deferred", "not_authorized", "pending", "requires_authority", "unavailable":
 		return true
 	default:
 		return false
 	}
 }
 
-func unavailable(ref, reason string) FactoryOrderProposalAvailability {
-	return FactoryOrderProposalAvailability{Status: factoryOrderProposalStatusUnavailable, Reason: reason, Ref: ref}
+func unavailable(reason string) FactoryOrderProposalAvailability {
+	return FactoryOrderProposalAvailability{Status: factoryOrderProposalStatusUnavailable, Reason: reason}
 }
 
 func cloneChangedFileIntent(values []FactoryOrderChangedFileIntent) []FactoryOrderChangedFileIntent {
