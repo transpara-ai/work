@@ -101,6 +101,20 @@ func TestBuildFactoryOrderDevelopmentProposalRejectsInvalidInputs(t *testing.T) 
 			wantErr: "requirement_id",
 		},
 		{
+			name: "bad acceptance criterion prefix",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.AcceptanceCriterionID = "acceptance_bad"
+			},
+			wantErr: "acceptance_criterion_id",
+		},
+		{
+			name: "bad task prefix",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.TaskID = "task_bad"
+			},
+			wantErr: "task_id",
+		},
+		{
 			name: "non Work target",
 			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
 				opts.TargetRepo = "transpara-ai/docs"
@@ -120,6 +134,27 @@ func TestBuildFactoryOrderDevelopmentProposalRejectsInvalidInputs(t *testing.T) 
 				opts.ChangedFileIntent[0].Repo = "transpara-ai/site"
 			},
 			wantErr: "changed_file_intent[0].repo",
+		},
+		{
+			name: "empty changed file path",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.ChangedFileIntent[0].Path = ""
+			},
+			wantErr: "changed_file_intent[0].path is required",
+		},
+		{
+			name: "empty changed file change type",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.ChangedFileIntent[0].ChangeType = ""
+			},
+			wantErr: "changed_file_intent[0].change_type is required",
+		},
+		{
+			name: "empty changed file summary",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.ChangedFileIntent[0].Summary = ""
+			},
+			wantErr: "changed_file_intent[0].summary is required",
 		},
 		{
 			name: "proposal not marked proposed only",
@@ -245,6 +280,19 @@ func TestBuildFactoryOrderDevelopmentProposalCopiesInputs(t *testing.T) {
 	}
 	if proposal.AuthorityBoundary[0].Action == "mutated" || proposal.ProofOfWorkPacket.AuthorityBoundary[0].Action == "mutated" {
 		t.Fatalf("proposal retained caller authority boundary alias: %#v", proposal.AuthorityBoundary)
+	}
+}
+
+func TestBuildFactoryOrderDevelopmentProposalCanonicalizesBoundaryStatus(t *testing.T) {
+	opts := validFactoryOrderDevelopmentProposalOptions()
+	opts.AuthorityBoundary[0].Status = "Blocked"
+
+	proposal, err := work.BuildFactoryOrderDevelopmentProposal(opts)
+	if err != nil {
+		t.Fatalf("BuildFactoryOrderDevelopmentProposal: %v", err)
+	}
+	if proposal.AuthorityBoundary[0].Status != "blocked" || proposal.ProofOfWorkPacket.AuthorityBoundary[0].Status != "blocked" {
+		t.Fatalf("authority boundary status = %#v / %#v, want blocked", proposal.AuthorityBoundary[0], proposal.ProofOfWorkPacket.AuthorityBoundary[0])
 	}
 }
 

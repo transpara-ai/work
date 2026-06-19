@@ -36,7 +36,9 @@ plan, and protected-action boundaries. It returns structured values:
 - AuditReport-shaped recommendation
 
 The builder is pure. It has no store, filesystem, GitHub, runtime, EventGraph,
-or command interface.
+or command interface. Only structured status fields are authoritative; caller
+supplied `summary` text is explanatory and must not be interpreted as authority,
+execution, release, or production status.
 
 ## Fail-Closed Rules
 
@@ -73,4 +75,7 @@ merge, the PR must record either:
 2. explicit PR-visible External Committee approval authorizing merge of that
    exact Work PR head.
 
-Without that evidence, the Work PR must stop before merge.
+At this PR's authoring, `transpara-ai/work` main requires `Build & Test` and
+`cross-family-adversarial-review`, but has `required_approving_review_count: 0`,
+so option 1 is not satisfied. Without option 1 or explicit option 2 evidence,
+the Work PR must stop before merge.

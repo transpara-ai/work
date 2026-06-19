@@ -340,7 +340,7 @@ func normalizeFactoryOrderDevelopmentProposalOptions(opts FactoryOrderDevelopmen
 	}
 	for i, boundary := range normalized.AuthorityBoundary {
 		boundary.Action = strings.TrimSpace(boundary.Action)
-		boundary.Status = strings.TrimSpace(boundary.Status)
+		boundary.Status = strings.ToLower(strings.TrimSpace(boundary.Status))
 		boundary.RequiredAuthority = strings.TrimSpace(boundary.RequiredAuthority)
 		boundary.Summary = strings.TrimSpace(boundary.Summary)
 		if boundary.Action == "" {
