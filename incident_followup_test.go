@@ -127,9 +127,16 @@ func TestIncidentFollowUpRejectsInvalidContractValues(t *testing.T) {
 			wantErr: "incident_record is required",
 		},
 		{
-			name: "incident record outside civilization operation incidents",
+			name: "incident record outside operation incidents",
 			mutate: func(f *work.IncidentFollowUp) {
 				f.IncidentRecord = "work/docs/incidents/INC-001.md"
+			},
+			wantErr: "operation docs/incidents",
+		},
+		{
+			name: "incident record bare operation incidents directory",
+			mutate: func(f *work.IncidentFollowUp) {
+				f.IncidentRecord = "operation/docs/incidents"
 			},
 			wantErr: "operation docs/incidents",
 		},
@@ -324,6 +331,45 @@ func TestTaskStore_AddIncidentFollowUpArtifactRecordsContractArtifact(t *testing
 	}
 	if followUps[0].CreatedBy != testActor {
 		t.Fatalf("CreatedBy = %s, want %s", followUps[0].CreatedBy.Value(), testActor.Value())
+	}
+}
+
+func TestTaskStore_AddArtifactAcceptsLegacyIncidentFollowUpSchema(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	task, err := ts.Create(testActor, "Replay legacy incident follow-up", "", causes, testConv)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	body, err := work.IncidentFollowUpArtifactBody(validIncidentFollowUp())
+	if err != nil {
+		t.Fatalf("IncidentFollowUpArtifactBody: %v", err)
+	}
+	body = strings.Replace(body,
+		`"schema": "operation/docs/operations/work-incident-follow-up-schema.md"`,
+		`"schema": "civilization-operation/docs/operations/work-incident-follow-up-schema.md"`,
+		1,
+	)
+	body = strings.Replace(body,
+		`"incident_record": "operation/docs/incidents/INC-001-pre-live-operation.md"`,
+		`"incident_record": "civilization-operation/docs/incidents/INC-001-pre-live-operation.md"`,
+		1,
+	)
+
+	if err := ts.AddArtifact(testActor, task.ID, work.IncidentFollowUpArtifactLabel, work.IncidentFollowUpMediaType, body, causes, testConv); err != nil {
+		t.Fatalf("AddArtifact legacy incident follow-up: %v", err)
+	}
+
+	followUps, err := ts.ListIncidentFollowUps(task.ID)
+	if err != nil {
+		t.Fatalf("ListIncidentFollowUps: %v", err)
+	}
+	if len(followUps) != 1 {
+		t.Fatalf("followUps len = %d, want 1", len(followUps))
+	}
+	if got, want := followUps[0].FollowUp.IncidentRecord, "operation/docs/incidents/INC-001-pre-live-operation.md"; got != want {
+		t.Fatalf("incident_record = %q, want %q", got, want)
 	}
 }
 

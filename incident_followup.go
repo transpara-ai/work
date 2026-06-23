@@ -128,9 +128,14 @@ func NormalizeIncidentFollowUp(followUp IncidentFollowUp) (IncidentFollowUp, err
 	if err != nil {
 		return IncidentFollowUp{}, err
 	}
-	if err := validateIncidentFollowUpScalars(&normalized); err != nil {
+	if err := validateIncidentFollowUpScalars(normalized); err != nil {
 		return IncidentFollowUp{}, err
 	}
+	canonicalIncidentRecord, ok := canonicalOperationIncidentRecord(normalized.IncidentRecord)
+	if !ok {
+		return IncidentFollowUp{}, fmt.Errorf("incident_record must point to operation docs/incidents/")
+	}
+	normalized.IncidentRecord = canonicalIncidentRecord
 	switch normalized.Status {
 	case IncidentFollowUpDone:
 		if normalized.ClosureLink == "" {
@@ -255,7 +260,7 @@ func (ts *TaskStore) LatestIncidentFollowUp(taskID types.EventID) (IncidentFollo
 	return latest, true, nil
 }
 
-func validateIncidentFollowUpScalars(followUp *IncidentFollowUp) error {
+func validateIncidentFollowUpScalars(followUp IncidentFollowUp) error {
 	required := []struct {
 		field string
 		value string
@@ -282,11 +287,6 @@ func validateIncidentFollowUpScalars(followUp *IncidentFollowUp) error {
 	if hasControlRune(followUp.AuthorizationEvidence) || hasControlRune(followUp.ClosureLink) {
 		return fmt.Errorf("incident follow-up contains control characters")
 	}
-	canonicalIncidentRecord, ok := canonicalOperationIncidentRecord(followUp.IncidentRecord)
-	if !ok {
-		return fmt.Errorf("incident_record must point to operation docs/incidents/")
-	}
-	followUp.IncidentRecord = canonicalIncidentRecord
 	if !validIncidentFollowUpTaskType(followUp.TaskType) {
 		return fmt.Errorf("task_type %q is not accepted by the incident follow-up schema", followUp.TaskType)
 	}
@@ -313,7 +313,7 @@ func canonicalOperationIncidentRecord(value string) (string, bool) {
 	}
 	cleaned := strings.TrimPrefix(path.Clean(strings.ReplaceAll(trimmed, "\\", "/")), "/")
 	parts := strings.Split(cleaned, "/")
-	for i := 0; i+2 < len(parts); i++ {
+	for i := 0; i+3 < len(parts); i++ {
 		if isOperationRepoSlug(parts[i]) && parts[i+1] == "docs" && parts[i+2] == "incidents" {
 			parts[i] = "operation"
 			return strings.Join(parts, "/"), true
