@@ -9,7 +9,7 @@
 Work accepts the pre-live incident follow-up schema defined by:
 
 ```text
-civilization-operation/docs/operations/work-incident-follow-up-schema.md
+operation/docs/operations/work-incident-follow-up-schema.md
 ```
 
 The schema is represented in Work as a typed JSON artifact on the task graph,
@@ -17,7 +17,7 @@ using the `incident_follow_up` artifact label and `application/json` media type.
 
 ## Boundary
 
-`civilization-operation` remains the source of truth for the incident record,
+`operation` remains the source of truth for the incident record,
 cross-repository operating analysis, evidence sufficiency, and closure
 criteria.
 
@@ -58,8 +58,8 @@ closure_link:
 Opening or assigning a Work follow-up does not authorize a human-gated action.
 Durable authorization evidence is still required before a routed follow-up can
 be completed as `DONE` when `authorization_required` is true. Work validates
-that evidence fields are present, but civilization-operation remains
-responsible for determining whether the evidence is sufficient.
+that evidence fields are present, but operation remains responsible for
+determining whether the evidence is sufficient.
 
 ## Implementation
 
@@ -75,8 +75,10 @@ model:
 
 No new task lifecycle status is introduced in this slice. The follow-up status
 values are contract fields inside the artifact so Work can accept the
-civilization-operation schema without changing the canonical v3.9 task
-lifecycle.
+operation schema without changing the current Work task lifecycle.
+
+Stored artifacts stamped with the former `civilization-operation` schema
+reference are still accepted and normalized on replay for compatibility.
 
 Matching `incident_follow_up` artifacts are treated as contract records. If a
 matching artifact has invalid JSON, the wrong schema, the wrong schema version,

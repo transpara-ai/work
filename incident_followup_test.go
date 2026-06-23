@@ -8,11 +8,13 @@ import (
 	"github.com/transpara-ai/work"
 )
 
+const incidentRecordPathErr = "incident_record must point to operation docs/incidents/"
+
 func validIncidentFollowUp() work.IncidentFollowUp {
 	return work.IncidentFollowUp{
 		TaskID:                "INC-001-work-add-incident-follow-up-schema",
 		IncidentID:            "INC-001",
-		IncidentRecord:        "civilization-operation/docs/incidents/INC-001-pre-live-operation.md",
+		IncidentRecord:        "operation/docs/incidents/INC-001-pre-live-operation.md",
 		TaskType:              work.IncidentFollowUpCorrection,
 		OwningRepo:            "transpara-ai/work",
 		RequestedBy:           "incident-lead",
@@ -54,6 +56,9 @@ func TestIncidentFollowUpArtifactBodyValidatesAndPreservesContractFields(t *test
 	if decoded.FollowUp.Status != work.IncidentFollowUpReady {
 		t.Fatalf("status = %q", decoded.FollowUp.Status)
 	}
+	if decoded.FollowUp.IncidentRecord != "operation/docs/incidents/INC-001-pre-live-operation.md" {
+		t.Fatalf("incident_record = %q", decoded.FollowUp.IncidentRecord)
+	}
 	if decoded.FollowUp.ClosureLink != "" {
 		t.Fatalf("closure_link = %q, want empty while task is open", decoded.FollowUp.ClosureLink)
 	}
@@ -62,26 +67,50 @@ func TestIncidentFollowUpArtifactBodyValidatesAndPreservesContractFields(t *test
 	}
 
 	githubURL := validIncidentFollowUp()
-	githubURL.IncidentRecord = "https://github.com/transpara-ai/civilization-operation/blob/main/docs/incidents/INC-001-pre-live-operation.md"
-	if _, err := work.IncidentFollowUpArtifactBody(githubURL); err != nil {
+	githubURL.IncidentRecord = "https://github.com/transpara-ai/operation/blob/main/docs/incidents/INC-001-pre-live-operation.md"
+	body, err = work.IncidentFollowUpArtifactBody(githubURL)
+	if err != nil {
 		t.Fatalf("github incident record URL rejected: %v", err)
+	}
+	if !strings.Contains(body, "https://github.com/transpara-ai/operation/blob/main/docs/incidents/INC-001-pre-live-operation.md") {
+		t.Fatalf("github incident record was not preserved canonically:\n%s", body)
+	}
+
+	legacyRelative := validIncidentFollowUp()
+	legacyRelative.IncidentRecord = "civilization-operation/docs/incidents/INC-001-pre-live-operation.md"
+	body, err = work.IncidentFollowUpArtifactBody(legacyRelative)
+	if err != nil {
+		t.Fatalf("legacy relative incident record rejected: %v", err)
+	}
+	if strings.Contains(body, "civilization-operation") || !strings.Contains(body, "operation/docs/incidents/INC-001-pre-live-operation.md") {
+		t.Fatalf("legacy relative incident record was not canonicalized:\n%s", body)
+	}
+
+	legacyGitHubURL := validIncidentFollowUp()
+	legacyGitHubURL.IncidentRecord = "https://github.com/transpara-ai/civilization-operation/blob/main/docs/incidents/INC-001-pre-live-operation.md"
+	body, err = work.IncidentFollowUpArtifactBody(legacyGitHubURL)
+	if err != nil {
+		t.Fatalf("legacy github incident record URL rejected: %v", err)
+	}
+	if strings.Contains(body, "civilization-operation") || !strings.Contains(body, "https://github.com/transpara-ai/operation/blob/main/docs/incidents/INC-001-pre-live-operation.md") {
+		t.Fatalf("legacy github incident record URL was not canonicalized:\n%s", body)
 	}
 
 	wrongOrg := validIncidentFollowUp()
 	wrongOrg.IncidentRecord = "https://github.com/someone/civilization-operation/blob/main/docs/incidents/INC-001-pre-live-operation.md"
-	if _, err := work.IncidentFollowUpArtifactBody(wrongOrg); err == nil || !strings.Contains(err.Error(), "civilization-operation docs/incidents") {
+	if _, err := work.IncidentFollowUpArtifactBody(wrongOrg); err == nil || !strings.Contains(err.Error(), incidentRecordPathErr) {
 		t.Fatalf("expected wrong-org github URL rejection, got %v", err)
 	}
 
 	wrongScheme := validIncidentFollowUp()
 	wrongScheme.IncidentRecord = "ftp://github.com/transpara-ai/civilization-operation/blob/main/docs/incidents/INC-001-pre-live-operation.md"
-	if _, err := work.IncidentFollowUpArtifactBody(wrongScheme); err == nil || !strings.Contains(err.Error(), "civilization-operation docs/incidents") {
+	if _, err := work.IncidentFollowUpArtifactBody(wrongScheme); err == nil || !strings.Contains(err.Error(), incidentRecordPathErr) {
 		t.Fatalf("expected wrong-scheme github URL rejection, got %v", err)
 	}
 
 	fileURL := validIncidentFollowUp()
 	fileURL.IncidentRecord = "file:///civilization-operation/docs/incidents/INC-001-pre-live-operation.md"
-	if _, err := work.IncidentFollowUpArtifactBody(fileURL); err == nil || !strings.Contains(err.Error(), "civilization-operation docs/incidents") {
+	if _, err := work.IncidentFollowUpArtifactBody(fileURL); err == nil || !strings.Contains(err.Error(), incidentRecordPathErr) {
 		t.Fatalf("expected file URL rejection, got %v", err)
 	}
 }
@@ -100,18 +129,25 @@ func TestIncidentFollowUpRejectsInvalidContractValues(t *testing.T) {
 			wantErr: "incident_record is required",
 		},
 		{
-			name: "incident record outside civilization operation incidents",
+			name: "incident record outside operation incidents",
 			mutate: func(f *work.IncidentFollowUp) {
 				f.IncidentRecord = "work/docs/incidents/INC-001.md"
 			},
-			wantErr: "civilization-operation docs/incidents",
+			wantErr: incidentRecordPathErr,
+		},
+		{
+			name: "incident record bare operation incidents directory",
+			mutate: func(f *work.IncidentFollowUp) {
+				f.IncidentRecord = "operation/docs/incidents"
+			},
+			wantErr: incidentRecordPathErr,
 		},
 		{
 			name: "false positive incident record path",
 			mutate: func(f *work.IncidentFollowUp) {
 				f.IncidentRecord = "not-civilization-operation/docs/incidents/INC-001.md"
 			},
-			wantErr: "civilization-operation docs/incidents",
+			wantErr: incidentRecordPathErr,
 		},
 		{
 			name: "unknown task type",
@@ -297,6 +333,45 @@ func TestTaskStore_AddIncidentFollowUpArtifactRecordsContractArtifact(t *testing
 	}
 	if followUps[0].CreatedBy != testActor {
 		t.Fatalf("CreatedBy = %s, want %s", followUps[0].CreatedBy.Value(), testActor.Value())
+	}
+}
+
+func TestTaskStore_AddArtifactAcceptsLegacyIncidentFollowUpSchema(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	task, err := ts.Create(testActor, "Replay legacy incident follow-up", "", causes, testConv)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	body, err := work.IncidentFollowUpArtifactBody(validIncidentFollowUp())
+	if err != nil {
+		t.Fatalf("IncidentFollowUpArtifactBody: %v", err)
+	}
+	body = strings.Replace(body,
+		`"schema": "operation/docs/operations/work-incident-follow-up-schema.md"`,
+		`"schema": "civilization-operation/docs/operations/work-incident-follow-up-schema.md"`,
+		1,
+	)
+	body = strings.Replace(body,
+		`"incident_record": "operation/docs/incidents/INC-001-pre-live-operation.md"`,
+		`"incident_record": "civilization-operation/docs/incidents/INC-001-pre-live-operation.md"`,
+		1,
+	)
+
+	if err := ts.AddArtifact(testActor, task.ID, work.IncidentFollowUpArtifactLabel, work.IncidentFollowUpMediaType, body, causes, testConv); err != nil {
+		t.Fatalf("AddArtifact legacy incident follow-up: %v", err)
+	}
+
+	followUps, err := ts.ListIncidentFollowUps(task.ID)
+	if err != nil {
+		t.Fatalf("ListIncidentFollowUps: %v", err)
+	}
+	if len(followUps) != 1 {
+		t.Fatalf("followUps len = %d, want 1", len(followUps))
+	}
+	if got, want := followUps[0].FollowUp.IncidentRecord, "operation/docs/incidents/INC-001-pre-live-operation.md"; got != want {
+		t.Fatalf("incident_record = %q, want %q", got, want)
 	}
 }
 
