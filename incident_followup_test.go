@@ -8,6 +8,8 @@ import (
 	"github.com/transpara-ai/work"
 )
 
+const incidentRecordPathErr = "incident_record must point to operation docs/incidents/"
+
 func validIncidentFollowUp() work.IncidentFollowUp {
 	return work.IncidentFollowUp{
 		TaskID:                "INC-001-work-add-incident-follow-up-schema",
@@ -96,19 +98,19 @@ func TestIncidentFollowUpArtifactBodyValidatesAndPreservesContractFields(t *test
 
 	wrongOrg := validIncidentFollowUp()
 	wrongOrg.IncidentRecord = "https://github.com/someone/civilization-operation/blob/main/docs/incidents/INC-001-pre-live-operation.md"
-	if _, err := work.IncidentFollowUpArtifactBody(wrongOrg); err == nil || !strings.Contains(err.Error(), "operation docs/incidents") {
+	if _, err := work.IncidentFollowUpArtifactBody(wrongOrg); err == nil || !strings.Contains(err.Error(), incidentRecordPathErr) {
 		t.Fatalf("expected wrong-org github URL rejection, got %v", err)
 	}
 
 	wrongScheme := validIncidentFollowUp()
 	wrongScheme.IncidentRecord = "ftp://github.com/transpara-ai/civilization-operation/blob/main/docs/incidents/INC-001-pre-live-operation.md"
-	if _, err := work.IncidentFollowUpArtifactBody(wrongScheme); err == nil || !strings.Contains(err.Error(), "operation docs/incidents") {
+	if _, err := work.IncidentFollowUpArtifactBody(wrongScheme); err == nil || !strings.Contains(err.Error(), incidentRecordPathErr) {
 		t.Fatalf("expected wrong-scheme github URL rejection, got %v", err)
 	}
 
 	fileURL := validIncidentFollowUp()
 	fileURL.IncidentRecord = "file:///civilization-operation/docs/incidents/INC-001-pre-live-operation.md"
-	if _, err := work.IncidentFollowUpArtifactBody(fileURL); err == nil || !strings.Contains(err.Error(), "operation docs/incidents") {
+	if _, err := work.IncidentFollowUpArtifactBody(fileURL); err == nil || !strings.Contains(err.Error(), incidentRecordPathErr) {
 		t.Fatalf("expected file URL rejection, got %v", err)
 	}
 }
@@ -131,21 +133,21 @@ func TestIncidentFollowUpRejectsInvalidContractValues(t *testing.T) {
 			mutate: func(f *work.IncidentFollowUp) {
 				f.IncidentRecord = "work/docs/incidents/INC-001.md"
 			},
-			wantErr: "operation docs/incidents",
+			wantErr: incidentRecordPathErr,
 		},
 		{
 			name: "incident record bare operation incidents directory",
 			mutate: func(f *work.IncidentFollowUp) {
 				f.IncidentRecord = "operation/docs/incidents"
 			},
-			wantErr: "operation docs/incidents",
+			wantErr: incidentRecordPathErr,
 		},
 		{
 			name: "false positive incident record path",
 			mutate: func(f *work.IncidentFollowUp) {
 				f.IncidentRecord = "not-civilization-operation/docs/incidents/INC-001.md"
 			},
-			wantErr: "operation docs/incidents",
+			wantErr: incidentRecordPathErr,
 		},
 		{
 			name: "unknown task type",
