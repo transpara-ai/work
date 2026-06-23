@@ -1007,9 +1007,9 @@ func (c *epic11BlockingPRClient) CreateDraftPullRequest(ctx context.Context, mut
 	}
 	return work.Epic11DraftPullRequestResult{
 		Repository:                   mutation.Repository,
-		Number:                       222,
-		URL:                          "https://github.com/transpara-ai/docs/pull/222",
-		GitHubResponseIDOrEquivalent: "github-pr-node-222",
+		Number:                       112,
+		URL:                          "https://github.com/transpara-ai/docs/pull/112",
+		GitHubResponseIDOrEquivalent: "github-pr-node-112",
 		BaseRef:                      mutation.BaseRef,
 		BaseSHA:                      mutation.BaseSHA,
 		HeadRef:                      mutation.HeadRef,
