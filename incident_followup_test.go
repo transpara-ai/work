@@ -12,7 +12,7 @@ func validIncidentFollowUp() work.IncidentFollowUp {
 	return work.IncidentFollowUp{
 		TaskID:                "INC-001-work-add-incident-follow-up-schema",
 		IncidentID:            "INC-001",
-		IncidentRecord:        "civilization-operation/docs/incidents/INC-001-pre-live-operation.md",
+		IncidentRecord:        "operation/docs/incidents/INC-001-pre-live-operation.md",
 		TaskType:              work.IncidentFollowUpCorrection,
 		OwningRepo:            "transpara-ai/work",
 		RequestedBy:           "incident-lead",
@@ -54,6 +54,9 @@ func TestIncidentFollowUpArtifactBodyValidatesAndPreservesContractFields(t *test
 	if decoded.FollowUp.Status != work.IncidentFollowUpReady {
 		t.Fatalf("status = %q", decoded.FollowUp.Status)
 	}
+	if decoded.FollowUp.IncidentRecord != "operation/docs/incidents/INC-001-pre-live-operation.md" {
+		t.Fatalf("incident_record = %q", decoded.FollowUp.IncidentRecord)
+	}
 	if decoded.FollowUp.ClosureLink != "" {
 		t.Fatalf("closure_link = %q, want empty while task is open", decoded.FollowUp.ClosureLink)
 	}
@@ -62,26 +65,50 @@ func TestIncidentFollowUpArtifactBodyValidatesAndPreservesContractFields(t *test
 	}
 
 	githubURL := validIncidentFollowUp()
-	githubURL.IncidentRecord = "https://github.com/transpara-ai/civilization-operation/blob/main/docs/incidents/INC-001-pre-live-operation.md"
-	if _, err := work.IncidentFollowUpArtifactBody(githubURL); err != nil {
+	githubURL.IncidentRecord = "https://github.com/transpara-ai/operation/blob/main/docs/incidents/INC-001-pre-live-operation.md"
+	body, err = work.IncidentFollowUpArtifactBody(githubURL)
+	if err != nil {
 		t.Fatalf("github incident record URL rejected: %v", err)
+	}
+	if !strings.Contains(body, "https://github.com/transpara-ai/operation/blob/main/docs/incidents/INC-001-pre-live-operation.md") {
+		t.Fatalf("github incident record was not preserved canonically:\n%s", body)
+	}
+
+	legacyRelative := validIncidentFollowUp()
+	legacyRelative.IncidentRecord = "civilization-operation/docs/incidents/INC-001-pre-live-operation.md"
+	body, err = work.IncidentFollowUpArtifactBody(legacyRelative)
+	if err != nil {
+		t.Fatalf("legacy relative incident record rejected: %v", err)
+	}
+	if strings.Contains(body, "civilization-operation") || !strings.Contains(body, "operation/docs/incidents/INC-001-pre-live-operation.md") {
+		t.Fatalf("legacy relative incident record was not canonicalized:\n%s", body)
+	}
+
+	legacyGitHubURL := validIncidentFollowUp()
+	legacyGitHubURL.IncidentRecord = "https://github.com/transpara-ai/civilization-operation/blob/main/docs/incidents/INC-001-pre-live-operation.md"
+	body, err = work.IncidentFollowUpArtifactBody(legacyGitHubURL)
+	if err != nil {
+		t.Fatalf("legacy github incident record URL rejected: %v", err)
+	}
+	if strings.Contains(body, "civilization-operation") || !strings.Contains(body, "https://github.com/transpara-ai/operation/blob/main/docs/incidents/INC-001-pre-live-operation.md") {
+		t.Fatalf("legacy github incident record URL was not canonicalized:\n%s", body)
 	}
 
 	wrongOrg := validIncidentFollowUp()
 	wrongOrg.IncidentRecord = "https://github.com/someone/civilization-operation/blob/main/docs/incidents/INC-001-pre-live-operation.md"
-	if _, err := work.IncidentFollowUpArtifactBody(wrongOrg); err == nil || !strings.Contains(err.Error(), "civilization-operation docs/incidents") {
+	if _, err := work.IncidentFollowUpArtifactBody(wrongOrg); err == nil || !strings.Contains(err.Error(), "operation docs/incidents") {
 		t.Fatalf("expected wrong-org github URL rejection, got %v", err)
 	}
 
 	wrongScheme := validIncidentFollowUp()
 	wrongScheme.IncidentRecord = "ftp://github.com/transpara-ai/civilization-operation/blob/main/docs/incidents/INC-001-pre-live-operation.md"
-	if _, err := work.IncidentFollowUpArtifactBody(wrongScheme); err == nil || !strings.Contains(err.Error(), "civilization-operation docs/incidents") {
+	if _, err := work.IncidentFollowUpArtifactBody(wrongScheme); err == nil || !strings.Contains(err.Error(), "operation docs/incidents") {
 		t.Fatalf("expected wrong-scheme github URL rejection, got %v", err)
 	}
 
 	fileURL := validIncidentFollowUp()
 	fileURL.IncidentRecord = "file:///civilization-operation/docs/incidents/INC-001-pre-live-operation.md"
-	if _, err := work.IncidentFollowUpArtifactBody(fileURL); err == nil || !strings.Contains(err.Error(), "civilization-operation docs/incidents") {
+	if _, err := work.IncidentFollowUpArtifactBody(fileURL); err == nil || !strings.Contains(err.Error(), "operation docs/incidents") {
 		t.Fatalf("expected file URL rejection, got %v", err)
 	}
 }
@@ -104,14 +131,14 @@ func TestIncidentFollowUpRejectsInvalidContractValues(t *testing.T) {
 			mutate: func(f *work.IncidentFollowUp) {
 				f.IncidentRecord = "work/docs/incidents/INC-001.md"
 			},
-			wantErr: "civilization-operation docs/incidents",
+			wantErr: "operation docs/incidents",
 		},
 		{
 			name: "false positive incident record path",
 			mutate: func(f *work.IncidentFollowUp) {
 				f.IncidentRecord = "not-civilization-operation/docs/incidents/INC-001.md"
 			},
-			wantErr: "civilization-operation docs/incidents",
+			wantErr: "operation docs/incidents",
 		},
 		{
 			name: "unknown task type",

@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	// IncidentFollowUpSchemaRef is the civilization-operation contract Work accepts
+	// IncidentFollowUpSchemaRef is the operation contract Work accepts
 	// for incident execution follow-up tasks.
-	IncidentFollowUpSchemaRef = "civilization-operation/docs/operations/work-incident-follow-up-schema.md"
+	IncidentFollowUpSchemaRef = "operation/docs/operations/work-incident-follow-up-schema.md"
 	// IncidentFollowUpSchemaVersion tracks the first accepted pre-live contract.
 	IncidentFollowUpSchemaVersion = "2026-06-16"
 	// IncidentFollowUpArtifactLabel labels work.task.artifact events carrying the
@@ -23,6 +23,8 @@ const (
 	// IncidentFollowUpMediaType is the artifact media type for the contract payload.
 	IncidentFollowUpMediaType = "application/json"
 )
+
+const legacyIncidentFollowUpSchemaRef = "civilization-operation/docs/operations/work-incident-follow-up-schema.md"
 
 // IncidentFollowUpTaskType is the primary type for a routed incident follow-up.
 type IncidentFollowUpTaskType string
@@ -52,7 +54,7 @@ const (
 )
 
 // IncidentFollowUp is Work's accepted shape for
-// civilization-operation/docs/operations/work-incident-follow-up-schema.md.
+// operation/docs/operations/work-incident-follow-up-schema.md.
 // Work stores this as an immutable task artifact; the incident record remains
 // the cross-repository source of truth.
 type IncidentFollowUp struct {
@@ -126,7 +128,7 @@ func NormalizeIncidentFollowUp(followUp IncidentFollowUp) (IncidentFollowUp, err
 	if err != nil {
 		return IncidentFollowUp{}, err
 	}
-	if err := validateIncidentFollowUpScalars(normalized); err != nil {
+	if err := validateIncidentFollowUpScalars(&normalized); err != nil {
 		return IncidentFollowUp{}, err
 	}
 	switch normalized.Status {
@@ -177,7 +179,7 @@ func parseIncidentFollowUpArtifactBody(body string) (IncidentFollowUp, error) {
 	if err := decoder.Decode(&decoded); err != nil {
 		return IncidentFollowUp{}, err
 	}
-	if decoded.Schema != IncidentFollowUpSchemaRef {
+	if decoded.Schema != IncidentFollowUpSchemaRef && decoded.Schema != legacyIncidentFollowUpSchemaRef {
 		return IncidentFollowUp{}, fmt.Errorf("schema %q, want %q", decoded.Schema, IncidentFollowUpSchemaRef)
 	}
 	if decoded.SchemaVersion != IncidentFollowUpSchemaVersion {
@@ -253,7 +255,7 @@ func (ts *TaskStore) LatestIncidentFollowUp(taskID types.EventID) (IncidentFollo
 	return latest, true, nil
 }
 
-func validateIncidentFollowUpScalars(followUp IncidentFollowUp) error {
+func validateIncidentFollowUpScalars(followUp *IncidentFollowUp) error {
 	required := []struct {
 		field string
 		value string
@@ -280,9 +282,11 @@ func validateIncidentFollowUpScalars(followUp IncidentFollowUp) error {
 	if hasControlRune(followUp.AuthorizationEvidence) || hasControlRune(followUp.ClosureLink) {
 		return fmt.Errorf("incident follow-up contains control characters")
 	}
-	if !pointsToCivilizationOperationIncident(followUp.IncidentRecord) {
-		return fmt.Errorf("incident_record must point to civilization-operation docs/incidents/")
+	canonicalIncidentRecord, ok := canonicalOperationIncidentRecord(followUp.IncidentRecord)
+	if !ok {
+		return fmt.Errorf("incident_record must point to operation docs/incidents/")
 	}
+	followUp.IncidentRecord = canonicalIncidentRecord
 	if !validIncidentFollowUpTaskType(followUp.TaskType) {
 		return fmt.Errorf("task_type %q is not accepted by the incident follow-up schema", followUp.TaskType)
 	}
@@ -292,19 +296,34 @@ func validateIncidentFollowUpScalars(followUp IncidentFollowUp) error {
 	return nil
 }
 
-func pointsToCivilizationOperationIncident(value string) bool {
+func canonicalOperationIncidentRecord(value string) (string, bool) {
 	trimmed := strings.TrimSpace(value)
 	if parsed, err := url.Parse(trimmed); err == nil && parsed.Scheme != "" {
 		if parsed.Host == "" || parsed.Host != "github.com" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
-			return false
+			return "", false
 		}
 		cleaned := strings.Trim(path.Clean(parsed.Path), "/")
 		parts := strings.Split(cleaned, "/")
-		return len(parts) >= 4 && parts[0] == "transpara-ai" && parts[1] == "civilization-operation" && strings.Contains(cleaned, "/docs/incidents/")
+		if len(parts) >= 4 && parts[0] == "transpara-ai" && isOperationRepoSlug(parts[1]) && strings.Contains(cleaned, "/docs/incidents/") {
+			parts[1] = "operation"
+			parsed.Path = "/" + strings.Join(parts, "/")
+			return parsed.String(), true
+		}
+		return "", false
 	}
 	cleaned := strings.TrimPrefix(path.Clean(strings.ReplaceAll(trimmed, "\\", "/")), "/")
-	return strings.HasPrefix(cleaned, "civilization-operation/docs/incidents/") ||
-		strings.Contains(cleaned, "/civilization-operation/docs/incidents/")
+	parts := strings.Split(cleaned, "/")
+	for i := 0; i+2 < len(parts); i++ {
+		if isOperationRepoSlug(parts[i]) && parts[i+1] == "docs" && parts[i+2] == "incidents" {
+			parts[i] = "operation"
+			return strings.Join(parts, "/"), true
+		}
+	}
+	return "", false
+}
+
+func isOperationRepoSlug(value string) bool {
+	return value == "operation" || value == "civilization-operation"
 }
 
 func normalizeIncidentFollowUpList(field string, values []string, requireNonEmpty bool) ([]string, error) {
