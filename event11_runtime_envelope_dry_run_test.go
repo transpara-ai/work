@@ -62,6 +62,57 @@ func TestEvent11RuntimeEnvelopeDryRunFixtureBuildsCompleteEvidence(t *testing.T)
 	if len(run.WorkProjection.Verification.GateResultIDs) != 1 || run.WorkProjection.Verification.GateResultIDs[0] != run.GateResultID {
 		t.Fatalf("work verification = %#v; want gate result %s", run.WorkProjection.Verification, run.GateResultID)
 	}
+	if run.Report.TraceOutput.Status != "pass" ||
+		run.Report.TraceOutput.TestRunID != run.TestRunID ||
+		run.Report.TraceOutput.GateResultID != run.GateResultID ||
+		run.Report.TraceOutput.AuditReportID != run.AuditReportID ||
+		!run.Report.TraceOutput.TraceCompleted ||
+		run.Report.TraceOutput.RequiredPathCount == 0 ||
+		hasDuplicateStrings(run.Report.TraceOutput.EvidenceRefs) {
+		t.Fatalf("trace output = %#v; want explicit TestRun/GateResult/AuditReport pass", run.Report.TraceOutput)
+	}
+	if run.Report.GateOutput.Status != "pass" ||
+		run.Report.GateOutput.GateResultID != run.GateResultID ||
+		run.Report.GateOutput.TestRunID != run.TestRunID ||
+		run.Report.GateOutput.AuditReportID != run.AuditReportID ||
+		run.Report.GateOutput.GateName != "gate_u_event11_runtime_envelope_dry_run_fixture" ||
+		run.Report.GateOutput.GateScope != "fixture_only" ||
+		run.Report.GateOutput.GateUClosureClaimed {
+		t.Fatalf("gate output = %#v; want explicit GateResult/TestRun/AuditReport pass", run.Report.GateOutput)
+	}
+	for _, want := range []string{run.GateResultID, run.TestRunID, run.ArtifactID} {
+		if !containsString(run.Report.GateOutput.EvidenceRefs, want) {
+			t.Fatalf("gate evidence refs = %#v; want %q", run.Report.GateOutput.EvidenceRefs, want)
+		}
+	}
+	handoff := run.Report.EventGraphHandoff
+	if handoff.Status != "local_fixture_projection_complete" ||
+		handoff.ProjectionScope != "work_local_in_memory_v39_fixture" ||
+		handoff.PersistentWriteStatus != "not_written" ||
+		handoff.PersistentWriteClaimed ||
+		handoff.ProductionTruthClaimed ||
+		handoff.RuntimeExecutionScope != "local_deterministic_fixture_only" {
+		t.Fatalf("handoff = %#v; want ready local projection with no persistent write claim", handoff)
+	}
+	for _, want := range []string{
+		"eg://RuntimeEnvelope/" + run.RuntimeEnvelopeID,
+		"eg://RuntimeResult/" + run.RuntimeResultID,
+		"eg://TestRun/" + run.TestRunID,
+		"eg://GateResult/" + run.GateResultID,
+		"eg://AuditReport/" + run.AuditReportID,
+	} {
+		if !containsString(handoff.EventGraphRefs, want) {
+			t.Fatalf("handoff refs = %#v; want %q", handoff.EventGraphRefs, want)
+		}
+	}
+	if hasDuplicateStrings(handoff.AuthorityRefs) {
+		t.Fatalf("authority refs = %#v; want no duplicates", handoff.AuthorityRefs)
+	}
+	for _, want := range []string{"DF-V4.0-EPIC-011-AUTHORITY-DECISION", "transpara-ai/docs#180", run.AuthorityDecisionID} {
+		if !containsString(handoff.AuthorityRefs, want) {
+			t.Fatalf("authority refs = %#v; want %q", handoff.AuthorityRefs, want)
+		}
+	}
 
 	for _, typ := range []string{
 		v39.TypeFactoryOrder,
@@ -233,6 +284,33 @@ func TestEvent11RuntimeEnvelopeDryRunFixtureFailsClosedForMissingEvidence(t *tes
 			if !containsString(run.Report.Missing, tt.wantMissing) {
 				t.Fatalf("missing = %#v; want %q", run.Report.Missing, tt.wantMissing)
 			}
+			if run.Report.TraceOutput.Status != "fail" || !containsString(run.Report.TraceOutput.Missing, tt.wantMissing) {
+				t.Fatalf("trace output = %#v; want fail with %q", run.Report.TraceOutput, tt.wantMissing)
+			}
+			if run.Report.GateOutput.Status != "fail" || !containsString(run.Report.GateOutput.Missing, tt.wantMissing) {
+				t.Fatalf("gate output = %#v; want fail with %q", run.Report.GateOutput, tt.wantMissing)
+			}
+			if run.Report.GateOutput.GateScope != "fixture_only" || run.Report.GateOutput.GateUClosureClaimed {
+				t.Fatalf("gate output = %#v; want fixture scope with no Gate U closure claim", run.Report.GateOutput)
+			}
+			if run.Report.EventGraphHandoff.Status != "blocked" ||
+				run.Report.EventGraphHandoff.PersistentWriteStatus != "not_written" ||
+				run.Report.EventGraphHandoff.PersistentWriteClaimed ||
+				run.Report.EventGraphHandoff.ProductionTruthClaimed ||
+				!containsString(run.Report.EventGraphHandoff.BlockedBy, tt.wantMissing) {
+				t.Fatalf("handoff = %#v; want blocked not_written with %q", run.Report.EventGraphHandoff, tt.wantMissing)
+			}
+			if opts.OmitAuditReport {
+				if run.Report.TraceOutput.AuditReportID != "" || run.Report.GateOutput.AuditReportID != "" {
+					t.Fatalf("trace/gate audit refs = %q/%q; want omitted", run.Report.TraceOutput.AuditReportID, run.Report.GateOutput.AuditReportID)
+				}
+				if containsString(run.Report.EventGraphHandoff.EventGraphRefs, "eg://AuditReport/"+run.AuditReportID) {
+					t.Fatalf("handoff refs = %#v; want no missing AuditReport ref", run.Report.EventGraphHandoff.EventGraphRefs)
+				}
+			}
+			if opts.OmitRuntimeResult && containsString(run.Report.EventGraphHandoff.EventGraphRefs, "eg://RuntimeResult/"+run.RuntimeResultID) {
+				t.Fatalf("handoff refs = %#v; want no missing RuntimeResult ref", run.Report.EventGraphHandoff.EventGraphRefs)
+			}
 			if _, err := work.Event11RuntimeEnvelopeDryRunStatus(run); err == nil {
 				t.Fatalf("Event11RuntimeEnvelopeDryRunStatus err = nil; want incomplete error")
 			}
@@ -308,4 +386,15 @@ func assertEvent11Edge(t *testing.T, edges []v39.CommonEdge, typ, toID string) {
 		}
 	}
 	t.Fatalf("edges = %#v; want %s -> %s", edges, typ, toID)
+}
+
+func hasDuplicateStrings(values []string) bool {
+	seen := map[string]bool{}
+	for _, value := range values {
+		if seen[value] {
+			return true
+		}
+		seen[value] = true
+	}
+	return false
 }
