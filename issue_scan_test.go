@@ -102,6 +102,15 @@ func TestIssueScanStageCertificationUnblocksNextStage(t *testing.T) {
 	if status, err := ts.StartIssueScanStage(testActor, second.Ref(), "begin debate", causes, testConv); err != nil || status != work.StatusRunning {
 		t.Fatalf("StartIssueScanStage stage 2 = %s, %v; want running", status, err)
 	}
+	open, err := ts.ListOpen()
+	if err != nil {
+		t.Fatalf("ListOpen: %v", err)
+	}
+	for _, task := range open {
+		if task.ID == first.Task.ID {
+			t.Fatalf("certified issue-scan stage %s remained open", first.Stage)
+		}
+	}
 	if gate, err := ts.SatisfyIssueScanStageGate(testActor, first.Ref(), first.Gate, []string{"artifact:research-packet"}, causes, testConv); err != nil || gate.Created || gate.Status != work.StatusCertified {
 		t.Fatalf("repeat gate = %+v, %v; want no-op certified", gate, err)
 	}

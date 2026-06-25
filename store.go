@@ -1154,8 +1154,10 @@ func (ts *TaskStore) liveCompletedIDs() (map[types.EventID]bool, error) {
 }
 
 // dependencySatisfiedIDs returns task IDs that satisfy downstream dependency
-// edges. Legacy Work tasks satisfy dependencies through a live completion;
-// canonical v3.9 tasks satisfy dependencies once certified.
+// edges. Legacy Work tasks satisfy dependencies through a live completion.
+// Issue-scan stage tasks also satisfy their canonical stage DAG dependencies
+// once certified; other v3.9 certified tasks keep the pre-existing
+// completion-only dependency semantics.
 func (ts *TaskStore) dependencySatisfiedIDs() (map[types.EventID]bool, error) {
 	ids, err := ts.liveCompletedIDs()
 	if err != nil {
@@ -1165,12 +1167,37 @@ func (ts *TaskStore) dependencySatisfiedIDs() (map[types.EventID]bool, error) {
 	if err != nil {
 		return nil, err
 	}
+	issueScanIDs, err := ts.issueScanTaskIDs()
+	if err != nil {
+		return nil, err
+	}
 	for taskID, status := range statuses {
-		if status == StatusCertified {
+		if status == StatusCertified && issueScanIDs[taskID] {
 			ids[taskID] = true
 		}
 	}
 	return ids, nil
+}
+
+func (ts *TaskStore) issueScanTaskIDs() (map[types.EventID]bool, error) {
+	ids := make(map[types.EventID]bool)
+	after := types.None[types.Cursor]()
+	for {
+		page, err := ts.store.ByType(EventTypeTaskCreated, 1000, after)
+		if err != nil {
+			return nil, fmt.Errorf("fetch issue-scan task ids: %w", err)
+		}
+		for _, ev := range page.Items() {
+			c, ok := ev.Content().(TaskCreatedContent)
+			if ok && strings.TrimSpace(c.Workspace) == IssueScanWorkspace {
+				ids[ev.ID()] = true
+			}
+		}
+		if !page.HasMore() {
+			return ids, nil
+		}
+		after = page.Cursor()
+	}
 }
 
 func (ts *TaskStore) latestLifecycleStatuses() (map[types.EventID]TaskStatus, error) {
@@ -1202,8 +1229,9 @@ func (ts *TaskStore) latestLifecycleStatuses() (map[types.EventID]TaskStatus, er
 // and are not blocked by an incomplete dependency.
 // It fetches up to 1000 tasks and filters out completed and blocked tasks.
 func (ts *TaskStore) ListOpen() ([]Task, error) {
-	// Collect all dependency-satisfying task IDs (a legacy completion
-	// superseded by a reopen does not count; a v3.9 certified task does).
+	// Collect all dependency-satisfying task IDs. A legacy completion
+	// superseded by a reopen does not count; certified tasks count only for
+	// the issue-scan stage workspace.
 	completedIDs, err := ts.dependencySatisfiedIDs()
 	if err != nil {
 		return nil, err
@@ -1360,7 +1388,7 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 		return nil, nil
 	}
 
-	// Scan 1: completed + reopened events plus v3.9 certification -> dependency-satisfied set.
+	// Scan 1: completed + reopened events plus issue-scan certification -> dependency-satisfied set.
 	completedIDs, err := ts.dependencySatisfiedIDs()
 	if err != nil {
 		return nil, err
