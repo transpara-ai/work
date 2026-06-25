@@ -35,7 +35,9 @@ returns structured values:
 - proposed-only changed-file intent
 - unapplied proposal artifact
 - unavailable validation result
-- proof-of-work packet
+- proof-of-work packet, including full GitHub issue source records and direct
+  caller-ordered `source_issue_refs` for deterministic issue-to-evidence
+  traceability
 - AuditReport-shaped recommendation
 
 The builder is pure. It has no store, filesystem, GitHub, runtime, EventGraph,

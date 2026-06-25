@@ -166,6 +166,7 @@ type FactoryOrderProposalProofOfWork struct {
 	ExecutionReceipt      FactoryOrderProposalAvailability        `json:"execution_receipt"`
 	NativeEventGraphWrite FactoryOrderProposalAvailability        `json:"native_eventgraph_write"`
 	IssueSourceRecords    []FactoryOrderProposalIssueSourceRecord `json:"issue_source_records,omitempty"`
+	SourceIssueRefs       []string                                `json:"source_issue_refs,omitempty"`
 	AuthorityBoundary     []FactoryOrderProtectedActionBoundary   `json:"authority_boundary"`
 	TraceGap              []string                                `json:"trace_gap"`
 	ResidualRisks         []string                                `json:"residual_risks"`
@@ -275,6 +276,7 @@ func BuildFactoryOrderDevelopmentProposal(opts FactoryOrderDevelopmentProposalOp
 		ExecutionReceipt:      unavailable("protected execution did not occur"),
 		NativeEventGraphWrite: unavailable("native EventGraph truth requires separate authority"),
 		IssueSourceRecords:    cloneIssueSourceRecords(issueRecords),
+		SourceIssueRefs:       issueSourceRefs(issueRecords),
 		AuthorityBoundary:     cloneAuthorityBoundary(authorityBoundary),
 		TraceGap:              []string{"native EventGraph truth remains unavailable"},
 		ResidualRisks:         []string{"R-001 unresolved", "R-002 unresolved", "R-003 unresolved"},

@@ -48,6 +48,9 @@ func TestBuildFactoryOrderDevelopmentProposalPreservesEvidence(t *testing.T) {
 	assertUnavailable(t, proposal.ProofOfWorkPacket.RuntimeInvocation, "runtime")
 	assertUnavailable(t, proposal.ProofOfWorkPacket.ExecutionReceipt, "execution receipt")
 	assertUnavailable(t, proposal.ProofOfWorkPacket.NativeEventGraphWrite, "EventGraph")
+	if len(proposal.ProofOfWorkPacket.SourceIssueRefs) != 0 {
+		t.Fatalf("proof source refs = %#v; want empty without issue records", proposal.ProofOfWorkPacket.SourceIssueRefs)
+	}
 	if proposal.AuditReport.Status != "defer" || !containsString(proposal.AuditReport.ResidualRisks, "R-001 unresolved") {
 		t.Fatalf("audit report = %#v; want defer with residual risks", proposal.AuditReport)
 	}
@@ -126,8 +129,32 @@ func TestBuildFactoryOrderDevelopmentProposalDerivesIssueEvidence(t *testing.T) 
 	if len(proposal.ProofOfWorkPacket.IssueSourceRecords) != 1 || proposal.ProofOfWorkPacket.IssueSourceRecords[0].Number != 61 {
 		t.Fatalf("proof issue source records = %#v", proposal.ProofOfWorkPacket.IssueSourceRecords)
 	}
+	if strings.Join(proposal.ProofOfWorkPacket.SourceIssueRefs, ",") != "transpara-ai/work#61" {
+		t.Fatalf("proof source refs = %#v", proposal.ProofOfWorkPacket.SourceIssueRefs)
+	}
 	assertUnavailable(t, proposal.ProofOfWorkPacket.RuntimeInvocation, "runtime")
 	assertUnavailable(t, proposal.ProofOfWorkPacket.NativeEventGraphWrite, "EventGraph")
+}
+
+func TestBuildFactoryOrderDevelopmentProposalPreservesProofIssueRefOrder(t *testing.T) {
+	opts := validFactoryOrderDevelopmentProposalOptions()
+	opts.IssueSourceRecords = []work.FactoryOrderProposalIssueSourceRecord{
+		{Repo: "transpara-ai/work", Number: 62, Title: "Proof-of-work packet linked to issue source records"},
+		{Repo: "transpara-ai/work", Number: 61, Title: "Requirements and task-draft derivation from issue records"},
+	}
+
+	proposal, err := work.BuildFactoryOrderDevelopmentProposal(opts)
+	if err != nil {
+		t.Fatalf("BuildFactoryOrderDevelopmentProposal: %v", err)
+	}
+
+	want := "transpara-ai/work#62,transpara-ai/work#61"
+	if strings.Join(proposal.ProofOfWorkPacket.SourceIssueRefs, ",") != want {
+		t.Fatalf("proof source refs = %#v, want %s", proposal.ProofOfWorkPacket.SourceIssueRefs, want)
+	}
+	if strings.Join(proposal.TaskDrafts[0].SourceIssueRefs, ",") != want {
+		t.Fatalf("task source refs = %#v, want %s", proposal.TaskDrafts[0].SourceIssueRefs, want)
+	}
 }
 
 func TestBuildFactoryOrderDevelopmentProposalRejectsInvalidInputs(t *testing.T) {
