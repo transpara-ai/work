@@ -42,6 +42,7 @@ const (
 )
 
 const localDeterministicWorker = "local_deterministic"
+const runtimePolicyBlockedExitCode = 126
 
 // RuntimeResourceLimits records practical local worker limits. The deterministic
 // worker records these limits and enforces timeout directly; CPU and memory are
@@ -242,6 +243,8 @@ func (ts *TaskStore) ProjectRuntimeResults(taskID types.EventID) ([]RuntimeResul
 	return records, nil
 }
 
+// BuildRuntimePolicyBlockedNoSideEffectEvidence projects no-side-effect proof
+// from an already-recorded policy-blocked runtime result.
 func BuildRuntimePolicyBlockedNoSideEffectEvidence(result RuntimeResult) RuntimePolicyBlockedNoSideEffectEvidence {
 	evidence := RuntimePolicyBlockedNoSideEffectEvidence{
 		PolicyBlocked:        result.PolicyBlocked,
@@ -258,8 +261,8 @@ func BuildRuntimePolicyBlockedNoSideEffectEvidence(result RuntimeResult) Runtime
 	if !result.PolicyBlocked {
 		evidence.Reasons = append(evidence.Reasons, "policy_blocked flag is false")
 	}
-	if result.ExitCode != 126 {
-		evidence.Reasons = append(evidence.Reasons, fmt.Sprintf("exit code is %d, want 126", result.ExitCode))
+	if result.ExitCode != runtimePolicyBlockedExitCode {
+		evidence.Reasons = append(evidence.Reasons, fmt.Sprintf("exit code is %d, want %d", result.ExitCode, runtimePolicyBlockedExitCode))
 	}
 	if result.TimedOut {
 		evidence.Reasons = append(evidence.Reasons, "timed_out flag is true")
@@ -360,14 +363,14 @@ func executeLocalDeterministic(envelopeID types.EventID, envelope RuntimeEnvelop
 			entry.Status = string(RuntimeStatusPolicyBlocked)
 			entry.Error = err.Error()
 			result.CommandLog = append(result.CommandLog, entry)
-			finishRuntimeResultWithChanged(&result, RuntimeStatusPolicyBlocked, 126, err.Error(), changed)
+			finishRuntimeResultWithChanged(&result, RuntimeStatusPolicyBlocked, runtimePolicyBlockedExitCode, err.Error(), changed)
 			return result
 		}
 		if path, ok, err := runtimeCommandChangedFile(envelope, cmd); err != nil {
 			entry.Status = string(RuntimeStatusPolicyBlocked)
 			entry.Error = err.Error()
 			result.CommandLog = append(result.CommandLog, entry)
-			finishRuntimeResultWithChanged(&result, RuntimeStatusPolicyBlocked, 126, err.Error(), changed)
+			finishRuntimeResultWithChanged(&result, RuntimeStatusPolicyBlocked, runtimePolicyBlockedExitCode, err.Error(), changed)
 			return result
 		} else if ok && envelope.ResourceLimits.MaxFilesChanged > 0 {
 			if _, alreadyChanged := changed[path]; !alreadyChanged && len(changed) >= envelope.ResourceLimits.MaxFilesChanged {
@@ -375,7 +378,7 @@ func executeLocalDeterministic(envelopeID types.EventID, envelope RuntimeEnvelop
 				entry.Status = string(RuntimeStatusPolicyBlocked)
 				entry.Error = err.Error()
 				result.CommandLog = append(result.CommandLog, entry)
-				finishRuntimeResultWithChanged(&result, RuntimeStatusPolicyBlocked, 126, err.Error(), changed)
+				finishRuntimeResultWithChanged(&result, RuntimeStatusPolicyBlocked, runtimePolicyBlockedExitCode, err.Error(), changed)
 				return result
 			}
 		}
@@ -386,7 +389,7 @@ func executeLocalDeterministic(envelopeID types.EventID, envelope RuntimeEnvelop
 			if errors.Is(err, ErrRuntimePolicyBlocked) {
 				entry.Status = string(RuntimeStatusPolicyBlocked)
 				result.CommandLog = append(result.CommandLog, entry)
-				finishRuntimeResultWithChanged(&result, RuntimeStatusPolicyBlocked, 126, err.Error(), changed)
+				finishRuntimeResultWithChanged(&result, RuntimeStatusPolicyBlocked, runtimePolicyBlockedExitCode, err.Error(), changed)
 				return result
 			}
 			if errors.Is(err, ErrRuntimeTimedOut) {
@@ -404,7 +407,7 @@ func executeLocalDeterministic(envelopeID types.EventID, envelope RuntimeEnvelop
 			entry.Status = string(RuntimeStatusPolicyBlocked)
 			entry.Error = err.Error()
 			result.CommandLog = append(result.CommandLog, entry)
-			finishRuntimeResultWithChanged(&result, RuntimeStatusPolicyBlocked, 126, err.Error(), changed)
+			finishRuntimeResultWithChanged(&result, RuntimeStatusPolicyBlocked, runtimePolicyBlockedExitCode, err.Error(), changed)
 			return result
 		}
 		entry.Status = string(RuntimeStatusSucceeded)

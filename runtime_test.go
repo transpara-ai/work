@@ -303,23 +303,103 @@ func TestRuntimeBroker_BuildsPolicyBlockedNoSideEffectEvidence(t *testing.T) {
 }
 
 func TestRuntimeBroker_PolicyBlockedEvidenceFailsWhenSideEffectsExist(t *testing.T) {
-	result := work.RuntimeResult{
+	tests := []struct {
+		name     string
+		mutate   func(*work.RuntimeResult)
+		want     string
+		sideFree bool
+	}{
+		{
+			name: "wrong status",
+			mutate: func(result *work.RuntimeResult) {
+				result.Status = work.RuntimeStatusSucceeded
+			},
+			want:     `status is "succeeded", not policy_blocked`,
+			sideFree: true,
+		},
+		{
+			name: "policy flag false",
+			mutate: func(result *work.RuntimeResult) {
+				result.PolicyBlocked = false
+			},
+			want:     "policy_blocked flag is false",
+			sideFree: true,
+		},
+		{
+			name: "wrong exit code",
+			mutate: func(result *work.RuntimeResult) {
+				result.ExitCode = 1
+			},
+			want:     "exit code is 1, want 126",
+			sideFree: true,
+		},
+		{
+			name: "timed out",
+			mutate: func(result *work.RuntimeResult) {
+				result.TimedOut = true
+			},
+			want:     "timed_out flag is true",
+			sideFree: false,
+		},
+		{
+			name: "changed files",
+			mutate: func(result *work.RuntimeResult) {
+				result.ChangedFiles = []work.RuntimeFileArtifact{{Path: "out.txt"}}
+			},
+			want:     "changed files were recorded",
+			sideFree: false,
+		},
+		{
+			name: "artifacts",
+			mutate: func(result *work.RuntimeResult) {
+				result.Artifacts = []work.RuntimeFileArtifact{{Path: "out.txt"}}
+			},
+			want:     "artifacts were recorded",
+			sideFree: false,
+		},
+		{
+			name: "validation errors",
+			mutate: func(result *work.RuntimeResult) {
+				result.ValidationErrors = []string{"missing expected output"}
+			},
+			want:     "validation errors were recorded",
+			sideFree: false,
+		},
+		{
+			name: "no blocked command",
+			mutate: func(result *work.RuntimeResult) {
+				result.CommandLog = []work.RuntimeCommandLog{{Index: 0, Name: "network_attempt", Status: string(work.RuntimeStatusSucceeded)}}
+			},
+			want:     "no policy-blocked command log entry found",
+			sideFree: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := policyBlockedRuntimeResult()
+			tt.mutate(&result)
+
+			evidence := work.BuildRuntimePolicyBlockedNoSideEffectEvidence(result)
+
+			if evidence.Status != "fail" || evidence.SideEffectFree != tt.sideFree {
+				t.Fatalf("evidence = %#v; want fail sideEffectFree=%v", evidence, tt.sideFree)
+			}
+			if !containsString(evidence.Reasons, tt.want) {
+				t.Fatalf("reasons = %#v; want %q", evidence.Reasons, tt.want)
+			}
+		})
+	}
+}
+
+func policyBlockedRuntimeResult() work.RuntimeResult {
+	return work.RuntimeResult{
 		Status:        work.RuntimeStatusPolicyBlocked,
 		PolicyBlocked: true,
 		ExitCode:      126,
 		CommandLog: []work.RuntimeCommandLog{
 			{Index: 0, Name: "network_attempt", Status: string(work.RuntimeStatusPolicyBlocked), Error: "blocked"},
 		},
-		ChangedFiles: []work.RuntimeFileArtifact{{Path: "out.txt"}},
-	}
-
-	evidence := work.BuildRuntimePolicyBlockedNoSideEffectEvidence(result)
-
-	if evidence.Status != "fail" || evidence.SideEffectFree {
-		t.Fatalf("evidence = %#v; want fail with side effects", evidence)
-	}
-	if !containsString(evidence.Reasons, "changed files were recorded") {
-		t.Fatalf("reasons = %#v; want changed files reason", evidence.Reasons)
 	}
 }
 

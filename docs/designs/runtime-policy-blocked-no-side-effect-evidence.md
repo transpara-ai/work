@@ -26,6 +26,10 @@ The projection reports counts, blocked command log entries, and failure reasons
 so a proof packet or AuditReport can distinguish a clean policy block from a
 partial side-effect case.
 
+Consumers must treat `status == "pass"` as the gate. `side_effect_free`
+describes only recorded outputs and is not, by itself, proof that the result was
+a clean policy block.
+
 ## Validation
 
 The focused validation is:
