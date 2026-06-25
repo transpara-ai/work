@@ -20,7 +20,8 @@ Default thresholds:
 
 Policy validation is fail-closed:
 
-- all thresholds must be positive;
+- unset zero thresholds default to the values above;
+- negative thresholds are rejected;
 - split and abandon thresholds must be within the maximum repair revolution
   budget;
 - split must occur no later than abandon;
@@ -34,8 +35,8 @@ Policy validation is fail-closed:
 - `complete`: validation passed and zero blockers remain.
 - `human_escalation_required`: protected action or human scope is required
   before the loop can continue.
-- `abandon_required`: repair revolutions reached the abandon threshold.
-- `abandon_required`: repair revolutions reached the maximum repair cap.
+- `abandon_required`: repair revolutions reached the abandon threshold or
+  maximum repair cap.
 - `split_required`: no-progress or split-candidate thresholds were reached.
 - `revise`: blockers remain but thresholds have not been crossed.
 - `continue`: the loop remains under configured thresholds.

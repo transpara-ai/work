@@ -10,7 +10,6 @@ import (
 func TestEvaluateReviewRepairGovernorRevisesUnderThreshold(t *testing.T) {
 	decision, err := work.EvaluateReviewRepairGovernor(work.DefaultReviewRepairGovernorPolicy(), work.ReviewRepairLoopState{
 		SourceIssueRefs:       []string{" transpara-ai/work#67 ", ""},
-		CurrentState:          work.ReviewRepairStateReview,
 		RepairRevolutions:     1,
 		ConsecutiveNoProgress: 0,
 		OpenBlockers:          2,
@@ -175,6 +174,31 @@ func TestEvaluateReviewRepairGovernorAbandonsAtThreshold(t *testing.T) {
 	}
 	if strings.Join(decision.SourceIssueRefs, ",") != "transpara-ai/work#67" {
 		t.Fatalf("source refs = %#v", decision.SourceIssueRefs)
+	}
+}
+
+func TestEvaluateReviewRepairGovernorAbandonsBeforeMaxWhenConfigured(t *testing.T) {
+	policy := work.ReviewRepairGovernorPolicy{
+		MaxRepairRevolutions:     5,
+		SplitAfterRevolutions:    2,
+		AbandonAfterRevolutions:  4,
+		MaxNoProgressRevolutions: 3,
+		HumanEscalationRoles:     []string{"maintainer"},
+	}
+
+	decision, err := work.EvaluateReviewRepairGovernor(policy, work.ReviewRepairLoopState{
+		RepairRevolutions: 4,
+		OpenBlockers:      1,
+	})
+	if err != nil {
+		t.Fatalf("EvaluateReviewRepairGovernor: %v", err)
+	}
+
+	if decision.Action != work.ReviewRepairActionAbandon || !decision.Terminal {
+		t.Fatalf("decision = %#v; want abandon threshold", decision)
+	}
+	if !strings.Contains(strings.Join(decision.Reasons, "; "), "abandon threshold 4") {
+		t.Fatalf("reasons = %#v; want abandon threshold reason", decision.Reasons)
 	}
 }
 

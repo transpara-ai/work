@@ -31,7 +31,6 @@ type ReviewRepairGovernorPolicy struct {
 // ReviewRepairLoopState is caller-supplied evidence for one loop evaluation.
 type ReviewRepairLoopState struct {
 	SourceIssueRefs            []string `json:"source_issue_refs,omitempty"`
-	CurrentState               string   `json:"current_state"`
 	RepairRevolutions          int      `json:"repair_revolutions"`
 	ConsecutiveNoProgress      int      `json:"consecutive_no_progress"`
 	OpenBlockers               int      `json:"open_blockers"`
@@ -183,7 +182,6 @@ func validateReviewRepairGovernorPolicy(policy ReviewRepairGovernorPolicy) error
 }
 
 func normalizeReviewRepairLoopState(state ReviewRepairLoopState) ReviewRepairLoopState {
-	state.CurrentState = strings.TrimSpace(state.CurrentState)
 	state.SourceIssueRefs = cleanNonEmptyReviewRepairStrings(state.SourceIssueRefs)
 	return state
 }
