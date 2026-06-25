@@ -192,6 +192,49 @@ func TestIssueScanTypedEventsRejectNonIssueScanTasks(t *testing.T) {
 	}
 }
 
+func TestIssueScanTypedEventsRejectMismatchedStageRef(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	result, err := ts.EnsureIssueScanDAG(testActor, work.IssueScanDAGOptions{
+		RunID:  "2026-06-25-docs-172-site-115-dry-run",
+		Target: work.IssueScanTarget{Repository: "transpara-ai/docs", IssueNumber: 172},
+		Stages: []work.IssueScanStageID{
+			work.IssueScanStageResearch,
+		},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("EnsureIssueScanDAG: %v", err)
+	}
+	ref := result.Stages[0].Ref()
+	ref.Target = work.IssueScanTarget{Repository: "transpara-ai/site", IssueNumber: 115}
+
+	_, err = ts.BlockIssueScanStage(testActor, ref, work.IssueScanBlocker{
+		Reason: work.IssueScanBlockerStaleTarget,
+		Detail: "mismatched typed telemetry must not be recorded",
+	}, causes, testConv)
+	if !errors.Is(err, work.ErrInvalidLifecycleTransition) {
+		t.Fatalf("BlockIssueScanStage mismatched ref = %v; want invalid transition", err)
+	}
+	_, err = ts.SatisfyIssueScanStageGate(testActor, ref, result.Stages[0].Gate, []string{"artifact:research-packet"}, causes, testConv)
+	if !errors.Is(err, work.ErrInvalidLifecycleTransition) {
+		t.Fatalf("SatisfyIssueScanStageGate mismatched ref = %v; want invalid transition", err)
+	}
+	blockerPage, err := s.ByType(work.EventTypeIssueScanStageBlocked, 1000, types.None[types.Cursor]())
+	if err != nil {
+		t.Fatalf("ByType blocker events: %v", err)
+	}
+	if len(blockerPage.Items()) != 0 {
+		t.Fatalf("blocker event count = %d; want 0", len(blockerPage.Items()))
+	}
+	gatePage, err := s.ByType(work.EventTypeIssueScanStageGateSatisfied, 1000, types.None[types.Cursor]())
+	if err != nil {
+		t.Fatalf("ByType gate events: %v", err)
+	}
+	if len(gatePage.Items()) != 0 {
+		t.Fatalf("gate event count = %d; want 0", len(gatePage.Items()))
+	}
+}
+
 func TestIssueScanGateCanCertifyVerifiedStage(t *testing.T) {
 	s, causes := setupStore(t)
 	ts := newTaskStore(t, s)

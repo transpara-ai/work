@@ -364,6 +364,7 @@ func (ts *TaskStore) EnsureDependency(
 }
 
 // StartIssueScanStage moves an unblocked stage deterministically to running.
+// Parked stages require an external repair/unblock transition before restart.
 func (ts *TaskStore) StartIssueScanStage(
 	source types.ActorID,
 	ref IssueScanStageRef,
@@ -661,6 +662,10 @@ func (ts *TaskStore) validateIssueScanStageRef(ref IssueScanStageRef) error {
 	c, ok := ev.Content().(TaskCreatedContent)
 	if !ok || !isIssueScanTaskContent(c) {
 		return fmt.Errorf("%w: task %s is not an issue-scan stage task", ErrInvalidLifecycleTransition, ref.TaskID.Value())
+	}
+	expectedCanonicalTaskID := "tsk_" + issueScanBaseID(ref.RunID, ref.Target, ref.Stage)
+	if strings.TrimSpace(c.CanonicalTaskID) != expectedCanonicalTaskID {
+		return fmt.Errorf("%w: issue-scan stage ref does not match task %s", ErrInvalidLifecycleTransition, ref.TaskID.Value())
 	}
 	return nil
 }

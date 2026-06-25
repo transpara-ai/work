@@ -1157,9 +1157,8 @@ func (ts *TaskStore) liveCompletedIDs() (map[types.EventID]bool, error) {
 // edges. Legacy Work tasks satisfy dependencies through a live completion.
 // Issue-scan stage tasks also satisfy their canonical stage DAG dependencies
 // once certified; other v3.9 certified tasks keep the pre-existing
-// completion-only dependency semantics. Issue-scan membership is derived from
-// the deterministic issue-scan canonical IDs, not from a caller-settable
-// workspace label.
+// completion-only dependency semantics. Issue-scan membership is reserved by
+// deterministic canonical/factory ID prefixes instead of workspace labels.
 func (ts *TaskStore) dependencySatisfiedIDs() (map[types.EventID]bool, error) {
 	ids, err := ts.liveCompletedIDs()
 	if err != nil {
