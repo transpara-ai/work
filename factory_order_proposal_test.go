@@ -126,6 +126,9 @@ func TestBuildFactoryOrderDevelopmentProposalDerivesIssueEvidence(t *testing.T) 
 	if len(proposal.ProofOfWorkPacket.IssueSourceRecords) != 1 || proposal.ProofOfWorkPacket.IssueSourceRecords[0].Number != 61 {
 		t.Fatalf("proof issue source records = %#v", proposal.ProofOfWorkPacket.IssueSourceRecords)
 	}
+	if strings.Join(proposal.ProofOfWorkPacket.SourceIssueRefs, ",") != "transpara-ai/work#61" {
+		t.Fatalf("proof source refs = %#v", proposal.ProofOfWorkPacket.SourceIssueRefs)
+	}
 	assertUnavailable(t, proposal.ProofOfWorkPacket.RuntimeInvocation, "runtime")
 	assertUnavailable(t, proposal.ProofOfWorkPacket.NativeEventGraphWrite, "EventGraph")
 }
