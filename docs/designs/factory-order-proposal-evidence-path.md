@@ -38,7 +38,9 @@ returns structured values:
 - proof-of-work packet, including full GitHub issue source records and direct
   caller-ordered `source_issue_refs` for deterministic issue-to-evidence
   traceability
-- AuditReport-shaped recommendation
+- AuditReport-shaped recommendation, including issue source records, direct
+  `source_issue_refs`, validation summary, protected-action boundary records,
+  and explicit unavailable pull-request / cross-family-review evidence
 
 The builder is pure. It has no store, filesystem, GitHub, runtime, EventGraph,
 or command interface. Only structured status fields are authoritative; caller
@@ -75,6 +77,13 @@ Branch, pull request, CI, RuntimeBroker, ExecutionReceipt, and native EventGraph
 write evidence are recorded as unavailable in the proof-of-work packet. A later
 authorized workflow can attach those facts externally; this builder does not
 create or mutate them.
+
+Pull-request and cross-family-review evidence are also unavailable in the
+AuditReport-shaped closeout object until an external authorized workflow
+supplies those records. The report can cite caller-supplied issue records,
+validation-plan evidence, authority-boundary records, and unresolved residual
+risks, but it cannot close residual risks or claim review, merge, runtime, or
+production evidence.
 
 ## Merge Boundary
 

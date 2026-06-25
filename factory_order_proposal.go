@@ -180,11 +180,17 @@ type FactoryOrderProposalProofItem struct {
 }
 
 type FactoryOrderProposalAuditReport struct {
-	Status          string   `json:"status"`
-	Recommendation  string   `json:"recommendation"`
-	Summary         string   `json:"summary"`
-	ResidualRisks   []string `json:"residual_risks"`
-	ForbiddenClaims []string `json:"forbidden_claims"`
+	Status             string                                  `json:"status"`
+	Recommendation     string                                  `json:"recommendation"`
+	Summary            string                                  `json:"summary"`
+	IssueSourceRecords []FactoryOrderProposalIssueSourceRecord `json:"issue_source_records,omitempty"`
+	SourceIssueRefs    []string                                `json:"source_issue_refs,omitempty"`
+	PullRequest        FactoryOrderProposalAvailability        `json:"pull_request"`
+	Validation         FactoryOrderProposalProofItem           `json:"validation"`
+	CrossFamilyReview  FactoryOrderProposalAvailability        `json:"cross_family_review"`
+	AuthorityBoundary  []FactoryOrderProtectedActionBoundary   `json:"authority_boundary"`
+	ResidualRisks      []string                                `json:"residual_risks"`
+	ForbiddenClaims    []string                                `json:"forbidden_claims"`
 }
 
 // BuildFactoryOrderDevelopmentProposal returns structured proposal evidence
@@ -282,10 +288,16 @@ func BuildFactoryOrderDevelopmentProposal(opts FactoryOrderDevelopmentProposalOp
 		ResidualRisks:         []string{"R-001 unresolved", "R-002 unresolved", "R-003 unresolved"},
 	}
 	proposal.AuditReport = FactoryOrderProposalAuditReport{
-		Status:         "defer",
-		Recommendation: "defer_protected_actions_until_separate_authority",
-		Summary:        "Accept proposal evidence only; do not treat it as runtime, EventGraph, production, autonomy, value, v3.9, or residual-risk closure evidence.",
-		ResidualRisks:  []string{"R-001 unresolved", "R-002 unresolved", "R-003 unresolved"},
+		Status:             "defer",
+		Recommendation:     "defer_protected_actions_until_separate_authority",
+		Summary:            "Accept proposal evidence only; do not treat it as runtime, EventGraph, production, autonomy, value, v3.9, or residual-risk closure evidence.",
+		IssueSourceRecords: cloneIssueSourceRecords(issueRecords),
+		SourceIssueRefs:    issueSourceRefs(issueRecords),
+		PullRequest:        unavailable("pull request evidence is outside this pure builder"),
+		Validation:         FactoryOrderProposalProofItem{Label: "validation", Status: factoryOrderProposalStatusUnavailable, Summary: strings.Join(validationPlan, "; ")},
+		CrossFamilyReview:  unavailable("cross-family review evidence is outside this pure builder"),
+		AuthorityBoundary:  cloneAuthorityBoundary(authorityBoundary),
+		ResidualRisks:      []string{"R-001 unresolved", "R-002 unresolved", "R-003 unresolved"},
 		ForbiddenClaims: []string{
 			"production readiness",
 			"go-live",
