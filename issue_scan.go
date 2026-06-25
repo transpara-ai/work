@@ -374,6 +374,13 @@ func (ts *TaskStore) StartIssueScanStage(
 	if err := validateIssueScanStageRef(ref); err != nil {
 		return "", err
 	}
+	current, err := ts.GetStatus(ref.TaskID)
+	if err != nil {
+		return "", err
+	}
+	if current == StatusBlocked || current == StatusPolicyBlocked {
+		return "", fmt.Errorf("%w: issue-scan stage %s is parked in %s", ErrInvalidLifecycleTransition, ref.TaskID.Value(), current)
+	}
 	blocked, err := ts.IsBlocked(ref.TaskID)
 	if err != nil {
 		return "", err

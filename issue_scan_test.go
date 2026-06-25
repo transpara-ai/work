@@ -1,6 +1,7 @@
 package work_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/transpara-ai/eventgraph/go/pkg/types"
@@ -211,5 +212,35 @@ func TestIssueScanBlockerDoesNotAppendWhenStageIsTerminal(t *testing.T) {
 	}
 	if len(blockerPage.Items()) != 0 {
 		t.Fatalf("blocker event count = %d; want 0 after failed terminal block", len(blockerPage.Items()))
+	}
+}
+
+func TestIssueScanBlockedStageCannotRestartWithoutRepair(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	result, err := ts.EnsureIssueScanDAG(testActor, work.IssueScanDAGOptions{
+		RunID:  "2026-06-25-docs-172-site-115-dry-run",
+		Target: work.IssueScanTarget{Repository: "transpara-ai/site", IssueNumber: 115},
+		Stages: []work.IssueScanStageID{work.IssueScanStageResearch},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("EnsureIssueScanDAG: %v", err)
+	}
+	stage := result.Stages[0]
+	blocker := work.IssueScanBlocker{
+		Reason:       work.IssueScanBlockerStaleTarget,
+		Detail:       "site#115 is closed or no longer matches the scan target head",
+		EvidenceRefs: []string{"github:transpara-ai/site#115"},
+	}
+	if block, err := ts.BlockIssueScanStage(testActor, stage.Ref(), blocker, causes, testConv); err != nil || !block.Created || block.Status != work.StatusBlocked {
+		t.Fatalf("BlockIssueScanStage = %+v, %v; want created blocked", block, err)
+	}
+
+	status, err := ts.StartIssueScanStage(testActor, stage.Ref(), "retry stale target", causes, testConv)
+	if !errors.Is(err, work.ErrInvalidLifecycleTransition) {
+		t.Fatalf("StartIssueScanStage blocked stage = %s, %v; want invalid transition", status, err)
+	}
+	if status, err := ts.GetStatus(stage.Task.ID); err != nil || status != work.StatusBlocked {
+		t.Fatalf("status after restart attempt = %s, %v; want blocked", status, err)
 	}
 }
