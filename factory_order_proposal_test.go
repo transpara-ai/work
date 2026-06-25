@@ -136,11 +136,11 @@ func TestBuildFactoryOrderDevelopmentProposalDerivesIssueEvidence(t *testing.T) 
 	assertUnavailable(t, proposal.ProofOfWorkPacket.NativeEventGraphWrite, "EventGraph")
 }
 
-func TestBuildFactoryOrderDevelopmentProposalOrdersProofIssueRefs(t *testing.T) {
+func TestBuildFactoryOrderDevelopmentProposalPreservesProofIssueRefOrder(t *testing.T) {
 	opts := validFactoryOrderDevelopmentProposalOptions()
 	opts.IssueSourceRecords = []work.FactoryOrderProposalIssueSourceRecord{
-		{Repo: "transpara-ai/work", Number: 61, Title: "Requirements and task-draft derivation from issue records"},
 		{Repo: "transpara-ai/work", Number: 62, Title: "Proof-of-work packet linked to issue source records"},
+		{Repo: "transpara-ai/work", Number: 61, Title: "Requirements and task-draft derivation from issue records"},
 	}
 
 	proposal, err := work.BuildFactoryOrderDevelopmentProposal(opts)
@@ -148,7 +148,7 @@ func TestBuildFactoryOrderDevelopmentProposalOrdersProofIssueRefs(t *testing.T) 
 		t.Fatalf("BuildFactoryOrderDevelopmentProposal: %v", err)
 	}
 
-	want := "transpara-ai/work#61,transpara-ai/work#62"
+	want := "transpara-ai/work#62,transpara-ai/work#61"
 	if strings.Join(proposal.ProofOfWorkPacket.SourceIssueRefs, ",") != want {
 		t.Fatalf("proof source refs = %#v, want %s", proposal.ProofOfWorkPacket.SourceIssueRefs, want)
 	}
