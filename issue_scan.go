@@ -412,6 +412,9 @@ func (ts *TaskStore) BlockIssueScanStage(
 	} else if ok && current == targetStatus && latest.same(blocker) {
 		return IssueScanStageBlockResult{Created: false, Status: current}, nil
 	}
+	if current != targetStatus && !canReachIssueScanStatus(current, targetStatus) {
+		return IssueScanStageBlockResult{}, fmt.Errorf("%w: cannot park issue-scan stage %s -> %s", ErrInvalidLifecycleTransition, current, targetStatus)
+	}
 	content := IssueScanStageBlockedContent{
 		TaskID:            ref.TaskID,
 		RunID:             strings.TrimSpace(ref.RunID),
@@ -670,31 +673,43 @@ func (b IssueScanStageBlockedContent) same(blocker IssueScanBlocker) bool {
 }
 
 func (ts *TaskStore) latestIssueScanBlocker(taskID types.EventID) (IssueScanStageBlockedContent, bool, error) {
-	page, err := ts.store.ByType(EventTypeIssueScanStageBlocked, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return IssueScanStageBlockedContent{}, false, fmt.Errorf("fetch issue-scan blocker events: %w", err)
-	}
-	for _, ev := range page.Items() {
-		c, ok := ev.Content().(IssueScanStageBlockedContent)
-		if ok && c.TaskID == taskID {
-			return c, true, nil
+	after := types.None[types.Cursor]()
+	for {
+		page, err := ts.store.ByType(EventTypeIssueScanStageBlocked, 1000, after)
+		if err != nil {
+			return IssueScanStageBlockedContent{}, false, fmt.Errorf("fetch issue-scan blocker events: %w", err)
 		}
+		for _, ev := range page.Items() {
+			c, ok := ev.Content().(IssueScanStageBlockedContent)
+			if ok && c.TaskID == taskID {
+				return c, true, nil
+			}
+		}
+		if !page.HasMore() {
+			return IssueScanStageBlockedContent{}, false, nil
+		}
+		after = page.Cursor()
 	}
-	return IssueScanStageBlockedContent{}, false, nil
 }
 
 func (ts *TaskStore) latestIssueScanGate(taskID types.EventID) (IssueScanStageGateSatisfiedContent, bool, error) {
-	page, err := ts.store.ByType(EventTypeIssueScanStageGateSatisfied, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return IssueScanStageGateSatisfiedContent{}, false, fmt.Errorf("fetch issue-scan gate events: %w", err)
-	}
-	for _, ev := range page.Items() {
-		c, ok := ev.Content().(IssueScanStageGateSatisfiedContent)
-		if ok && c.TaskID == taskID {
-			return c, true, nil
+	after := types.None[types.Cursor]()
+	for {
+		page, err := ts.store.ByType(EventTypeIssueScanStageGateSatisfied, 1000, after)
+		if err != nil {
+			return IssueScanStageGateSatisfiedContent{}, false, fmt.Errorf("fetch issue-scan gate events: %w", err)
 		}
+		for _, ev := range page.Items() {
+			c, ok := ev.Content().(IssueScanStageGateSatisfiedContent)
+			if ok && c.TaskID == taskID {
+				return c, true, nil
+			}
+		}
+		if !page.HasMore() {
+			return IssueScanStageGateSatisfiedContent{}, false, nil
+		}
+		after = page.Cursor()
 	}
-	return IssueScanStageGateSatisfiedContent{}, false, nil
 }
 
 func (ts *TaskStore) transitionIssueScanStageTo(
@@ -749,4 +764,15 @@ func nextIssueScanTransition(current, target TaskStatus) (TaskStatus, bool) {
 		}
 	}
 	return "", false
+}
+
+func canReachIssueScanStatus(current, target TaskStatus) bool {
+	for current != target {
+		next, ok := nextIssueScanTransition(current, target)
+		if !ok {
+			return false
+		}
+		current = next
+	}
+	return true
 }

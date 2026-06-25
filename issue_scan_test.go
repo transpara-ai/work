@@ -180,3 +180,36 @@ func TestIssueScanBlockerParksStagesWithoutRepeatedEvents(t *testing.T) {
 		t.Fatalf("blocker event count = %d; want 2", len(blockerPage.Items()))
 	}
 }
+
+func TestIssueScanBlockerDoesNotAppendWhenStageIsTerminal(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	result, err := ts.EnsureIssueScanDAG(testActor, work.IssueScanDAGOptions{
+		RunID:  "2026-06-25-docs-172-site-115-dry-run",
+		Target: work.IssueScanTarget{Repository: "transpara-ai/docs", IssueNumber: 172},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("EnsureIssueScanDAG: %v", err)
+	}
+	stage := result.Stages[0]
+	if _, err := ts.StartIssueScanStage(testActor, stage.Ref(), "begin research", causes, testConv); err != nil {
+		t.Fatalf("StartIssueScanStage: %v", err)
+	}
+	if _, err := ts.SatisfyIssueScanStageGate(testActor, stage.Ref(), stage.Gate, []string{"artifact:research-packet"}, causes, testConv); err != nil {
+		t.Fatalf("SatisfyIssueScanStageGate: %v", err)
+	}
+	_, err = ts.BlockIssueScanStage(testActor, stage.Ref(), work.IssueScanBlocker{
+		Reason: work.IssueScanBlockerStaleTarget,
+		Detail: "target changed after certification",
+	}, causes, testConv)
+	if err == nil {
+		t.Fatal("BlockIssueScanStage after certification succeeded; want invalid transition")
+	}
+	blockerPage, err := s.ByType(work.EventTypeIssueScanStageBlocked, 1000, types.None[types.Cursor]())
+	if err != nil {
+		t.Fatalf("ByType blocker events: %v", err)
+	}
+	if len(blockerPage.Items()) != 0 {
+		t.Fatalf("blocker event count = %d; want 0 after failed terminal block", len(blockerPage.Items()))
+	}
+}
