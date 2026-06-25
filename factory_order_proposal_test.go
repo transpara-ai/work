@@ -54,6 +54,17 @@ func TestBuildFactoryOrderDevelopmentProposalPreservesEvidence(t *testing.T) {
 	if proposal.AuditReport.Status != "defer" || !containsString(proposal.AuditReport.ResidualRisks, "R-001 unresolved") {
 		t.Fatalf("audit report = %#v; want defer with residual risks", proposal.AuditReport)
 	}
+	if len(proposal.AuditReport.SourceIssueRefs) != 0 || len(proposal.AuditReport.IssueSourceRecords) != 0 {
+		t.Fatalf("audit report issue trace = %#v / %#v; want empty without issue records", proposal.AuditReport.SourceIssueRefs, proposal.AuditReport.IssueSourceRecords)
+	}
+	assertUnavailable(t, proposal.AuditReport.PullRequest, "audit pull request")
+	assertUnavailable(t, proposal.AuditReport.CrossFamilyReview, "audit cross-family review")
+	if proposal.AuditReport.Validation.Status != "unavailable" || !strings.Contains(proposal.AuditReport.Validation.Summary, "make verify") {
+		t.Fatalf("audit validation = %#v; want unavailable validation plan summary", proposal.AuditReport.Validation)
+	}
+	if len(proposal.AuditReport.AuthorityBoundary) != len(opts.AuthorityBoundary) {
+		t.Fatalf("audit authority boundary = %#v; want cloned boundary", proposal.AuditReport.AuthorityBoundary)
+	}
 	for _, claim := range proposal.AuditReport.ForbiddenClaims {
 		if strings.Contains(strings.ToLower(claim), "level 1") {
 			return
@@ -132,6 +143,20 @@ func TestBuildFactoryOrderDevelopmentProposalDerivesIssueEvidence(t *testing.T) 
 	if strings.Join(proposal.ProofOfWorkPacket.SourceIssueRefs, ",") != "transpara-ai/work#61" {
 		t.Fatalf("proof source refs = %#v", proposal.ProofOfWorkPacket.SourceIssueRefs)
 	}
+	if strings.Join(proposal.AuditReport.SourceIssueRefs, ",") != "transpara-ai/work#61" {
+		t.Fatalf("audit source refs = %#v", proposal.AuditReport.SourceIssueRefs)
+	}
+	if len(proposal.AuditReport.IssueSourceRecords) != 1 || proposal.AuditReport.IssueSourceRecords[0].Number != 61 {
+		t.Fatalf("audit issue source records = %#v", proposal.AuditReport.IssueSourceRecords)
+	}
+	assertUnavailable(t, proposal.AuditReport.PullRequest, "audit pull request")
+	assertUnavailable(t, proposal.AuditReport.CrossFamilyReview, "audit cross-family review")
+	if proposal.AuditReport.Validation.Status != "unavailable" || !strings.Contains(proposal.AuditReport.Validation.Summary, "make verify") {
+		t.Fatalf("audit validation = %#v; want unavailable validation plan summary", proposal.AuditReport.Validation)
+	}
+	if len(proposal.AuditReport.AuthorityBoundary) != len(opts.AuthorityBoundary) {
+		t.Fatalf("audit authority boundary = %#v; want cloned boundary", proposal.AuditReport.AuthorityBoundary)
+	}
 	assertUnavailable(t, proposal.ProofOfWorkPacket.RuntimeInvocation, "runtime")
 	assertUnavailable(t, proposal.ProofOfWorkPacket.NativeEventGraphWrite, "EventGraph")
 }
@@ -154,6 +179,9 @@ func TestBuildFactoryOrderDevelopmentProposalPreservesProofIssueRefOrder(t *test
 	}
 	if strings.Join(proposal.TaskDrafts[0].SourceIssueRefs, ",") != want {
 		t.Fatalf("task source refs = %#v, want %s", proposal.TaskDrafts[0].SourceIssueRefs, want)
+	}
+	if strings.Join(proposal.AuditReport.SourceIssueRefs, ",") != want {
+		t.Fatalf("audit source refs = %#v, want %s", proposal.AuditReport.SourceIssueRefs, want)
 	}
 }
 
@@ -416,7 +444,10 @@ func TestBuildFactoryOrderDevelopmentProposalCopiesInputs(t *testing.T) {
 	if proposal.AuthorityBoundary[0].Action == "mutated" || proposal.ProofOfWorkPacket.AuthorityBoundary[0].Action == "mutated" {
 		t.Fatalf("proposal retained caller authority boundary alias: %#v", proposal.AuthorityBoundary)
 	}
-	if proposal.IssueSourceRecords[0].Repo == "mutated" || proposal.TaskDrafts[0].Assumptions[0] == "mutated" || proposal.ProofOfWorkPacket.IssueSourceRecords[0].Labels[0] == "mutated" {
+	if proposal.AuditReport.AuthorityBoundary[0].Action == "mutated" {
+		t.Fatalf("proposal retained caller audit authority boundary alias: %#v", proposal.AuditReport.AuthorityBoundary)
+	}
+	if proposal.IssueSourceRecords[0].Repo == "mutated" || proposal.TaskDrafts[0].Assumptions[0] == "mutated" || proposal.ProofOfWorkPacket.IssueSourceRecords[0].Labels[0] == "mutated" || proposal.AuditReport.IssueSourceRecords[0].Labels[0] == "mutated" {
 		t.Fatalf("proposal retained caller issue source alias: %#v", proposal.IssueSourceRecords)
 	}
 }
