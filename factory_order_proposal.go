@@ -26,6 +26,7 @@ type FactoryOrderDevelopmentProposalOptions struct {
 	RequirementID         string
 	AcceptanceCriterionID string
 	TaskID                string
+	IssueSourceRecords    []FactoryOrderProposalIssueSourceRecord
 	ChangedFileIntent     []FactoryOrderChangedFileIntent
 	ValidationPlan        []string
 	AuthorityBoundary     []FactoryOrderProtectedActionBoundary
@@ -66,20 +67,38 @@ type FactoryOrderProtectedActionClaim struct {
 	Summary string `json:"summary,omitempty"`
 }
 
+// FactoryOrderProposalIssueSourceRecord is caller-supplied GitHub issue source
+// evidence. The builder normalizes it into proposal evidence; it never fetches
+// GitHub itself.
+type FactoryOrderProposalIssueSourceRecord struct {
+	Repo               string   `json:"repo"`
+	Number             int      `json:"number"`
+	URL                string   `json:"url,omitempty"`
+	Title              string   `json:"title"`
+	Goal               string   `json:"goal,omitempty"`
+	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
+	Assumptions        []string `json:"assumptions,omitempty"`
+	Ambiguities        []string `json:"ambiguities,omitempty"`
+	RiskNotes          []string `json:"risk_notes,omitempty"`
+	Labels             []string `json:"labels,omitempty"`
+	SourceRefs         []string `json:"source_refs,omitempty"`
+}
+
 // FactoryOrderDevelopmentProposal is the structured proposal evidence returned
 // by BuildFactoryOrderDevelopmentProposal.
 type FactoryOrderDevelopmentProposal struct {
-	FactoryOrder       FactoryOrderProposalSource            `json:"factory_order"`
-	Requirements       []FactoryOrderProposalRequirement     `json:"requirements"`
-	AcceptanceCriteria []FactoryOrderProposalAcceptance      `json:"acceptance_criteria"`
-	TaskDrafts         []FactoryOrderProposalTaskDraft       `json:"task_drafts"`
-	ChangedFileIntent  []FactoryOrderChangedFileIntent       `json:"changed_file_intent"`
-	ProposalArtifact   FactoryOrderProposalArtifact          `json:"proposal_artifact"`
-	ValidationPlan     []string                              `json:"validation_plan"`
-	ValidationResult   FactoryOrderProposalAvailability      `json:"validation_result"`
-	ProofOfWorkPacket  FactoryOrderProposalProofOfWork       `json:"proof_of_work_packet"`
-	AuditReport        FactoryOrderProposalAuditReport       `json:"audit_report"`
-	AuthorityBoundary  []FactoryOrderProtectedActionBoundary `json:"authority_boundary"`
+	FactoryOrder       FactoryOrderProposalSource              `json:"factory_order"`
+	IssueSourceRecords []FactoryOrderProposalIssueSourceRecord `json:"issue_source_records,omitempty"`
+	Requirements       []FactoryOrderProposalRequirement       `json:"requirements"`
+	AcceptanceCriteria []FactoryOrderProposalAcceptance        `json:"acceptance_criteria"`
+	TaskDrafts         []FactoryOrderProposalTaskDraft         `json:"task_drafts"`
+	ChangedFileIntent  []FactoryOrderChangedFileIntent         `json:"changed_file_intent"`
+	ProposalArtifact   FactoryOrderProposalArtifact            `json:"proposal_artifact"`
+	ValidationPlan     []string                                `json:"validation_plan"`
+	ValidationResult   FactoryOrderProposalAvailability        `json:"validation_result"`
+	ProofOfWorkPacket  FactoryOrderProposalProofOfWork         `json:"proof_of_work_packet"`
+	AuditReport        FactoryOrderProposalAuditReport         `json:"audit_report"`
+	AuthorityBoundary  []FactoryOrderProtectedActionBoundary   `json:"authority_boundary"`
 }
 
 type FactoryOrderProposalSource struct {
@@ -113,6 +132,12 @@ type FactoryOrderProposalTaskDraft struct {
 	Cell                   string   `json:"cell"`
 	TargetRepo             string   `json:"target_repo"`
 	TargetHead             string   `json:"target_head"`
+	SourceIssueRefs        []string `json:"source_issue_refs,omitempty"`
+	Assumptions            []string `json:"assumptions,omitempty"`
+	Ambiguities            []string `json:"ambiguities,omitempty"`
+	RiskNotes              []string `json:"risk_notes,omitempty"`
+	ImplementationStarted  bool     `json:"implementation_started"`
+	WorkMutationStatus     string   `json:"work_mutation_status"`
 }
 
 type FactoryOrderProposalArtifact struct {
@@ -131,18 +156,19 @@ type FactoryOrderProposalAvailability struct {
 }
 
 type FactoryOrderProposalProofOfWork struct {
-	WorkItem              FactoryOrderProposalProofItem         `json:"work_item"`
-	ChangedFiles          []FactoryOrderChangedFileIntent       `json:"changed_files"`
-	Validation            FactoryOrderProposalProofItem         `json:"validation"`
-	Branch                FactoryOrderProposalAvailability      `json:"branch"`
-	PullRequest           FactoryOrderProposalAvailability      `json:"pull_request"`
-	CI                    FactoryOrderProposalAvailability      `json:"ci"`
-	RuntimeInvocation     FactoryOrderProposalAvailability      `json:"runtime_invocation"`
-	ExecutionReceipt      FactoryOrderProposalAvailability      `json:"execution_receipt"`
-	NativeEventGraphWrite FactoryOrderProposalAvailability      `json:"native_eventgraph_write"`
-	AuthorityBoundary     []FactoryOrderProtectedActionBoundary `json:"authority_boundary"`
-	TraceGap              []string                              `json:"trace_gap"`
-	ResidualRisks         []string                              `json:"residual_risks"`
+	WorkItem              FactoryOrderProposalProofItem           `json:"work_item"`
+	ChangedFiles          []FactoryOrderChangedFileIntent         `json:"changed_files"`
+	Validation            FactoryOrderProposalProofItem           `json:"validation"`
+	Branch                FactoryOrderProposalAvailability        `json:"branch"`
+	PullRequest           FactoryOrderProposalAvailability        `json:"pull_request"`
+	CI                    FactoryOrderProposalAvailability        `json:"ci"`
+	RuntimeInvocation     FactoryOrderProposalAvailability        `json:"runtime_invocation"`
+	ExecutionReceipt      FactoryOrderProposalAvailability        `json:"execution_receipt"`
+	NativeEventGraphWrite FactoryOrderProposalAvailability        `json:"native_eventgraph_write"`
+	IssueSourceRecords    []FactoryOrderProposalIssueSourceRecord `json:"issue_source_records,omitempty"`
+	AuthorityBoundary     []FactoryOrderProtectedActionBoundary   `json:"authority_boundary"`
+	TraceGap              []string                                `json:"trace_gap"`
+	ResidualRisks         []string                                `json:"residual_risks"`
 }
 
 type FactoryOrderProposalProofItem struct {
@@ -172,6 +198,7 @@ func BuildFactoryOrderDevelopmentProposal(opts FactoryOrderDevelopmentProposalOp
 	changedFiles := cloneChangedFileIntent(normalized.ChangedFileIntent)
 	validationPlan := cloneStrings(normalized.ValidationPlan)
 	authorityBoundary := cloneAuthorityBoundary(normalized.AuthorityBoundary)
+	issueRecords := cloneIssueSourceRecords(normalized.IssueSourceRecords)
 
 	proposal := FactoryOrderDevelopmentProposal{
 		FactoryOrder: FactoryOrderProposalSource{
@@ -181,12 +208,13 @@ func BuildFactoryOrderDevelopmentProposal(opts FactoryOrderDevelopmentProposalOp
 			TargetRepo:      normalized.TargetRepo,
 			TargetHead:      normalized.TargetHead,
 		},
+		IssueSourceRecords: issueRecords,
 		Requirements: []FactoryOrderProposalRequirement{
 			{
 				ID:             normalized.RequirementID,
 				FactoryOrderID: normalized.FactoryOrderID,
-				Source:         "explicit",
-				Text:           "Construct a pure FactoryOrder-linked development proposal evidence packet.",
+				Source:         factoryOrderRequirementSource(issueRecords),
+				Text:           factoryOrderRequirementText(issueRecords),
 			},
 		},
 		AcceptanceCriteria: []FactoryOrderProposalAcceptance{
@@ -194,8 +222,8 @@ func BuildFactoryOrderDevelopmentProposal(opts FactoryOrderDevelopmentProposalOp
 				ID:                   normalized.AcceptanceCriterionID,
 				RequirementID:        normalized.RequirementID,
 				VerificationMethod:   "test",
-				RequiredEvidenceType: "factory_order_development_proposal_evidence",
-				Text:                 "Proposal evidence preserves linkage, validation plan, authority boundary, proof-of-work, and AuditReport without protected side effects.",
+				RequiredEvidenceType: factoryOrderRequiredEvidenceType(issueRecords),
+				Text:                 factoryOrderAcceptanceText(issueRecords),
 			},
 		},
 		TaskDrafts: []FactoryOrderProposalTaskDraft{
@@ -204,9 +232,15 @@ func BuildFactoryOrderDevelopmentProposal(opts FactoryOrderDevelopmentProposalOp
 				FactoryOrderID:         normalized.FactoryOrderID,
 				RequirementIDs:         []string{normalized.RequirementID},
 				AcceptanceCriterionIDs: []string{normalized.AcceptanceCriterionID},
-				Cell:                   "implementation",
+				Cell:                   factoryOrderTaskDraftCell(issueRecords),
 				TargetRepo:             normalized.TargetRepo,
 				TargetHead:             normalized.TargetHead,
+				SourceIssueRefs:        issueSourceRefs(issueRecords),
+				Assumptions:            issueNotes(issueRecords, func(record FactoryOrderProposalIssueSourceRecord) []string { return record.Assumptions }),
+				Ambiguities:            issueNotes(issueRecords, func(record FactoryOrderProposalIssueSourceRecord) []string { return record.Ambiguities }),
+				RiskNotes:              issueNotes(issueRecords, func(record FactoryOrderProposalIssueSourceRecord) []string { return record.RiskNotes }),
+				ImplementationStarted:  false,
+				WorkMutationStatus:     "none",
 			},
 		},
 		ChangedFileIntent: changedFiles,
@@ -240,6 +274,7 @@ func BuildFactoryOrderDevelopmentProposal(opts FactoryOrderDevelopmentProposalOp
 		RuntimeInvocation:     unavailable("RuntimeBroker execution is not authorized"),
 		ExecutionReceipt:      unavailable("protected execution did not occur"),
 		NativeEventGraphWrite: unavailable("native EventGraph truth requires separate authority"),
+		IssueSourceRecords:    cloneIssueSourceRecords(issueRecords),
 		AuthorityBoundary:     cloneAuthorityBoundary(authorityBoundary),
 		TraceGap:              []string{"native EventGraph truth remains unavailable"},
 		ResidualRisks:         []string{"R-001 unresolved", "R-002 unresolved", "R-003 unresolved"},
@@ -272,6 +307,7 @@ func normalizeFactoryOrderDevelopmentProposalOptions(opts FactoryOrderDevelopmen
 		RequirementID:            strings.TrimSpace(opts.RequirementID),
 		AcceptanceCriterionID:    strings.TrimSpace(opts.AcceptanceCriterionID),
 		TaskID:                   strings.TrimSpace(opts.TaskID),
+		IssueSourceRecords:       cloneIssueSourceRecords(opts.IssueSourceRecords),
 		ChangedFileIntent:        cloneChangedFileIntent(opts.ChangedFileIntent),
 		ValidationPlan:           cloneStrings(opts.ValidationPlan),
 		AuthorityBoundary:        cloneAuthorityBoundary(opts.AuthorityBoundary),
@@ -303,6 +339,34 @@ func normalizeFactoryOrderDevelopmentProposalOptions(opts FactoryOrderDevelopmen
 	}
 	if err := validateV39Reference(v39.TypeTask, "task_id", normalized.TaskID); err != nil {
 		return normalized, err
+	}
+	for i, record := range normalized.IssueSourceRecords {
+		record.Repo = strings.TrimSpace(record.Repo)
+		record.URL = strings.TrimSpace(record.URL)
+		record.Title = strings.TrimSpace(record.Title)
+		record.Goal = strings.TrimSpace(record.Goal)
+		record.AcceptanceCriteria = cloneStrings(record.AcceptanceCriteria)
+		record.Assumptions = cloneStrings(record.Assumptions)
+		record.Ambiguities = cloneStrings(record.Ambiguities)
+		record.RiskNotes = cloneStrings(record.RiskNotes)
+		record.Labels = cloneStrings(record.Labels)
+		record.SourceRefs = cloneStrings(record.SourceRefs)
+		if record.Repo == "" {
+			return normalized, fmt.Errorf("issue_source_records[%d].repo is required", i)
+		}
+		if record.Number <= 0 {
+			return normalized, fmt.Errorf("issue_source_records[%d].number must be positive", i)
+		}
+		if record.Title == "" {
+			return normalized, fmt.Errorf("issue_source_records[%d].title is required", i)
+		}
+		if record.Goal == "" {
+			record.Goal = record.Title
+		}
+		if len(record.SourceRefs) == 0 {
+			record.SourceRefs = []string{issueSourceRef(record)}
+		}
+		normalized.IssueSourceRecords[i] = record
 	}
 	if len(normalized.ChangedFileIntent) == 0 {
 		return normalized, fmt.Errorf("changed_file_intent must be non-empty")
@@ -380,12 +444,101 @@ func unavailable(reason string) FactoryOrderProposalAvailability {
 	return FactoryOrderProposalAvailability{Status: factoryOrderProposalStatusUnavailable, Reason: reason}
 }
 
+func factoryOrderRequirementSource(records []FactoryOrderProposalIssueSourceRecord) string {
+	if len(records) == 0 {
+		return "explicit"
+	}
+	return "github_issue"
+}
+
+func factoryOrderRequirementText(records []FactoryOrderProposalIssueSourceRecord) string {
+	if len(records) == 0 {
+		return "Construct a pure FactoryOrder-linked development proposal evidence packet."
+	}
+	goals := make([]string, 0, len(records))
+	for _, record := range records {
+		goals = append(goals, issueSourceRef(record)+": "+record.Goal)
+	}
+	return "Derive Work proposal requirements from GitHub issue source records without starting implementation: " + strings.Join(goals, "; ")
+}
+
+func factoryOrderRequiredEvidenceType(records []FactoryOrderProposalIssueSourceRecord) string {
+	if len(records) == 0 {
+		return "factory_order_development_proposal_evidence"
+	}
+	return "github_issue_derived_factory_order_proposal_evidence"
+}
+
+func factoryOrderTaskDraftCell(records []FactoryOrderProposalIssueSourceRecord) string {
+	if len(records) == 0 {
+		return "implementation"
+	}
+	return "production_cell_draft"
+}
+
+func factoryOrderAcceptanceText(records []FactoryOrderProposalIssueSourceRecord) string {
+	if len(records) == 0 {
+		return "Proposal evidence preserves linkage, validation plan, authority boundary, proof-of-work, and AuditReport without protected side effects."
+	}
+	criteria := issueNotes(records, func(record FactoryOrderProposalIssueSourceRecord) []string {
+		return record.AcceptanceCriteria
+	})
+	if len(criteria) == 0 {
+		return "Issue-derived proposal evidence preserves source issue refs, assumptions, ambiguities, risk notes, validation plan, authority boundary, proof-of-work, and AuditReport without starting implementation or mutating Work state."
+	}
+	return "Issue-derived proposal evidence preserves source issue refs and these acceptance criteria without starting implementation or mutating Work state: " + strings.Join(criteria, "; ")
+}
+
+func issueSourceRefs(records []FactoryOrderProposalIssueSourceRecord) []string {
+	refs := make([]string, 0, len(records))
+	for _, record := range records {
+		refs = append(refs, issueSourceRef(record))
+	}
+	return refs
+}
+
+func issueSourceRef(record FactoryOrderProposalIssueSourceRecord) string {
+	return fmt.Sprintf("%s#%d", strings.TrimSpace(record.Repo), record.Number)
+}
+
+func issueNotes(records []FactoryOrderProposalIssueSourceRecord, selectNotes func(FactoryOrderProposalIssueSourceRecord) []string) []string {
+	notes := make([]string, 0)
+	for _, record := range records {
+		prefix := issueSourceRef(record)
+		for _, note := range selectNotes(record) {
+			note = strings.TrimSpace(note)
+			if note == "" {
+				continue
+			}
+			notes = append(notes, prefix+": "+note)
+		}
+	}
+	return notes
+}
+
 func cloneChangedFileIntent(values []FactoryOrderChangedFileIntent) []FactoryOrderChangedFileIntent {
 	if len(values) == 0 {
 		return nil
 	}
 	out := make([]FactoryOrderChangedFileIntent, len(values))
 	copy(out, values)
+	return out
+}
+
+func cloneIssueSourceRecords(values []FactoryOrderProposalIssueSourceRecord) []FactoryOrderProposalIssueSourceRecord {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]FactoryOrderProposalIssueSourceRecord, len(values))
+	copy(out, values)
+	for i := range out {
+		out[i].AcceptanceCriteria = cloneStrings(out[i].AcceptanceCriteria)
+		out[i].Assumptions = cloneStrings(out[i].Assumptions)
+		out[i].Ambiguities = cloneStrings(out[i].Ambiguities)
+		out[i].RiskNotes = cloneStrings(out[i].RiskNotes)
+		out[i].Labels = cloneStrings(out[i].Labels)
+		out[i].SourceRefs = cloneStrings(out[i].SourceRefs)
+	}
 	return out
 }
 

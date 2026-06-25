@@ -59,6 +59,77 @@ func TestBuildFactoryOrderDevelopmentProposalPreservesEvidence(t *testing.T) {
 	t.Fatalf("forbidden claims = %#v; want Level 1 achievement exclusion", proposal.AuditReport.ForbiddenClaims)
 }
 
+func TestBuildFactoryOrderDevelopmentProposalDerivesIssueEvidence(t *testing.T) {
+	opts := validFactoryOrderDevelopmentProposalOptions()
+	opts.SourceIntentRef = "github:transpara-ai/work#61"
+	opts.IssueSourceRecords = []work.FactoryOrderProposalIssueSourceRecord{
+		{
+			Repo:   " transpara-ai/work ",
+			Number: 61,
+			URL:    " https://github.com/transpara-ai/work/issues/61 ",
+			Title:  " Requirements and task-draft derivation from issue records ",
+			Goal:   " Derive requirements, acceptance criteria, assumptions, ambiguities, risk notes, and production-cell task drafts from issue records. ",
+			AcceptanceCriteria: []string{
+				"source issue refs are preserved",
+				"no implementation starts",
+			},
+			Assumptions: []string{"issue body is caller-supplied scanner evidence"},
+			Ambiguities: []string{"authority-sensitive issues still require separate scope"},
+			RiskNotes:   []string{"issue records are source intent, not authority"},
+			Labels:      []string{"cc:intake", "cc:civilization-presence"},
+		},
+	}
+
+	proposal, err := work.BuildFactoryOrderDevelopmentProposal(opts)
+	if err != nil {
+		t.Fatalf("BuildFactoryOrderDevelopmentProposal: %v", err)
+	}
+
+	if len(proposal.IssueSourceRecords) != 1 {
+		t.Fatalf("issue records = %#v; want one normalized source issue", proposal.IssueSourceRecords)
+	}
+	issue := proposal.IssueSourceRecords[0]
+	if issue.Repo != "transpara-ai/work" || issue.Number != 61 || issue.SourceRefs[0] != "transpara-ai/work#61" {
+		t.Fatalf("issue source = %#v; want normalized work#61 source", issue)
+	}
+	if proposal.Requirements[0].Source != "github_issue" || !strings.Contains(proposal.Requirements[0].Text, "transpara-ai/work#61") {
+		t.Fatalf("requirement = %#v; want github issue-derived text", proposal.Requirements[0])
+	}
+	if proposal.AcceptanceCriteria[0].RequiredEvidenceType != "github_issue_derived_factory_order_proposal_evidence" {
+		t.Fatalf("required evidence = %q", proposal.AcceptanceCriteria[0].RequiredEvidenceType)
+	}
+	if !strings.Contains(proposal.AcceptanceCriteria[0].Text, "no implementation starts") {
+		t.Fatalf("acceptance text = %q; want issue acceptance criteria", proposal.AcceptanceCriteria[0].Text)
+	}
+	if len(proposal.TaskDrafts) != 1 {
+		t.Fatalf("task drafts = %#v", proposal.TaskDrafts)
+	}
+	draft := proposal.TaskDrafts[0]
+	if draft.Cell != "production_cell_draft" {
+		t.Fatalf("task draft cell = %q, want production_cell_draft", draft.Cell)
+	}
+	if draft.ImplementationStarted || draft.WorkMutationStatus != "none" {
+		t.Fatalf("task draft start/mutation flags = %#v; want no start/no mutation", draft)
+	}
+	if strings.Join(draft.SourceIssueRefs, ",") != "transpara-ai/work#61" {
+		t.Fatalf("task source refs = %#v", draft.SourceIssueRefs)
+	}
+	if !containsString(draft.Assumptions, "transpara-ai/work#61: issue body is caller-supplied scanner evidence") {
+		t.Fatalf("assumptions = %#v", draft.Assumptions)
+	}
+	if !containsString(draft.Ambiguities, "transpara-ai/work#61: authority-sensitive issues still require separate scope") {
+		t.Fatalf("ambiguities = %#v", draft.Ambiguities)
+	}
+	if !containsString(draft.RiskNotes, "transpara-ai/work#61: issue records are source intent, not authority") {
+		t.Fatalf("risk notes = %#v", draft.RiskNotes)
+	}
+	if len(proposal.ProofOfWorkPacket.IssueSourceRecords) != 1 || proposal.ProofOfWorkPacket.IssueSourceRecords[0].Number != 61 {
+		t.Fatalf("proof issue source records = %#v", proposal.ProofOfWorkPacket.IssueSourceRecords)
+	}
+	assertUnavailable(t, proposal.ProofOfWorkPacket.RuntimeInvocation, "runtime")
+	assertUnavailable(t, proposal.ProofOfWorkPacket.NativeEventGraphWrite, "EventGraph")
+}
+
 func TestBuildFactoryOrderDevelopmentProposalRejectsInvalidInputs(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -120,6 +191,27 @@ func TestBuildFactoryOrderDevelopmentProposalRejectsInvalidInputs(t *testing.T) 
 				opts.TargetRepo = "transpara-ai/docs"
 			},
 			wantErr: "target_repo must be transpara-ai/work",
+		},
+		{
+			name: "issue source missing repo",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.IssueSourceRecords = []work.FactoryOrderProposalIssueSourceRecord{{Number: 61, Title: "issue"}}
+			},
+			wantErr: "issue_source_records[0].repo is required",
+		},
+		{
+			name: "issue source missing number",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.IssueSourceRecords = []work.FactoryOrderProposalIssueSourceRecord{{Repo: "transpara-ai/work", Title: "issue"}}
+			},
+			wantErr: "issue_source_records[0].number must be positive",
+		},
+		{
+			name: "issue source missing title",
+			mutate: func(opts *work.FactoryOrderDevelopmentProposalOptions) {
+				opts.IssueSourceRecords = []work.FactoryOrderProposalIssueSourceRecord{{Repo: "transpara-ai/work", Number: 61}}
+			},
+			wantErr: "issue_source_records[0].title is required",
 		},
 		{
 			name: "empty changed file intent",
@@ -263,6 +355,19 @@ func TestBuildFactoryOrderDevelopmentProposalRejectsInvalidInputs(t *testing.T) 
 
 func TestBuildFactoryOrderDevelopmentProposalCopiesInputs(t *testing.T) {
 	opts := validFactoryOrderDevelopmentProposalOptions()
+	opts.IssueSourceRecords = []work.FactoryOrderProposalIssueSourceRecord{
+		{
+			Repo:               "transpara-ai/work",
+			Number:             61,
+			Title:              "Requirements and task-draft derivation from issue records",
+			AcceptanceCriteria: []string{"source issue refs are preserved"},
+			Assumptions:        []string{"issue body is caller-supplied scanner evidence"},
+			Ambiguities:        []string{"authority-sensitive issues still require separate scope"},
+			RiskNotes:          []string{"issue records are source intent, not authority"},
+			Labels:             []string{"cc:intake"},
+			SourceRefs:         []string{"github:transpara-ai/work#61"},
+		},
+	}
 
 	proposal, err := work.BuildFactoryOrderDevelopmentProposal(opts)
 	if err != nil {
@@ -271,6 +376,9 @@ func TestBuildFactoryOrderDevelopmentProposalCopiesInputs(t *testing.T) {
 	opts.ChangedFileIntent[0].Path = "mutated.go"
 	opts.ValidationPlan[0] = "mutated"
 	opts.AuthorityBoundary[0].Action = "mutated"
+	opts.IssueSourceRecords[0].Repo = "mutated"
+	opts.IssueSourceRecords[0].Assumptions[0] = "mutated"
+	opts.IssueSourceRecords[0].Labels[0] = "mutated"
 
 	if proposal.ChangedFileIntent[0].Path == "mutated.go" || proposal.ProposalArtifact.ChangedFileIntent[0].Path == "mutated.go" || proposal.ProofOfWorkPacket.ChangedFiles[0].Path == "mutated.go" {
 		t.Fatalf("proposal retained caller changed-file slice alias: %#v", proposal)
@@ -280,6 +388,9 @@ func TestBuildFactoryOrderDevelopmentProposalCopiesInputs(t *testing.T) {
 	}
 	if proposal.AuthorityBoundary[0].Action == "mutated" || proposal.ProofOfWorkPacket.AuthorityBoundary[0].Action == "mutated" {
 		t.Fatalf("proposal retained caller authority boundary alias: %#v", proposal.AuthorityBoundary)
+	}
+	if proposal.IssueSourceRecords[0].Repo == "mutated" || proposal.TaskDrafts[0].Assumptions[0] == "mutated" || proposal.ProofOfWorkPacket.IssueSourceRecords[0].Labels[0] == "mutated" {
+		t.Fatalf("proposal retained caller issue source alias: %#v", proposal.IssueSourceRecords)
 	}
 }
 

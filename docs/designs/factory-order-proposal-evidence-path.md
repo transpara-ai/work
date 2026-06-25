@@ -24,11 +24,14 @@ Q.
 
 `BuildFactoryOrderDevelopmentProposal` accepts caller-supplied source intent,
 target repo/head, FactoryOrder linkage IDs, changed-file intent, validation
-plan, and protected-action boundaries. It returns structured values:
+plan, optional GitHub issue source records, and protected-action boundaries. It
+returns structured values:
 
 - FactoryOrder source summary
+- normalized GitHub issue source records, when supplied by the caller
 - Requirement and AcceptanceCriterion records
-- Task draft
+- Task draft, including source issue refs, assumptions, ambiguities, risk notes,
+  and explicit no-start/no-mutation flags for issue-derived proposal evidence
 - proposed-only changed-file intent
 - unapplied proposal artifact
 - unavailable validation result
@@ -40,6 +43,13 @@ or command interface. Only structured status fields are authoritative; caller
 supplied `summary` text is explanatory and must not be interpreted as authority,
 execution, release, or production status.
 
+When GitHub issue source records are supplied, the builder treats them as
+caller-provided scanner evidence. It does not fetch GitHub, edit issues, start
+tasks, mutate Work state, or infer authority. It derives proposal-only
+requirement and acceptance text from the records and marks the resulting
+production-cell task draft with `implementation_started: false` and
+`work_mutation_status: none`.
+
 ## Fail-Closed Rules
 
 The builder rejects:
@@ -47,6 +57,7 @@ The builder rejects:
 - missing or wrongly prefixed FactoryOrder, Requirement, AcceptanceCriterion, or
   Task IDs
 - target repositories other than `transpara-ai/work`
+- issue source records missing repo, positive issue number, or title
 - empty changed-file intent
 - changed-file intent that is not `proposed_only: true`
 - changed-file intent marked `applied: true`
