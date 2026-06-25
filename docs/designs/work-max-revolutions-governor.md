@@ -24,6 +24,7 @@ Policy validation is fail-closed:
 - split and abandon thresholds must be within the maximum repair revolution
   budget;
 - split must occur no later than abandon;
+- no-progress split must be reachable before abandon;
 - human escalation roles must be non-empty.
 
 ## State Transitions
@@ -34,12 +35,20 @@ Policy validation is fail-closed:
 - `human_escalation_required`: protected action or human scope is required
   before the loop can continue.
 - `abandon_required`: repair revolutions reached the abandon threshold.
+- `abandon_required`: repair revolutions reached the maximum repair cap.
 - `split_required`: no-progress or split-candidate thresholds were reached.
 - `revise`: blockers remain but thresholds have not been crossed.
 - `continue`: the loop remains under configured thresholds.
 
 The decision preserves `source_issue_refs` so downstream proof and AuditReport
 evidence can cite the originating GitHub issues.
+
+If `protected_action_required` is true and
+`authority_decision_available` is also true, the governor does not escalate, but
+the decision reasons record that the recommendation depends on caller-supplied
+authority evidence. The governor is stateless: callers must increment
+`repair_revolutions`, set `consecutive_no_progress`, and supply truthful
+authority and scope flags each cycle.
 
 ## Authority Boundary
 

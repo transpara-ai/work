@@ -89,43 +89,50 @@ func EvaluateReviewRepairGovernor(policy ReviewRepairGovernorPolicy, state Revie
 	}
 	switch {
 	case state.ProtectedActionRequired && !state.AuthorityDecisionAvailable:
-		return withEscalation(base, "protected action requires a scoped authority decision", policy.HumanEscalationRoles), nil
+		return withEscalation(base, state, "protected action requires a scoped authority decision", policy.HumanEscalationRoles), nil
 	case state.HumanScopeRequired:
-		return withEscalation(base, "human scope is required before the loop can continue", policy.HumanEscalationRoles), nil
+		return withEscalation(base, state, "human scope is required before the loop can continue", policy.HumanEscalationRoles), nil
 	case state.ValidationPassed && state.OpenBlockers == 0:
 		base.Action = ReviewRepairActionComplete
 		base.NextState = ReviewRepairStateComplete
 		base.Terminal = true
-		base.Reasons = []string{"validation passed with zero open blockers"}
+		base.Reasons = reviewRepairReasons(state, "validation passed with zero open blockers")
+		return base, nil
+	case state.RepairRevolutions >= policy.MaxRepairRevolutions:
+		base.Action = ReviewRepairActionAbandon
+		base.NextState = ReviewRepairStateAbandonRequired
+		base.Terminal = true
+		base.Reasons = reviewRepairReasons(state, fmt.Sprintf("repair revolutions %d reached maximum cap %d", state.RepairRevolutions, policy.MaxRepairRevolutions))
+		base.HumanEscalationConditions = policy.HumanEscalationRoles
 		return base, nil
 	case state.RepairRevolutions >= policy.AbandonAfterRevolutions:
 		base.Action = ReviewRepairActionAbandon
 		base.NextState = ReviewRepairStateAbandonRequired
 		base.Terminal = true
-		base.Reasons = []string{fmt.Sprintf("repair revolutions %d reached abandon threshold %d", state.RepairRevolutions, policy.AbandonAfterRevolutions)}
+		base.Reasons = reviewRepairReasons(state, fmt.Sprintf("repair revolutions %d reached abandon threshold %d", state.RepairRevolutions, policy.AbandonAfterRevolutions))
 		base.HumanEscalationConditions = policy.HumanEscalationRoles
 		return base, nil
 	case state.ConsecutiveNoProgress >= policy.MaxNoProgressRevolutions:
 		base.Action = ReviewRepairActionSplit
 		base.NextState = ReviewRepairStateSplitRequired
-		base.Reasons = []string{fmt.Sprintf("no-progress revolutions %d reached split threshold %d", state.ConsecutiveNoProgress, policy.MaxNoProgressRevolutions)}
+		base.Reasons = reviewRepairReasons(state, fmt.Sprintf("no-progress revolutions %d reached split threshold %d", state.ConsecutiveNoProgress, policy.MaxNoProgressRevolutions))
 		base.HumanEscalationConditions = policy.HumanEscalationRoles
 		return base, nil
 	case state.SplitCandidate && state.RepairRevolutions >= policy.SplitAfterRevolutions:
 		base.Action = ReviewRepairActionSplit
 		base.NextState = ReviewRepairStateSplitRequired
-		base.Reasons = []string{fmt.Sprintf("split candidate reached repair revolution threshold %d", policy.SplitAfterRevolutions)}
+		base.Reasons = reviewRepairReasons(state, fmt.Sprintf("split candidate reached repair revolution threshold %d", policy.SplitAfterRevolutions))
 		base.HumanEscalationConditions = policy.HumanEscalationRoles
 		return base, nil
 	case state.OpenBlockers > 0:
 		base.Action = ReviewRepairActionRevise
 		base.NextState = ReviewRepairStateRepair
-		base.Reasons = []string{fmt.Sprintf("%d blocker(s) remain open", state.OpenBlockers)}
+		base.Reasons = reviewRepairReasons(state, fmt.Sprintf("%d blocker(s) remain open", state.OpenBlockers))
 		return base, nil
 	default:
 		base.Action = ReviewRepairActionContinue
 		base.NextState = ReviewRepairStateReview
-		base.Reasons = []string{"loop remains under configured thresholds"}
+		base.Reasons = reviewRepairReasons(state, "loop remains under configured thresholds")
 		return base, nil
 	}
 }
@@ -167,6 +174,8 @@ func validateReviewRepairGovernorPolicy(policy ReviewRepairGovernorPolicy) error
 		return fmt.Errorf("abandon_after_revolutions must be less than or equal to max_repair_revolutions")
 	case policy.SplitAfterRevolutions > policy.AbandonAfterRevolutions:
 		return fmt.Errorf("split_after_revolutions must be less than or equal to abandon_after_revolutions")
+	case policy.MaxNoProgressRevolutions > policy.AbandonAfterRevolutions:
+		return fmt.Errorf("max_no_progress_revolutions must be less than or equal to abandon_after_revolutions")
 	case len(policy.HumanEscalationRoles) == 0:
 		return fmt.Errorf("human_escalation_roles must be non-empty")
 	}
@@ -191,13 +200,21 @@ func validateReviewRepairLoopState(state ReviewRepairLoopState) error {
 	return nil
 }
 
-func withEscalation(base ReviewRepairGovernorDecision, reason string, roles []string) ReviewRepairGovernorDecision {
+func withEscalation(base ReviewRepairGovernorDecision, state ReviewRepairLoopState, reason string, roles []string) ReviewRepairGovernorDecision {
 	base.Action = ReviewRepairActionEscalate
 	base.NextState = ReviewRepairStateEscalateHuman
 	base.Terminal = true
-	base.Reasons = []string{reason}
+	base.Reasons = reviewRepairReasons(state, reason)
 	base.HumanEscalationConditions = append([]string(nil), roles...)
 	return base
+}
+
+func reviewRepairReasons(state ReviewRepairLoopState, primary string) []string {
+	reasons := []string{primary}
+	if state.ProtectedActionRequired && state.AuthorityDecisionAvailable {
+		reasons = append(reasons, "protected action depends on caller-supplied authority decision evidence")
+	}
+	return reasons
 }
 
 func cleanNonEmptyReviewRepairStrings(values []string) []string {

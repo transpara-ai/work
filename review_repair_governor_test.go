@@ -65,6 +65,44 @@ func TestEvaluateReviewRepairGovernorEscalatesProtectedActionWithoutAuthority(t 
 	}
 }
 
+func TestEvaluateReviewRepairGovernorRecordsCallerSuppliedAuthority(t *testing.T) {
+	decision, err := work.EvaluateReviewRepairGovernor(work.DefaultReviewRepairGovernorPolicy(), work.ReviewRepairLoopState{
+		ProtectedActionRequired:    true,
+		AuthorityDecisionAvailable: true,
+		OpenBlockers:               1,
+	})
+	if err != nil {
+		t.Fatalf("EvaluateReviewRepairGovernor: %v", err)
+	}
+
+	if decision.Action != work.ReviewRepairActionRevise || decision.NextState != work.ReviewRepairStateRepair || decision.Terminal {
+		t.Fatalf("decision = %#v; want revise under caller-supplied authority", decision)
+	}
+	if !strings.Contains(strings.Join(decision.Reasons, "; "), "caller-supplied authority decision") {
+		t.Fatalf("reasons = %#v; want authority dependency surfaced", decision.Reasons)
+	}
+}
+
+func TestEvaluateReviewRepairGovernorEscalatesHumanScopeAndPreservesRefs(t *testing.T) {
+	decision, err := work.EvaluateReviewRepairGovernor(work.DefaultReviewRepairGovernorPolicy(), work.ReviewRepairLoopState{
+		SourceIssueRefs:    []string{"transpara-ai/work#67"},
+		HumanScopeRequired: true,
+	})
+	if err != nil {
+		t.Fatalf("EvaluateReviewRepairGovernor: %v", err)
+	}
+
+	if decision.Action != work.ReviewRepairActionEscalate || !decision.Terminal {
+		t.Fatalf("decision = %#v; want terminal human scope escalation", decision)
+	}
+	if strings.Join(decision.SourceIssueRefs, ",") != "transpara-ai/work#67" {
+		t.Fatalf("source refs = %#v", decision.SourceIssueRefs)
+	}
+	if !strings.Contains(strings.Join(decision.Reasons, "; "), "human scope") {
+		t.Fatalf("reasons = %#v", decision.Reasons)
+	}
+}
+
 func TestEvaluateReviewRepairGovernorRequiresSplit(t *testing.T) {
 	policy := work.ReviewRepairGovernorPolicy{
 		MaxRepairRevolutions:     4,
@@ -91,6 +129,21 @@ func TestEvaluateReviewRepairGovernorRequiresSplit(t *testing.T) {
 	}
 }
 
+func TestEvaluateReviewRepairGovernorContinuesUnderThresholds(t *testing.T) {
+	decision, err := work.EvaluateReviewRepairGovernor(work.DefaultReviewRepairGovernorPolicy(), work.ReviewRepairLoopState{
+		RepairRevolutions:     1,
+		ConsecutiveNoProgress: 1,
+		OpenBlockers:          0,
+	})
+	if err != nil {
+		t.Fatalf("EvaluateReviewRepairGovernor: %v", err)
+	}
+
+	if decision.Action != work.ReviewRepairActionContinue || decision.NextState != work.ReviewRepairStateReview || decision.Terminal {
+		t.Fatalf("decision = %#v; want non-terminal continue", decision)
+	}
+}
+
 func TestEvaluateReviewRepairGovernorSplitsAfterNoProgress(t *testing.T) {
 	decision, err := work.EvaluateReviewRepairGovernor(work.DefaultReviewRepairGovernorPolicy(), work.ReviewRepairLoopState{
 		RepairRevolutions:     1,
@@ -108,6 +161,7 @@ func TestEvaluateReviewRepairGovernorSplitsAfterNoProgress(t *testing.T) {
 
 func TestEvaluateReviewRepairGovernorAbandonsAtThreshold(t *testing.T) {
 	decision, err := work.EvaluateReviewRepairGovernor(work.DefaultReviewRepairGovernorPolicy(), work.ReviewRepairLoopState{
+		SourceIssueRefs:   []string{"transpara-ai/work#67"},
 		RepairRevolutions: work.DefaultAbandonAfterRevolutions,
 		OpenBlockers:      1,
 		SplitCandidate:    true,
@@ -118,6 +172,9 @@ func TestEvaluateReviewRepairGovernorAbandonsAtThreshold(t *testing.T) {
 
 	if decision.Action != work.ReviewRepairActionAbandon || decision.NextState != work.ReviewRepairStateAbandonRequired || !decision.Terminal {
 		t.Fatalf("decision = %#v; want terminal abandon requirement", decision)
+	}
+	if strings.Join(decision.SourceIssueRefs, ",") != "transpara-ai/work#67" {
+		t.Fatalf("source refs = %#v", decision.SourceIssueRefs)
 	}
 }
 
@@ -143,6 +200,17 @@ func TestEvaluateReviewRepairGovernorRejectsInvalidPolicyAndState(t *testing.T) 
 				HumanEscalationRoles:     []string{"maintainer"},
 			},
 			wantErr: "split_after_revolutions",
+		},
+		{
+			name: "no progress after abandon",
+			policy: work.ReviewRepairGovernorPolicy{
+				MaxRepairRevolutions:     5,
+				SplitAfterRevolutions:    2,
+				AbandonAfterRevolutions:  3,
+				MaxNoProgressRevolutions: 4,
+				HumanEscalationRoles:     []string{"maintainer"},
+			},
+			wantErr: "max_no_progress_revolutions",
 		},
 		{
 			name:    "negative blockers",
