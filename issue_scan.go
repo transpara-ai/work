@@ -371,7 +371,7 @@ func (ts *TaskStore) StartIssueScanStage(
 	causes []types.EventID,
 	convID types.ConversationID,
 ) (TaskStatus, error) {
-	if err := validateIssueScanStageRef(ref); err != nil {
+	if err := ts.validateIssueScanStageRef(ref); err != nil {
 		return "", err
 	}
 	current, err := ts.GetStatus(ref.TaskID)
@@ -403,7 +403,7 @@ func (ts *TaskStore) BlockIssueScanStage(
 	causes []types.EventID,
 	convID types.ConversationID,
 ) (IssueScanStageBlockResult, error) {
-	if err := validateIssueScanStageRef(ref); err != nil {
+	if err := ts.validateIssueScanStageRef(ref); err != nil {
 		return IssueScanStageBlockResult{}, err
 	}
 	if err := validateIssueScanBlocker(blocker); err != nil {
@@ -421,6 +421,9 @@ func (ts *TaskStore) BlockIssueScanStage(
 	}
 	if current != targetStatus && !canReachIssueScanStatus(current, targetStatus) {
 		return IssueScanStageBlockResult{}, fmt.Errorf("%w: cannot park issue-scan stage %s -> %s", ErrInvalidLifecycleTransition, current, targetStatus)
+	}
+	if current != targetStatus && !canReachIssueScanStatusThroughTaskLifecycle(current, targetStatus) {
+		return IssueScanStageBlockResult{}, fmt.Errorf("%w: issue-scan stage transition is not valid in task lifecycle %s -> %s", ErrInvalidLifecycleTransition, current, targetStatus)
 	}
 	content := IssueScanStageBlockedContent{
 		TaskID:            ref.TaskID,
@@ -457,7 +460,7 @@ func (ts *TaskStore) SatisfyIssueScanStageGate(
 	causes []types.EventID,
 	convID types.ConversationID,
 ) (IssueScanStageGateResult, error) {
-	if err := validateIssueScanStageRef(ref); err != nil {
+	if err := ts.validateIssueScanStageRef(ref); err != nil {
 		return IssueScanStageGateResult{}, err
 	}
 	gate = strings.TrimSpace(gate)
@@ -482,6 +485,9 @@ func (ts *TaskStore) SatisfyIssueScanStageGate(
 		return IssueScanStageGateResult{Created: false, Status: current}, nil
 	default:
 		return IssueScanStageGateResult{}, fmt.Errorf("%w: issue-scan gate can only be satisfied from running or verified, got %s", ErrInvalidLifecycleTransition, current)
+	}
+	if !canReachIssueScanStatusThroughTaskLifecycle(current, StatusCertified) {
+		return IssueScanStageGateResult{}, fmt.Errorf("%w: issue-scan gate transition is not valid in task lifecycle %s -> %s", ErrInvalidLifecycleTransition, current, StatusCertified)
 	}
 	content := IssueScanStageGateSatisfiedContent{
 		TaskID:            ref.TaskID,
@@ -625,7 +631,7 @@ func taskFromCreatedContent(id types.EventID, c TaskCreatedContent) Task {
 	}
 }
 
-func validateIssueScanStageRef(ref IssueScanStageRef) error {
+func validateIssueScanStageRefShape(ref IssueScanStageRef) error {
 	if ref.TaskID.IsZero() {
 		return fmt.Errorf("issue-scan task_id is required")
 	}
@@ -642,6 +648,26 @@ func validateIssueScanStageRef(ref IssueScanStageRef) error {
 		return fmt.Errorf("unknown issue-scan stage %q", ref.Stage)
 	}
 	return nil
+}
+
+func (ts *TaskStore) validateIssueScanStageRef(ref IssueScanStageRef) error {
+	if err := validateIssueScanStageRefShape(ref); err != nil {
+		return err
+	}
+	ev, err := ts.store.Get(ref.TaskID)
+	if err != nil {
+		return fmt.Errorf("get issue-scan stage task: %w", err)
+	}
+	c, ok := ev.Content().(TaskCreatedContent)
+	if !ok || !isIssueScanTaskContent(c) {
+		return fmt.Errorf("%w: task %s is not an issue-scan stage task", ErrInvalidLifecycleTransition, ref.TaskID.Value())
+	}
+	return nil
+}
+
+func isIssueScanTaskContent(c TaskCreatedContent) bool {
+	return strings.HasPrefix(strings.TrimSpace(c.CanonicalTaskID), "tsk_issue_scan_") &&
+		strings.HasPrefix(strings.TrimSpace(c.FactoryOrderID), "fo_issue_scan_")
 }
 
 func validateIssueScanBlocker(blocker IssueScanBlocker) error {
@@ -777,6 +803,17 @@ func canReachIssueScanStatus(current, target TaskStatus) bool {
 	for current != target {
 		next, ok := nextIssueScanTransition(current, target)
 		if !ok {
+			return false
+		}
+		current = next
+	}
+	return true
+}
+
+func canReachIssueScanStatusThroughTaskLifecycle(current, target TaskStatus) bool {
+	for current != target {
+		next, ok := nextIssueScanTransition(current, target)
+		if !ok || !canTransitionTask(current, next) {
 			return false
 		}
 		current = next

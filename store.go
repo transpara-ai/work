@@ -1157,7 +1157,9 @@ func (ts *TaskStore) liveCompletedIDs() (map[types.EventID]bool, error) {
 // edges. Legacy Work tasks satisfy dependencies through a live completion.
 // Issue-scan stage tasks also satisfy their canonical stage DAG dependencies
 // once certified; other v3.9 certified tasks keep the pre-existing
-// completion-only dependency semantics.
+// completion-only dependency semantics. Issue-scan membership is derived from
+// the deterministic issue-scan canonical IDs, not from a caller-settable
+// workspace label.
 func (ts *TaskStore) dependencySatisfiedIDs() (map[types.EventID]bool, error) {
 	ids, err := ts.liveCompletedIDs()
 	if err != nil {
@@ -1189,7 +1191,7 @@ func (ts *TaskStore) issueScanTaskIDs() (map[types.EventID]bool, error) {
 		}
 		for _, ev := range page.Items() {
 			c, ok := ev.Content().(TaskCreatedContent)
-			if ok && strings.TrimSpace(c.Workspace) == IssueScanWorkspace {
+			if ok && isIssueScanTaskContent(c) {
 				ids[ev.ID()] = true
 			}
 		}
@@ -1231,7 +1233,7 @@ func (ts *TaskStore) latestLifecycleStatuses() (map[types.EventID]TaskStatus, er
 func (ts *TaskStore) ListOpen() ([]Task, error) {
 	// Collect all dependency-satisfying task IDs. A legacy completion
 	// superseded by a reopen does not count; certified tasks count only for
-	// the issue-scan stage workspace.
+	// deterministic issue-scan stage tasks.
 	completedIDs, err := ts.dependencySatisfiedIDs()
 	if err != nil {
 		return nil, err

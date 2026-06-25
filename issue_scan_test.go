@@ -123,6 +123,100 @@ func TestIssueScanStageCertificationUnblocksNextStage(t *testing.T) {
 	}
 }
 
+func TestIssueScanStageCertificationUnblocksNextStageWithCustomWorkspace(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	result, err := ts.EnsureIssueScanDAG(testActor, work.IssueScanDAGOptions{
+		RunID:     "2026-06-25-docs-172-site-115-dry-run",
+		Target:    work.IssueScanTarget{Repository: "transpara-ai/docs", IssueNumber: 172},
+		Workspace: "custom.scan.workspace",
+		Stages: []work.IssueScanStageID{
+			work.IssueScanStageResearch,
+			work.IssueScanStageDebate,
+		},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("EnsureIssueScanDAG: %v", err)
+	}
+	first := result.Stages[0]
+	second := result.Stages[1]
+	if first.Task.Workspace != "custom.scan.workspace" {
+		t.Fatalf("workspace = %q; want custom.scan.workspace", first.Task.Workspace)
+	}
+	if status, err := ts.StartIssueScanStage(testActor, first.Ref(), "begin research", causes, testConv); err != nil || status != work.StatusRunning {
+		t.Fatalf("StartIssueScanStage = %s, %v; want running", status, err)
+	}
+	if gate, err := ts.SatisfyIssueScanStageGate(testActor, first.Ref(), first.Gate, []string{"artifact:research-packet"}, causes, testConv); err != nil || !gate.Created || gate.Status != work.StatusCertified {
+		t.Fatalf("SatisfyIssueScanStageGate = %+v, %v; want created certified", gate, err)
+	}
+	if blocked, err := ts.IsBlocked(second.Task.ID); err != nil || blocked {
+		t.Fatalf("stage 2 blocked after stage 1 certified = %v, %v; want false", blocked, err)
+	}
+}
+
+func TestIssueScanTypedEventsRejectNonIssueScanTasks(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	task, err := ts.CreateV39(testActor, work.TaskCreateOptions{
+		Title:                  "Non issue-scan task",
+		CanonicalTaskID:        "tsk_non_issue_scan_task",
+		FactoryOrderID:         "fo_non_issue_scan_task",
+		RequirementIDs:         []string{"req_non_issue_scan_task"},
+		AcceptanceCriterionIDs: []string{"ac_non_issue_scan_task"},
+		Cell:                   "implementation",
+		RiskClass:              "low",
+		ExpectedOutputs:        []string{"ordinary evidence"},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("CreateV39: %v", err)
+	}
+	ref := work.IssueScanStageRef{
+		TaskID: task.ID,
+		RunID:  "2026-06-25-docs-172-site-115-dry-run",
+		Target: work.IssueScanTarget{Repository: "transpara-ai/docs", IssueNumber: 172},
+		Stage:  work.IssueScanStageResearch,
+	}
+	_, err = ts.BlockIssueScanStage(testActor, ref, work.IssueScanBlocker{
+		Reason: work.IssueScanBlockerStaleTarget,
+		Detail: "ordinary task must not receive issue-scan telemetry",
+	}, causes, testConv)
+	if !errors.Is(err, work.ErrInvalidLifecycleTransition) {
+		t.Fatalf("BlockIssueScanStage non issue-scan task = %v; want invalid transition", err)
+	}
+	blockerPage, err := s.ByType(work.EventTypeIssueScanStageBlocked, 1000, types.None[types.Cursor]())
+	if err != nil {
+		t.Fatalf("ByType blocker events: %v", err)
+	}
+	if len(blockerPage.Items()) != 0 {
+		t.Fatalf("blocker event count = %d; want 0", len(blockerPage.Items()))
+	}
+}
+
+func TestIssueScanGateCanCertifyVerifiedStage(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	result, err := ts.EnsureIssueScanDAG(testActor, work.IssueScanDAGOptions{
+		RunID:  "2026-06-25-docs-172-site-115-dry-run",
+		Target: work.IssueScanTarget{Repository: "transpara-ai/docs", IssueNumber: 172},
+		Stages: []work.IssueScanStageID{
+			work.IssueScanStageResearch,
+		},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("EnsureIssueScanDAG: %v", err)
+	}
+	stage := result.Stages[0]
+	if status, err := ts.StartIssueScanStage(testActor, stage.Ref(), "begin research", causes, testConv); err != nil || status != work.StatusRunning {
+		t.Fatalf("StartIssueScanStage = %s, %v; want running", status, err)
+	}
+	if err := ts.TransitionTask(testActor, stage.Task.ID, work.StatusVerified, "external issue-scan evidence verified", []string{"artifact:verification"}, causes, testConv); err != nil {
+		t.Fatalf("TransitionTask verified: %v", err)
+	}
+	if gate, err := ts.SatisfyIssueScanStageGate(testActor, stage.Ref(), stage.Gate, []string{"artifact:research-packet"}, causes, testConv); err != nil || !gate.Created || gate.Status != work.StatusCertified {
+		t.Fatalf("SatisfyIssueScanStageGate verified stage = %+v, %v; want created certified", gate, err)
+	}
+}
+
 func TestIssueScanBlockerParksStagesWithoutRepeatedEvents(t *testing.T) {
 	s, causes := setupStore(t)
 	ts := newTaskStore(t, s)
