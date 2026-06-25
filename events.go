@@ -40,24 +40,26 @@ func RequiredReadinessGateLabels() []string {
 
 // Work Graph event types — Layer 1 of the thirteen-product roadmap.
 var (
-	EventTypeTaskCreated               = types.MustEventType("work.task.created")
-	EventTypeTaskAssigned              = types.MustEventType("work.task.assigned")
-	EventTypeTaskCompleted             = types.MustEventType("work.task.completed")
-	EventTypeTaskReopened              = types.MustEventType("work.task.reopened")
-	EventTypeTaskDependencyAdded       = types.MustEventType("work.task.dependency.added")
-	EventTypeTaskPrioritySet           = types.MustEventType("work.task.priority.set")
-	EventTypeTaskComment               = types.MustEventType("work.task.comment")
-	EventTypeTaskUnblocked             = types.MustEventType("work.task.unblocked")
-	EventTypeTaskArtifact              = types.MustEventType("work.task.artifact")
-	EventTypeTaskArtifactWaived        = types.MustEventType("work.task.artifact.waived")
-	EventTypeTaskFactRequired          = types.MustEventType("work.task.fact.required")
-	EventTypeTaskLifecycleTransitioned = types.MustEventType("work.task.lifecycle.transitioned")
-	EventTypeTaskLinked                = types.MustEventType("work.task.linked")
-	EventTypeTaskVerificationAttached  = types.MustEventType("work.task.verification.attached")
-	EventTypeTaskFailureRepairAttached = types.MustEventType("work.task.failure.repair.attached")
-	EventTypePhaseGateDeclared         = types.MustEventType("work.phase.gate.declared")
-	EventTypePhaseGateApproved         = types.MustEventType("work.phase.gate.approved")
-	EventTypePhaseGateRejected         = types.MustEventType("work.phase.gate.rejected")
+	EventTypeTaskCreated                 = types.MustEventType("work.task.created")
+	EventTypeTaskAssigned                = types.MustEventType("work.task.assigned")
+	EventTypeTaskCompleted               = types.MustEventType("work.task.completed")
+	EventTypeTaskReopened                = types.MustEventType("work.task.reopened")
+	EventTypeTaskDependencyAdded         = types.MustEventType("work.task.dependency.added")
+	EventTypeTaskPrioritySet             = types.MustEventType("work.task.priority.set")
+	EventTypeTaskComment                 = types.MustEventType("work.task.comment")
+	EventTypeTaskUnblocked               = types.MustEventType("work.task.unblocked")
+	EventTypeTaskArtifact                = types.MustEventType("work.task.artifact")
+	EventTypeTaskArtifactWaived          = types.MustEventType("work.task.artifact.waived")
+	EventTypeTaskFactRequired            = types.MustEventType("work.task.fact.required")
+	EventTypeTaskLifecycleTransitioned   = types.MustEventType("work.task.lifecycle.transitioned")
+	EventTypeTaskLinked                  = types.MustEventType("work.task.linked")
+	EventTypeTaskVerificationAttached    = types.MustEventType("work.task.verification.attached")
+	EventTypeTaskFailureRepairAttached   = types.MustEventType("work.task.failure.repair.attached")
+	EventTypeIssueScanStageBlocked       = types.MustEventType("work.issuescan.stage.blocked")
+	EventTypeIssueScanStageGateSatisfied = types.MustEventType("work.issuescan.stage.gate.satisfied")
+	EventTypePhaseGateDeclared           = types.MustEventType("work.phase.gate.declared")
+	EventTypePhaseGateApproved           = types.MustEventType("work.phase.gate.approved")
+	EventTypePhaseGateRejected           = types.MustEventType("work.phase.gate.rejected")
 )
 
 // allWorkEventTypes returns all work event types for registration.
@@ -69,6 +71,7 @@ func allWorkEventTypes() []types.EventType {
 		EventTypeTaskUnblocked, EventTypeTaskArtifact, EventTypeTaskArtifactWaived,
 		EventTypeTaskFactRequired, EventTypeTaskLifecycleTransitioned, EventTypeTaskLinked,
 		EventTypeTaskVerificationAttached, EventTypeTaskFailureRepairAttached,
+		EventTypeIssueScanStageBlocked, EventTypeIssueScanStageGateSatisfied,
 		EventTypePhaseGateDeclared, EventTypePhaseGateApproved, EventTypePhaseGateRejected,
 		EventTypeRuntimeEnvelopeRecorded, EventTypeRuntimeResultRecorded,
 	}
@@ -280,6 +283,44 @@ func (c TaskFailureRepairAttachedContent) EventTypeName() string {
 	return "work.task.failure.repair.attached"
 }
 
+// IssueScanStageBlockedContent records a typed autonomous issue-scan parking
+// reason. Dashboards and Hive control loops should consume this event instead
+// of scraping blocker prose from task comments.
+type IssueScanStageBlockedContent struct {
+	workContent
+	TaskID            types.EventID          `json:"TaskID"`
+	RunID             string                 `json:"RunID"`
+	TargetRepo        string                 `json:"TargetRepo"`
+	TargetIssueNumber int                    `json:"TargetIssueNumber"`
+	StageID           IssueScanStageID       `json:"StageID"`
+	BlockerReason     IssueScanBlockerReason `json:"BlockerReason"`
+	Detail            string                 `json:"Detail,omitempty"`
+	EvidenceRefs      []string               `json:"EvidenceRefs,omitempty"`
+	BlockedBy         types.ActorID          `json:"BlockedBy"`
+}
+
+func (c IssueScanStageBlockedContent) EventTypeName() string {
+	return "work.issuescan.stage.blocked"
+}
+
+// IssueScanStageGateSatisfiedContent records structured gate completion for an
+// issue-scan stage before the task lifecycle moves to certified.
+type IssueScanStageGateSatisfiedContent struct {
+	workContent
+	TaskID            types.EventID    `json:"TaskID"`
+	RunID             string           `json:"RunID"`
+	TargetRepo        string           `json:"TargetRepo"`
+	TargetIssueNumber int              `json:"TargetIssueNumber"`
+	StageID           IssueScanStageID `json:"StageID"`
+	Gate              string           `json:"Gate"`
+	EvidenceRefs      []string         `json:"EvidenceRefs,omitempty"`
+	SatisfiedBy       types.ActorID    `json:"SatisfiedBy"`
+}
+
+func (c IssueScanStageGateSatisfiedContent) EventTypeName() string {
+	return "work.issuescan.stage.gate.satisfied"
+}
+
 // PhaseGateDeclaredContent is emitted when a phase needs explicit approval.
 type PhaseGateDeclaredContent struct {
 	workContent
@@ -331,6 +372,8 @@ func RegisterEventTypes() {
 	event.RegisterContentUnmarshaler("work.task.linked", event.Unmarshal[TaskLinkedContent])
 	event.RegisterContentUnmarshaler("work.task.verification.attached", event.Unmarshal[TaskVerificationAttachedContent])
 	event.RegisterContentUnmarshaler("work.task.failure.repair.attached", event.Unmarshal[TaskFailureRepairAttachedContent])
+	event.RegisterContentUnmarshaler("work.issuescan.stage.blocked", event.Unmarshal[IssueScanStageBlockedContent])
+	event.RegisterContentUnmarshaler("work.issuescan.stage.gate.satisfied", event.Unmarshal[IssueScanStageGateSatisfiedContent])
 	event.RegisterContentUnmarshaler("work.phase.gate.declared", event.Unmarshal[PhaseGateDeclaredContent])
 	event.RegisterContentUnmarshaler("work.phase.gate.approved", event.Unmarshal[PhaseGateApprovedContent])
 	event.RegisterContentUnmarshaler("work.phase.gate.rejected", event.Unmarshal[PhaseGateRejectedContent])
