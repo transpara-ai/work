@@ -47,6 +47,32 @@ The fixture also writes a Work task artifact named
 `event11_runtime_evidence`. That artifact is JSON report evidence for this
 local fixture only; it is not a production receipt.
 
+## Output Schema And EventGraph Handoff
+
+The `event11_runtime_evidence` JSON artifact includes explicit machine-readable
+handoff fields so downstream projections do not infer state from prose:
+
+- `trace_output` records the trace status, completion flag, FactoryOrder,
+  ReleaseCandidate, TestRun, GateResult, AuditReport, required-path count,
+  evidence refs, missing evidence, and output status.
+- `gate_output` records output status, the Gate U fixture gate name,
+  `gate_scope: fixture_only`, `gate_u_closure_claimed: false`, FactoryOrder,
+  ReleaseCandidate, TestRun, GateResult, AuditReport, evidence refs, and
+  missing evidence.
+- `eventgraph_handoff` records the EventGraph boundary. A passing fixture uses
+  `status: local_fixture_projection_complete`, `projection_scope:
+  work_local_in_memory_v39_fixture`, `persistent_write_status: not_written`,
+  `persistent_write_claimed: false`, `production_truth_claimed: false`,
+  `runtime_execution_scope: local_deterministic_fixture_only`, EventGraph refs
+  for records that actually exist in the local fixture, authority refs, and
+  notes. A failing fixture uses `status: blocked`, carries the blocking missing
+  evidence in `blocked_by`, and omits refs for missing record families.
+
+The handoff is intentionally not a persistent EventGraph write. It is a typed
+Work artifact projection over the local in-memory v3.9 fixture. Durable
+EventGraph writes, production truth, and runtime evidence ingestion remain
+separate governed EventGraph/Hive work.
+
 The in-memory `AuthorityDecision` follows the existing v3.9 convention of
 `status: approved` with `decision: ApprovalRequired` to show that local fixture
 evidence may be built under the bounded Event 11 authority while the Work PR

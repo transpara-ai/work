@@ -99,10 +99,54 @@ type Event11RuntimeEnvelopeDryRunReport struct {
 	EnvelopeHash           string                      `json:"envelope_hash,omitempty"`
 	EnvelopeImmutable      bool                        `json:"envelope_immutable"`
 	LocalRuntimeOnly       bool                        `json:"local_runtime_only"`
+	TraceOutput            Event11RuntimeTraceOutput   `json:"trace_output"`
+	GateOutput             Event11RuntimeGateOutput    `json:"gate_output"`
+	EventGraphHandoff      Event11EventGraphHandoff    `json:"eventgraph_handoff"`
 	PolicyCases            []Event11PolicyCaseResult   `json:"policy_cases"`
 	ForbiddenActions       []Event11ForbiddenAction    `json:"forbidden_actions"`
 	ResidualRisks          []Event11ResidualRiskState  `json:"residual_risks"`
 	EvidenceRefs           []string                    `json:"evidence_refs"`
+}
+
+type Event11RuntimeTraceOutput struct {
+	Status             string                      `json:"status"`
+	TraceStatus        v39.TraceCompletenessStatus `json:"trace_status"`
+	TraceCompleted     bool                        `json:"trace_completed"`
+	FactoryOrderID     string                      `json:"factory_order_id"`
+	ReleaseCandidateID string                      `json:"release_candidate_id"`
+	TestRunID          string                      `json:"test_run_id"`
+	GateResultID       string                      `json:"gate_result_id"`
+	AuditReportID      string                      `json:"audit_report_id,omitempty"`
+	RequiredPathCount  int                         `json:"required_path_count"`
+	Missing            []string                    `json:"missing,omitempty"`
+	EvidenceRefs       []string                    `json:"evidence_refs"`
+}
+
+type Event11RuntimeGateOutput struct {
+	Status              string   `json:"status"`
+	GateName            string   `json:"gate_name"`
+	GateScope           string   `json:"gate_scope"`
+	GateUClosureClaimed bool     `json:"gate_u_closure_claimed"`
+	FactoryOrderID      string   `json:"factory_order_id"`
+	ReleaseCandidateID  string   `json:"release_candidate_id"`
+	TestRunID           string   `json:"test_run_id"`
+	GateResultID        string   `json:"gate_result_id"`
+	AuditReportID       string   `json:"audit_report_id,omitempty"`
+	EvidenceRefs        []string `json:"evidence_refs"`
+	Missing             []string `json:"missing,omitempty"`
+}
+
+type Event11EventGraphHandoff struct {
+	Status                 string   `json:"status"`
+	ProjectionScope        string   `json:"projection_scope"`
+	PersistentWriteStatus  string   `json:"persistent_write_status"`
+	PersistentWriteClaimed bool     `json:"persistent_write_claimed"`
+	ProductionTruthClaimed bool     `json:"production_truth_claimed"`
+	RuntimeExecutionScope  string   `json:"runtime_execution_scope"`
+	EventGraphRefs         []string `json:"eventgraph_refs"`
+	AuthorityRefs          []string `json:"authority_refs"`
+	BlockedBy              []string `json:"blocked_by,omitempty"`
+	Notes                  []string `json:"notes"`
 }
 
 type Event11PolicyCaseResult struct {
@@ -683,7 +727,116 @@ func event11EvaluateWithAuditRequirement(graph *v39.InMemoryStore, ids event11Fi
 	if len(report.Missing) > 0 {
 		report.Status = "fail"
 	}
+	report.TraceOutput = event11RuntimeTraceOutput(ids, trace, report)
+	report.GateOutput = event11RuntimeGateOutput(ids, graph, report)
+	report.EventGraphHandoff = event11EventGraphHandoff(ids, report)
 	return report
+}
+
+func event11RuntimeTraceOutput(ids event11FixtureIDs, trace v39.TraceCompletenessGateResult, report Event11RuntimeEnvelopeDryRunReport) Event11RuntimeTraceOutput {
+	return Event11RuntimeTraceOutput{
+		Status:             report.Status,
+		TraceStatus:        trace.Status,
+		TraceCompleted:     trace.Completed,
+		FactoryOrderID:     ids.factoryOrder,
+		ReleaseCandidateID: ids.releaseCandidate,
+		TestRunID:          ids.testRun,
+		GateResultID:       ids.gateResult,
+		AuditReportID:      event11AvailableAuditReportID(report.TypeCounts, ids),
+		RequiredPathCount:  len(trace.RequiredPaths),
+		Missing:            append([]string(nil), report.Missing...),
+		EvidenceRefs:       event11UniqueStrings(append([]string{ids.testRun, ids.gateResult}, trace.EvidenceRefs...)),
+	}
+}
+
+func event11RuntimeGateOutput(ids event11FixtureIDs, graph *v39.InMemoryStore, report Event11RuntimeEnvelopeDryRunReport) Event11RuntimeGateOutput {
+	output := Event11RuntimeGateOutput{
+		Status:              report.Status,
+		GateName:            "gate_u_event11_runtime_envelope_dry_run_fixture",
+		GateScope:           "fixture_only",
+		GateUClosureClaimed: false,
+		FactoryOrderID:      ids.factoryOrder,
+		ReleaseCandidateID:  ids.releaseCandidate,
+		TestRunID:           ids.testRun,
+		GateResultID:        ids.gateResult,
+		AuditReportID:       event11AvailableAuditReportID(report.TypeCounts, ids),
+		EvidenceRefs:        event11UniqueStrings([]string{ids.testRun, ids.gateResult}),
+		Missing:             append([]string(nil), report.Missing...),
+	}
+	if graph != nil {
+		if record, err := graph.Get(ids.gateResult); err == nil {
+			if gate, ok := record.(*v39.GateResult); ok {
+				output.GateName = gate.GateName
+				output.EvidenceRefs = event11UniqueStrings(append([]string{ids.gateResult}, gate.EvidenceRefs...))
+			}
+		}
+	}
+	return output
+}
+
+func event11EventGraphHandoff(ids event11FixtureIDs, report Event11RuntimeEnvelopeDryRunReport) Event11EventGraphHandoff {
+	status := "local_fixture_projection_complete"
+	blockedBy := []string(nil)
+	if report.Status != "pass" {
+		status = "blocked"
+		blockedBy = append([]string(nil), report.Missing...)
+	}
+	return Event11EventGraphHandoff{
+		Status:                 status,
+		ProjectionScope:        "work_local_in_memory_v39_fixture",
+		PersistentWriteStatus:  "not_written",
+		PersistentWriteClaimed: false,
+		ProductionTruthClaimed: false,
+		RuntimeExecutionScope:  "local_deterministic_fixture_only",
+		EventGraphRefs:         event11HandoffEventGraphRefs(report.TypeCounts, ids),
+		AuthorityRefs:          event11UniqueStrings([]string{event11AuthorityDoc, event11DocsPR, ids.authorityDecision}),
+		BlockedBy:              blockedBy,
+		Notes: []string{
+			"handoff is a typed Work artifact projection only",
+			"no production EventGraph write is performed or claimed",
+			"persistent EventGraph writes require separate EventGraph authority",
+		},
+	}
+}
+
+func event11AvailableAuditReportID(typeCounts map[string]int, ids event11FixtureIDs) string {
+	if typeCounts[v39.TypeAuditReport] == 0 {
+		return ""
+	}
+	return ids.auditReport
+}
+
+func event11HandoffEventGraphRefs(typeCounts map[string]int, ids event11FixtureIDs) []string {
+	candidates := []struct {
+		typ string
+		id  string
+	}{
+		{v39.TypeRuntimeEnvelope, ids.runtimeEnvelope},
+		{v39.TypeRuntimeResult, ids.runtimeResult},
+		{v39.TypeTestRun, ids.testRun},
+		{v39.TypeGateResult, ids.gateResult},
+		{v39.TypeAuditReport, ids.auditReport},
+	}
+	refs := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if typeCounts[candidate.typ] > 0 {
+			refs = append(refs, egRef(candidate.typ, candidate.id))
+		}
+	}
+	return refs
+}
+
+func event11UniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 func event11LocalEvidenceMissing(graph *v39.InMemoryStore, ids event11FixtureIDs, envelopeHash string, envelopeImmutable bool, policyCases []Event11PolicyCaseResult, opts Event11RuntimeEnvelopeDryRunOptions) []string {
