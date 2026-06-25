@@ -1,6 +1,7 @@
 package work
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"strconv"
 	"strings"
@@ -426,6 +427,14 @@ func (ts *TaskStore) BlockIssueScanStage(
 	if current != targetStatus && !canReachIssueScanStatusThroughTaskLifecycle(current, targetStatus) {
 		return IssueScanStageBlockResult{}, fmt.Errorf("%w: issue-scan stage transition is not valid in task lifecycle %s -> %s", ErrInvalidLifecycleTransition, current, targetStatus)
 	}
+	status := current
+	if current != targetStatus {
+		var err error
+		status, err = ts.transitionIssueScanStageTo(source, ref.TaskID, targetStatus, "issue-scan blocked: "+string(blocker.Reason), blocker.EvidenceRefs, causes, convID)
+		if err != nil {
+			return IssueScanStageBlockResult{}, err
+		}
+	}
 	content := IssueScanStageBlockedContent{
 		TaskID:            ref.TaskID,
 		RunID:             strings.TrimSpace(ref.RunID),
@@ -443,10 +452,6 @@ func (ts *TaskStore) BlockIssueScanStage(
 	}
 	if _, err := ts.store.Append(ev); err != nil {
 		return IssueScanStageBlockResult{}, fmt.Errorf("append issue-scan blocker event: %w", err)
-	}
-	status, err := ts.transitionIssueScanStageTo(source, ref.TaskID, targetStatus, "issue-scan blocked: "+string(blocker.Reason), blocker.EvidenceRefs, causes, convID)
-	if err != nil {
-		return IssueScanStageBlockResult{}, err
 	}
 	return IssueScanStageBlockResult{Created: true, Status: status}, nil
 }
@@ -471,6 +476,13 @@ func (ts *TaskStore) SatisfyIssueScanStageGate(
 	if len(cloneStrings(evidenceRefs)) == 0 {
 		return IssueScanStageGateResult{}, fmt.Errorf("at least one issue-scan gate evidence reference is required")
 	}
+	def, ok := issueScanStageDefinitions[ref.Stage]
+	if !ok {
+		return IssueScanStageGateResult{}, fmt.Errorf("unknown issue-scan stage %q", ref.Stage)
+	}
+	if gate != def.Gate {
+		return IssueScanStageGateResult{}, fmt.Errorf("%w: issue-scan gate %q does not match stage %s gate %q", ErrInvalidLifecycleTransition, gate, ref.Stage, def.Gate)
+	}
 	current, err := ts.GetStatus(ref.TaskID)
 	if err != nil {
 		return IssueScanStageGateResult{}, err
@@ -480,15 +492,19 @@ func (ts *TaskStore) SatisfyIssueScanStageGate(
 	} else if ok && current == StatusCertified && latest.Gate == gate {
 		return IssueScanStageGateResult{Created: false, Status: current}, nil
 	}
+	status := current
 	switch current {
 	case StatusRunning, StatusVerified:
+		if !canReachIssueScanStatusThroughTaskLifecycle(current, StatusCertified) {
+			return IssueScanStageGateResult{}, fmt.Errorf("%w: issue-scan gate transition is not valid in task lifecycle %s -> %s", ErrInvalidLifecycleTransition, current, StatusCertified)
+		}
+		status, err = ts.transitionIssueScanStageTo(source, ref.TaskID, StatusCertified, "issue-scan gate satisfied: "+gate, evidenceRefs, causes, convID)
+		if err != nil {
+			return IssueScanStageGateResult{}, err
+		}
 	case StatusCertified:
-		return IssueScanStageGateResult{Created: false, Status: current}, nil
 	default:
 		return IssueScanStageGateResult{}, fmt.Errorf("%w: issue-scan gate can only be satisfied from running or verified, got %s", ErrInvalidLifecycleTransition, current)
-	}
-	if !canReachIssueScanStatusThroughTaskLifecycle(current, StatusCertified) {
-		return IssueScanStageGateResult{}, fmt.Errorf("%w: issue-scan gate transition is not valid in task lifecycle %s -> %s", ErrInvalidLifecycleTransition, current, StatusCertified)
 	}
 	content := IssueScanStageGateSatisfiedContent{
 		TaskID:            ref.TaskID,
@@ -506,10 +522,6 @@ func (ts *TaskStore) SatisfyIssueScanStageGate(
 	}
 	if _, err := ts.store.Append(ev); err != nil {
 		return IssueScanStageGateResult{}, fmt.Errorf("append issue-scan gate event: %w", err)
-	}
-	status, err := ts.transitionIssueScanStageTo(source, ref.TaskID, StatusCertified, "issue-scan gate satisfied: "+gate, evidenceRefs, causes, convID)
-	if err != nil {
-		return IssueScanStageGateResult{}, err
 	}
 	return IssueScanStageGateResult{Created: true, Status: status}, nil
 }
@@ -586,7 +598,10 @@ func issueScanStageRecord(task Task, opts IssueScanStageOptions, def issueScanSt
 }
 
 func issueScanBaseID(runID string, target IssueScanTarget, stage IssueScanStageID) string {
-	return "issue_scan_" + issueScanIDPart(runID) + "_" + issueScanIDPart(target.Repository) + "_" + strconv.Itoa(target.IssueNumber) + "_" + issueScanIDPart(string(stage))
+	raw := strings.TrimSpace(runID) + "\x00" + strings.TrimSpace(target.Repository) + "\x00" + strconv.Itoa(target.IssueNumber) + "\x00" + string(stage)
+	sum := sha256.Sum256([]byte(raw))
+	digest := fmt.Sprintf("%x", sum[:6])
+	return "issue_scan_" + issueScanIDPart(runID) + "_" + issueScanIDPart(target.Repository) + "_" + strconv.Itoa(target.IssueNumber) + "_" + issueScanIDPart(string(stage)) + "_" + digest
 }
 
 func issueScanIDPart(value string) string {

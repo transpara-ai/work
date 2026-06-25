@@ -74,6 +74,50 @@ func TestIssueScanDAGReplayCreatesOneCanonicalStageChainPerTarget(t *testing.T) 
 	}
 }
 
+func TestIssueScanCanonicalIDsSeparatePunctuationVariantTargets(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	first, err := ts.EnsureIssueScanDAG(testActor, work.IssueScanDAGOptions{
+		RunID:  "2026-06-25-docs-172-site-115-dry-run",
+		Target: work.IssueScanTarget{Repository: "transpara-ai/foo.bar", IssueNumber: 172},
+		Stages: []work.IssueScanStageID{
+			work.IssueScanStageResearch,
+		},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("EnsureIssueScanDAG first target: %v", err)
+	}
+	second, err := ts.EnsureIssueScanDAG(testActor, work.IssueScanDAGOptions{
+		RunID:  "2026-06-25-docs-172-site-115-dry-run",
+		Target: work.IssueScanTarget{Repository: "transpara-ai/foo-bar", IssueNumber: 172},
+		Stages: []work.IssueScanStageID{
+			work.IssueScanStageResearch,
+		},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("EnsureIssueScanDAG second target: %v", err)
+	}
+	if first.CreatedTasks != 1 || second.CreatedTasks != 1 {
+		t.Fatalf("created tasks first=%d second=%d; want one task for each distinct target", first.CreatedTasks, second.CreatedTasks)
+	}
+	if first.Stages[0].Task.ID == second.Stages[0].Task.ID {
+		t.Fatalf("punctuation-variant targets shared task id %s", first.Stages[0].Task.ID.Value())
+	}
+	if first.Stages[0].Task.CanonicalTaskID == second.Stages[0].Task.CanonicalTaskID {
+		t.Fatalf("punctuation-variant targets shared canonical task id %q", first.Stages[0].Task.CanonicalTaskID)
+	}
+
+	ref := first.Stages[0].Ref()
+	ref.Target = work.IssueScanTarget{Repository: "transpara-ai/foo-bar", IssueNumber: 172}
+	_, err = ts.BlockIssueScanStage(testActor, ref, work.IssueScanBlocker{
+		Reason: work.IssueScanBlockerStaleTarget,
+		Detail: "punctuation collision must not pass typed telemetry validation",
+	}, causes, testConv)
+	if !errors.Is(err, work.ErrInvalidLifecycleTransition) {
+		t.Fatalf("BlockIssueScanStage collision ref = %v; want invalid transition", err)
+	}
+}
+
 func TestIssueScanStageCertificationUnblocksNextStage(t *testing.T) {
 	s, causes := setupStore(t)
 	ts := newTaskStore(t, s)
@@ -120,6 +164,39 @@ func TestIssueScanStageCertificationUnblocksNextStage(t *testing.T) {
 	}
 	if len(gatePage.Items()) != 1 {
 		t.Fatalf("gate event count = %d; want 1", len(gatePage.Items()))
+	}
+}
+
+func TestIssueScanStageGateRejectsNonCanonicalGate(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	result, err := ts.EnsureIssueScanDAG(testActor, work.IssueScanDAGOptions{
+		RunID:  "2026-06-25-docs-172-site-115-dry-run",
+		Target: work.IssueScanTarget{Repository: "transpara-ai/docs", IssueNumber: 172},
+		Stages: []work.IssueScanStageID{
+			work.IssueScanStageResearch,
+		},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("EnsureIssueScanDAG: %v", err)
+	}
+	stage := result.Stages[0]
+	if status, err := ts.StartIssueScanStage(testActor, stage.Ref(), "begin research", causes, testConv); err != nil || status != work.StatusRunning {
+		t.Fatalf("StartIssueScanStage = %s, %v; want running", status, err)
+	}
+	_, err = ts.SatisfyIssueScanStageGate(testActor, stage.Ref(), "wrong_gate", []string{"artifact:research-packet"}, causes, testConv)
+	if !errors.Is(err, work.ErrInvalidLifecycleTransition) {
+		t.Fatalf("SatisfyIssueScanStageGate wrong gate = %v; want invalid transition", err)
+	}
+	if status, err := ts.GetStatus(stage.Task.ID); err != nil || status != work.StatusRunning {
+		t.Fatalf("status after wrong gate = %s, %v; want running", status, err)
+	}
+	gatePage, err := s.ByType(work.EventTypeIssueScanStageGateSatisfied, 1000, types.None[types.Cursor]())
+	if err != nil {
+		t.Fatalf("ByType gate events: %v", err)
+	}
+	if len(gatePage.Items()) != 0 {
+		t.Fatalf("gate event count = %d; want 0", len(gatePage.Items()))
 	}
 }
 
