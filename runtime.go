@@ -111,6 +111,21 @@ type RuntimeResult struct {
 	ValidationErrors []string              `json:"ValidationErrors,omitempty"`
 }
 
+// RuntimePolicyBlockedNoSideEffectEvidence summarizes a blocked runtime result
+// without re-running the runtime or mutating Work state.
+type RuntimePolicyBlockedNoSideEffectEvidence struct {
+	Status               string              `json:"status"`
+	PolicyBlocked        bool                `json:"policy_blocked"`
+	SideEffectFree       bool                `json:"side_effect_free"`
+	ExitCode             int                 `json:"exit_code"`
+	Error                string              `json:"error,omitempty"`
+	BlockedCommands      []RuntimeCommandLog `json:"blocked_commands,omitempty"`
+	ChangedFileCount     int                 `json:"changed_file_count"`
+	ArtifactCount        int                 `json:"artifact_count"`
+	ValidationErrorCount int                 `json:"validation_error_count"`
+	Reasons              []string            `json:"reasons,omitempty"`
+}
+
 // RuntimeEnvelopeRecordedContent is the event content for a RuntimeEnvelope.
 type RuntimeEnvelopeRecordedContent struct {
 	workContent
@@ -225,6 +240,66 @@ func (ts *TaskStore) ProjectRuntimeResults(taskID types.EventID) ([]RuntimeResul
 		}
 	}
 	return records, nil
+}
+
+func BuildRuntimePolicyBlockedNoSideEffectEvidence(result RuntimeResult) RuntimePolicyBlockedNoSideEffectEvidence {
+	evidence := RuntimePolicyBlockedNoSideEffectEvidence{
+		PolicyBlocked:        result.PolicyBlocked,
+		ExitCode:             result.ExitCode,
+		Error:                result.Error,
+		ChangedFileCount:     len(result.ChangedFiles),
+		ArtifactCount:        len(result.Artifacts),
+		ValidationErrorCount: len(result.ValidationErrors),
+		BlockedCommands:      runtimeBlockedCommandLogs(result.CommandLog),
+	}
+	if result.Status != RuntimeStatusPolicyBlocked {
+		evidence.Reasons = append(evidence.Reasons, fmt.Sprintf("status is %q, not policy_blocked", result.Status))
+	}
+	if !result.PolicyBlocked {
+		evidence.Reasons = append(evidence.Reasons, "policy_blocked flag is false")
+	}
+	if result.ExitCode != 126 {
+		evidence.Reasons = append(evidence.Reasons, fmt.Sprintf("exit code is %d, want 126", result.ExitCode))
+	}
+	if result.TimedOut {
+		evidence.Reasons = append(evidence.Reasons, "timed_out flag is true")
+	}
+	if len(result.ChangedFiles) > 0 {
+		evidence.Reasons = append(evidence.Reasons, "changed files were recorded")
+	}
+	if len(result.Artifacts) > 0 {
+		evidence.Reasons = append(evidence.Reasons, "artifacts were recorded")
+	}
+	if len(result.ValidationErrors) > 0 {
+		evidence.Reasons = append(evidence.Reasons, "validation errors were recorded")
+	}
+	if len(evidence.BlockedCommands) == 0 {
+		evidence.Reasons = append(evidence.Reasons, "no policy-blocked command log entry found")
+	}
+	evidence.SideEffectFree = len(result.ChangedFiles) == 0 && len(result.Artifacts) == 0 && len(result.ValidationErrors) == 0 && !result.TimedOut
+	if len(evidence.Reasons) == 0 {
+		evidence.Status = "pass"
+	} else {
+		evidence.Status = "fail"
+	}
+	return evidence
+}
+
+func runtimeBlockedCommandLogs(logs []RuntimeCommandLog) []RuntimeCommandLog {
+	blocked := make([]RuntimeCommandLog, 0)
+	for _, entry := range logs {
+		if entry.Status == string(RuntimeStatusPolicyBlocked) {
+			blocked = append(blocked, RuntimeCommandLog{
+				Index:  entry.Index,
+				Name:   entry.Name,
+				Args:   cloneStrings(entry.Args),
+				Status: entry.Status,
+				Output: entry.Output,
+				Error:  entry.Error,
+			})
+		}
+	}
+	return blocked
 }
 
 func normalizeRuntimeEnvelope(envelope RuntimeEnvelope) RuntimeEnvelope {

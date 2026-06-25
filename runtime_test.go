@@ -266,6 +266,63 @@ func TestRuntimeBroker_NetworkAndSecretsPolicyBlockSimulatedAttempts(t *testing.
 	}
 }
 
+func TestRuntimeBroker_BuildsPolicyBlockedNoSideEffectEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cmd  work.RuntimeCommand
+	}{
+		{name: "denied_command", cmd: work.RuntimeCommand{Name: "denied_command", Args: []string{"out.txt", "nope"}}},
+		{name: "network", cmd: work.RuntimeCommand{Name: "network_attempt"}},
+		{name: "secrets", cmd: work.RuntimeCommand{Name: "secret_attempt"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, causes := setupStore(t)
+			ts := newTaskStore(t, s)
+			task := createRuntimeTask(t, ts, causes)
+			dir := t.TempDir()
+			run, err := ts.RunLocalRuntime(testActor, runtimeEnvelope(task.ID, dir, tc.cmd), causes, testConv)
+			if err != nil {
+				t.Fatalf("RunLocalRuntime: %v", err)
+			}
+
+			evidence := work.BuildRuntimePolicyBlockedNoSideEffectEvidence(run.Result.Result)
+			if evidence.Status != "pass" || !evidence.PolicyBlocked || !evidence.SideEffectFree {
+				t.Fatalf("evidence = %#v; want pass policy-blocked no-side-effect", evidence)
+			}
+			if evidence.ChangedFileCount != 0 || evidence.ArtifactCount != 0 || evidence.ValidationErrorCount != 0 {
+				t.Fatalf("evidence counts = %#v; want zero side effects", evidence)
+			}
+			if len(evidence.BlockedCommands) != 1 || evidence.BlockedCommands[0].Name != tc.cmd.Name {
+				t.Fatalf("blocked commands = %#v; want %s", evidence.BlockedCommands, tc.cmd.Name)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "out.txt")); !os.IsNotExist(err) {
+				t.Fatalf("out.txt side effect exists or unexpected stat err: %v", err)
+			}
+		})
+	}
+}
+
+func TestRuntimeBroker_PolicyBlockedEvidenceFailsWhenSideEffectsExist(t *testing.T) {
+	result := work.RuntimeResult{
+		Status:        work.RuntimeStatusPolicyBlocked,
+		PolicyBlocked: true,
+		ExitCode:      126,
+		CommandLog: []work.RuntimeCommandLog{
+			{Index: 0, Name: "network_attempt", Status: string(work.RuntimeStatusPolicyBlocked), Error: "blocked"},
+		},
+		ChangedFiles: []work.RuntimeFileArtifact{{Path: "out.txt"}},
+	}
+
+	evidence := work.BuildRuntimePolicyBlockedNoSideEffectEvidence(result)
+
+	if evidence.Status != "fail" || evidence.SideEffectFree {
+		t.Fatalf("evidence = %#v; want fail with side effects", evidence)
+	}
+	if !containsString(evidence.Reasons, "changed files were recorded") {
+		t.Fatalf("reasons = %#v; want changed files reason", evidence.Reasons)
+	}
+}
+
 func TestRuntimeBroker_MaxFilesChangedBlockedBeforeSideEffect(t *testing.T) {
 	s, causes := setupStore(t)
 	ts := newTaskStore(t, s)
