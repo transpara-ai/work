@@ -266,6 +266,143 @@ func TestRuntimeBroker_NetworkAndSecretsPolicyBlockSimulatedAttempts(t *testing.
 	}
 }
 
+func TestRuntimeBroker_BuildsPolicyBlockedNoSideEffectEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cmd  work.RuntimeCommand
+	}{
+		{name: "denied_command", cmd: work.RuntimeCommand{Name: "denied_command", Args: []string{"out.txt", "nope"}}},
+		{name: "network", cmd: work.RuntimeCommand{Name: "network_attempt"}},
+		{name: "secrets", cmd: work.RuntimeCommand{Name: "secret_attempt"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, causes := setupStore(t)
+			ts := newTaskStore(t, s)
+			task := createRuntimeTask(t, ts, causes)
+			dir := t.TempDir()
+			run, err := ts.RunLocalRuntime(testActor, runtimeEnvelope(task.ID, dir, tc.cmd), causes, testConv)
+			if err != nil {
+				t.Fatalf("RunLocalRuntime: %v", err)
+			}
+
+			evidence := work.BuildRuntimePolicyBlockedNoSideEffectEvidence(run.Result.Result)
+			if evidence.Status != "pass" || !evidence.PolicyBlocked || !evidence.SideEffectFree {
+				t.Fatalf("evidence = %#v; want pass policy-blocked no-side-effect", evidence)
+			}
+			if evidence.ChangedFileCount != 0 || evidence.ArtifactCount != 0 || evidence.ValidationErrorCount != 0 {
+				t.Fatalf("evidence counts = %#v; want zero side effects", evidence)
+			}
+			if len(evidence.BlockedCommands) != 1 || evidence.BlockedCommands[0].Name != tc.cmd.Name {
+				t.Fatalf("blocked commands = %#v; want %s", evidence.BlockedCommands, tc.cmd.Name)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "out.txt")); !os.IsNotExist(err) {
+				t.Fatalf("out.txt side effect exists or unexpected stat err: %v", err)
+			}
+		})
+	}
+}
+
+func TestRuntimeBroker_PolicyBlockedEvidenceFailsWhenSideEffectsExist(t *testing.T) {
+	tests := []struct {
+		name     string
+		mutate   func(*work.RuntimeResult)
+		want     string
+		sideFree bool
+	}{
+		{
+			name: "wrong status",
+			mutate: func(result *work.RuntimeResult) {
+				result.Status = work.RuntimeStatusSucceeded
+			},
+			want:     `status is "succeeded", not policy_blocked`,
+			sideFree: true,
+		},
+		{
+			name: "policy flag false",
+			mutate: func(result *work.RuntimeResult) {
+				result.PolicyBlocked = false
+			},
+			want:     "policy_blocked flag is false",
+			sideFree: true,
+		},
+		{
+			name: "wrong exit code",
+			mutate: func(result *work.RuntimeResult) {
+				result.ExitCode = 1
+			},
+			want:     "exit code is 1, want 126",
+			sideFree: true,
+		},
+		{
+			name: "timed out",
+			mutate: func(result *work.RuntimeResult) {
+				result.TimedOut = true
+			},
+			want:     "timed_out flag is true",
+			sideFree: false,
+		},
+		{
+			name: "changed files",
+			mutate: func(result *work.RuntimeResult) {
+				result.ChangedFiles = []work.RuntimeFileArtifact{{Path: "out.txt"}}
+			},
+			want:     "changed files were recorded",
+			sideFree: false,
+		},
+		{
+			name: "artifacts",
+			mutate: func(result *work.RuntimeResult) {
+				result.Artifacts = []work.RuntimeFileArtifact{{Path: "out.txt"}}
+			},
+			want:     "artifacts were recorded",
+			sideFree: false,
+		},
+		{
+			name: "validation errors",
+			mutate: func(result *work.RuntimeResult) {
+				result.ValidationErrors = []string{"missing expected output"}
+			},
+			want:     "validation errors were recorded",
+			sideFree: false,
+		},
+		{
+			name: "no blocked command",
+			mutate: func(result *work.RuntimeResult) {
+				result.CommandLog = []work.RuntimeCommandLog{{Index: 0, Name: "network_attempt", Status: string(work.RuntimeStatusSucceeded)}}
+			},
+			want:     "no policy-blocked command log entry found",
+			sideFree: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := policyBlockedRuntimeResult()
+			tt.mutate(&result)
+
+			evidence := work.BuildRuntimePolicyBlockedNoSideEffectEvidence(result)
+
+			if evidence.Status != "fail" || evidence.SideEffectFree != tt.sideFree {
+				t.Fatalf("evidence = %#v; want fail sideEffectFree=%v", evidence, tt.sideFree)
+			}
+			if !containsString(evidence.Reasons, tt.want) {
+				t.Fatalf("reasons = %#v; want %q", evidence.Reasons, tt.want)
+			}
+		})
+	}
+}
+
+func policyBlockedRuntimeResult() work.RuntimeResult {
+	return work.RuntimeResult{
+		Status:        work.RuntimeStatusPolicyBlocked,
+		PolicyBlocked: true,
+		ExitCode:      126,
+		CommandLog: []work.RuntimeCommandLog{
+			{Index: 0, Name: "network_attempt", Status: string(work.RuntimeStatusPolicyBlocked), Error: "blocked"},
+		},
+	}
+}
+
 func TestRuntimeBroker_MaxFilesChangedBlockedBeforeSideEffect(t *testing.T) {
 	s, causes := setupStore(t)
 	ts := newTaskStore(t, s)
