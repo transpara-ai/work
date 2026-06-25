@@ -749,18 +749,23 @@ func (ts *TaskStore) AttachFailureRepairReferences(
 // ProjectLegacyTask and GetCompatibilityStatus instead of being promoted into
 // canonical v3.9 lifecycle state.
 func (ts *TaskStore) GetStatus(taskID types.EventID) (TaskStatus, error) {
-	transitionPage, err := ts.store.ByType(EventTypeTaskLifecycleTransitioned, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return StatusCreated, fmt.Errorf("fetch lifecycle transition events: %w", err)
-	}
-	for _, ev := range transitionPage.Items() {
-		c, ok := ev.Content().(TaskLifecycleTransitionContent)
-		if ok && c.TaskID == taskID {
-			return c.ToState, nil
+	after := types.None[types.Cursor]()
+	for {
+		transitionPage, err := ts.store.ByType(EventTypeTaskLifecycleTransitioned, 1000, after)
+		if err != nil {
+			return StatusCreated, fmt.Errorf("fetch lifecycle transition events: %w", err)
 		}
+		for _, ev := range transitionPage.Items() {
+			c, ok := ev.Content().(TaskLifecycleTransitionContent)
+			if ok && c.TaskID == taskID {
+				return c.ToState, nil
+			}
+		}
+		if !transitionPage.HasMore() {
+			return StatusCreated, nil
+		}
+		after = transitionPage.Cursor()
 	}
-
-	return StatusCreated, nil
 }
 
 // GetCompatibilityStatus returns the legacy Work task status projection for
@@ -1058,8 +1063,9 @@ func (ts *TaskStore) IsBlocked(taskID types.EventID) (bool, error) {
 		}
 	}
 
-	// Collect all live completed task IDs once (reopen-aware).
-	completedIDs, err := ts.liveCompletedIDs()
+	// Collect all dependency-satisfying task IDs once (reopen-aware legacy
+	// completions plus v3.9 certified tasks).
+	completedIDs, err := ts.dependencySatisfiedIDs()
 	if err != nil {
 		return false, err
 	}
@@ -1147,13 +1153,87 @@ func (ts *TaskStore) liveCompletedIDs() (map[types.EventID]bool, error) {
 	return ids, nil
 }
 
+// dependencySatisfiedIDs returns task IDs that satisfy downstream dependency
+// edges. Legacy Work tasks satisfy dependencies through a live completion.
+// Issue-scan stage tasks also satisfy their canonical stage DAG dependencies
+// once certified; other v3.9 certified tasks keep the pre-existing
+// completion-only dependency semantics. Issue-scan membership is reserved by
+// deterministic canonical/factory ID prefixes instead of workspace labels.
+func (ts *TaskStore) dependencySatisfiedIDs() (map[types.EventID]bool, error) {
+	ids, err := ts.liveCompletedIDs()
+	if err != nil {
+		return nil, err
+	}
+	statuses, err := ts.latestLifecycleStatuses()
+	if err != nil {
+		return nil, err
+	}
+	issueScanIDs, err := ts.issueScanTaskIDs()
+	if err != nil {
+		return nil, err
+	}
+	for taskID, status := range statuses {
+		if status == StatusCertified && issueScanIDs[taskID] {
+			ids[taskID] = true
+		}
+	}
+	return ids, nil
+}
+
+func (ts *TaskStore) issueScanTaskIDs() (map[types.EventID]bool, error) {
+	ids := make(map[types.EventID]bool)
+	after := types.None[types.Cursor]()
+	for {
+		page, err := ts.store.ByType(EventTypeTaskCreated, 1000, after)
+		if err != nil {
+			return nil, fmt.Errorf("fetch issue-scan task ids: %w", err)
+		}
+		for _, ev := range page.Items() {
+			c, ok := ev.Content().(TaskCreatedContent)
+			if ok && isIssueScanTaskContent(c) {
+				ids[ev.ID()] = true
+			}
+		}
+		if !page.HasMore() {
+			return ids, nil
+		}
+		after = page.Cursor()
+	}
+}
+
+func (ts *TaskStore) latestLifecycleStatuses() (map[types.EventID]TaskStatus, error) {
+	statuses := make(map[types.EventID]TaskStatus)
+	after := types.None[types.Cursor]()
+	for {
+		page, err := ts.store.ByType(EventTypeTaskLifecycleTransitioned, 1000, after)
+		if err != nil {
+			return nil, fmt.Errorf("fetch lifecycle transition events: %w", err)
+		}
+		for _, ev := range page.Items() {
+			c, ok := ev.Content().(TaskLifecycleTransitionContent)
+			if !ok {
+				continue
+			}
+			if _, seen := statuses[c.TaskID]; seen {
+				continue
+			}
+			statuses[c.TaskID] = c.ToState
+		}
+		if !page.HasMore() {
+			return statuses, nil
+		}
+		after = page.Cursor()
+	}
+}
+
 // ListOpen returns all tasks that do not have a matching work.task.completed event
 // and are not blocked by an incomplete dependency.
 // It fetches up to 1000 tasks and filters out completed and blocked tasks.
 func (ts *TaskStore) ListOpen() ([]Task, error) {
-	// Collect all live completed task IDs (a completion superseded by a
-	// reopen does not count — the task is open again while being fixed).
-	completedIDs, err := ts.liveCompletedIDs()
+	// Collect all dependency-satisfying task IDs. A legacy completion
+	// superseded by a reopen does not count; certified tasks count only for
+	// deterministic issue-scan stage tasks.
+	completedIDs, err := ts.dependencySatisfiedIDs()
 	if err != nil {
 		return nil, err
 	}
@@ -1309,8 +1389,8 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 		return nil, nil
 	}
 
-	// Scan 1: completed + reopened events → live completedIDs set.
-	completedIDs, err := ts.liveCompletedIDs()
+	// Scan 1: completed + reopened events plus issue-scan certification -> dependency-satisfied set.
+	completedIDs, err := ts.dependencySatisfiedIDs()
 	if err != nil {
 		return nil, err
 	}

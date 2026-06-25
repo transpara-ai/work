@@ -601,6 +601,63 @@ func TestTaskStore_IsBlocked_UnblockedWhenDepCompleted(t *testing.T) {
 	}
 }
 
+func TestTaskStore_IsBlocked_RemainsBlockedByCertifiedNonIssueScanDependency(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	upstream, err := ts.CreateV39(testActor, work.TaskCreateOptions{
+		Title:                  "Certified non issue-scan task",
+		CanonicalTaskID:        "tsk_certified_non_issue_scan",
+		FactoryOrderID:         "fo_certified_non_issue_scan",
+		RequirementIDs:         []string{"req_certified_non_issue_scan"},
+		AcceptanceCriterionIDs: []string{"ac_certified_non_issue_scan"},
+		Cell:                   "implementation",
+		RiskClass:              "low",
+		ExpectedOutputs:        []string{"non issue-scan evidence"},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("CreateV39 upstream: %v", err)
+	}
+	downstream, err := ts.CreateV39(testActor, work.TaskCreateOptions{
+		Title:                  "Downstream task",
+		CanonicalTaskID:        "tsk_downstream_of_certified_non_issue_scan",
+		FactoryOrderID:         "fo_downstream_of_certified_non_issue_scan",
+		RequirementIDs:         []string{"req_downstream_of_certified_non_issue_scan"},
+		AcceptanceCriterionIDs: []string{"ac_downstream_of_certified_non_issue_scan"},
+		Cell:                   "implementation",
+		RiskClass:              "low",
+		ExpectedOutputs:        []string{"downstream evidence"},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("CreateV39 downstream: %v", err)
+	}
+	if err := ts.AddDependency(testActor, downstream.ID, upstream.ID, causes, testConv); err != nil {
+		t.Fatalf("AddDependency: %v", err)
+	}
+	for _, state := range []work.TaskStatus{work.StatusReady, work.StatusRunning, work.StatusVerified, work.StatusCertified} {
+		if err := ts.TransitionTask(testActor, upstream.ID, state, "advance non issue-scan task", nil, causes, testConv); err != nil {
+			t.Fatalf("TransitionTask to %s: %v", state, err)
+		}
+	}
+
+	blocked, err := ts.IsBlocked(downstream.ID)
+	if err != nil {
+		t.Fatalf("IsBlocked: %v", err)
+	}
+	if !blocked {
+		t.Fatal("certified non issue-scan dependency unblocked downstream task; want completion-only semantics")
+	}
+	open, err := ts.ListOpen()
+	if err != nil {
+		t.Fatalf("ListOpen: %v", err)
+	}
+	for _, task := range open {
+		if task.ID == downstream.ID {
+			t.Fatalf("downstream task appeared open with only certified non issue-scan dependency")
+		}
+	}
+}
+
 func TestTaskStore_ListOpen_ExcludesBlocked(t *testing.T) {
 	s, causes := setupStore(t)
 	ts := newTaskStore(t, s)
