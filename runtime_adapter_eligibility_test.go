@@ -67,6 +67,7 @@ func TestRuntimeBrokerExternalAdapterEligibilityFixtureBuildsCandidateOnlyEviden
 		t.Fatalf("exit mapping=%#v; want bounded exit mapping", report.ExitCodeMapping)
 	}
 	if report.ReceiptEvidence.Status != "schema_defined" || !report.ReceiptEvidence.HashRequired ||
+		!report.ReceiptEvidence.HashMatches || report.ReceiptEvidence.ReceiptHash != report.ReceiptEvidence.ExpectedReceiptHash ||
 		report.ReceiptEvidence.StaleReceiptAllowed || report.ReceiptEvidence.ReceiptBeforeResult {
 		t.Fatalf("receipt evidence=%#v; want schema-defined hash-bound receipt", report.ReceiptEvidence)
 	}
@@ -114,6 +115,9 @@ func TestRuntimeBrokerExternalAdapterEligibilityFixtureFailsClosed(t *testing.T)
 		{name: "deployment command", mutate: func(opts *work.RuntimeBrokerExternalAdapterEligibilityOptions) { opts.DeploymentCommandClaim = true }, wantMissing: "command boundary denied operation missing: deploy"},
 		{name: "github mutation command", mutate: func(opts *work.RuntimeBrokerExternalAdapterEligibilityOptions) { opts.GitHubMutationClaim = true }, wantMissing: "command boundary denied operation missing: gh pr merge"},
 		{name: "hive action command", mutate: func(opts *work.RuntimeBrokerExternalAdapterEligibilityOptions) { opts.HiveActionAPIClaim = true }, wantMissing: "command boundary denied operation missing: hive.action"},
+		{name: "runtimebroker run command", mutate: func(opts *work.RuntimeBrokerExternalAdapterEligibilityOptions) {
+			opts.RuntimeBrokerRunCommandClaim = true
+		}, wantMissing: "command boundary denied operation missing: RuntimeBroker.run"},
 		{name: "missing network boundary", mutate: func(opts *work.RuntimeBrokerExternalAdapterEligibilityOptions) { opts.OmitNetworkBoundary = true }, wantMissing: "network boundary missing"},
 		{name: "unscoped network", mutate: func(opts *work.RuntimeBrokerExternalAdapterEligibilityOptions) { opts.UnscopedNetworkClaim = true }, wantMissing: "network scope widened"},
 		{name: "widened network host", mutate: func(opts *work.RuntimeBrokerExternalAdapterEligibilityOptions) { opts.WidenNetworkHostScope = true }, wantMissing: "network scope widened"},

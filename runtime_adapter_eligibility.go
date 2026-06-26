@@ -21,14 +21,15 @@ type RuntimeBrokerExternalAdapterEligibilityOptions struct {
 	OmitSourceIssueRef     bool
 	MismatchSourceIssueRef bool
 
-	OmitFileBoundary       bool
-	WidenFileBoundary      bool
-	OmitCommandBoundary    bool
-	ShellCommandClaim      bool
-	ProcessEscapeClaim     bool
-	DeploymentCommandClaim bool
-	GitHubMutationClaim    bool
-	HiveActionAPIClaim     bool
+	OmitFileBoundary             bool
+	WidenFileBoundary            bool
+	OmitCommandBoundary          bool
+	ShellCommandClaim            bool
+	ProcessEscapeClaim           bool
+	RuntimeBrokerRunCommandClaim bool
+	DeploymentCommandClaim       bool
+	GitHubMutationClaim          bool
+	HiveActionAPIClaim           bool
 
 	OmitNetworkBoundary    bool
 	UnscopedNetworkClaim   bool
@@ -200,7 +201,10 @@ type RuntimeAdapterEligibilityExitMapping struct {
 type RuntimeAdapterEligibilityReceipt struct {
 	Status               string   `json:"status"`
 	ReceiptSchema        string   `json:"receipt_schema,omitempty"`
+	ReceiptHash          string   `json:"receipt_hash,omitempty"`
+	ExpectedReceiptHash  string   `json:"expected_receipt_hash,omitempty"`
 	HashRequired         bool     `json:"hash_required"`
+	HashMatches          bool     `json:"hash_matches"`
 	StaleReceiptAllowed  bool     `json:"stale_receipt_allowed"`
 	ReceiptBeforeResult  bool     `json:"receipt_before_result"`
 	RequiredEvidenceRefs []string `json:"required_evidence_refs,omitempty"`
@@ -287,7 +291,7 @@ func runtimeAdapterEligibilityCandidate(opts RuntimeBrokerExternalAdapterEligibi
 		AdapterID:             "runtimebroker.external.adapter.fixture",
 		AdapterVersion:        "0.0.0-evidence-only",
 		RuntimeClass:          "external_runtime_candidate",
-		ProtectedActionType:   "runtimebroker.external_adapter.evaluate_eligibility",
+		ProtectedActionType:   runtimeAdapterEligibilityProtectedAction,
 		EvidenceCompleteOnly:  true,
 		AdapterEnabled:        opts.AdapterEnablementClaim,
 		AdapterInvoked:        opts.AdapterInvocationClaim,
@@ -381,6 +385,9 @@ func runtimeAdapterEligibilityDeniedCommands(opts RuntimeBrokerExternalAdapterEl
 	}
 	if opts.HiveActionAPIClaim {
 		return withoutRuntimeAdapterEligibilityString(denied, "hive.action")
+	}
+	if opts.RuntimeBrokerRunCommandClaim {
+		return withoutRuntimeAdapterEligibilityString(denied, "RuntimeBroker.run")
 	}
 	return denied
 }
@@ -492,11 +499,21 @@ func runtimeAdapterEligibilityReceipt(opts RuntimeBrokerExternalAdapterEligibili
 	return RuntimeAdapterEligibilityReceipt{
 		Status:               "schema_defined",
 		ReceiptSchema:        "runtimebroker.external_adapter.execution_receipt.v1",
-		HashRequired:         !opts.MismatchedReceiptHash,
+		ReceiptHash:          runtimeAdapterEligibilityReceiptHash(opts),
+		ExpectedReceiptHash:  "sha256:runtimebroker-external-adapter-receipt-schema",
+		HashRequired:         true,
+		HashMatches:          !opts.MismatchedReceiptHash,
 		StaleReceiptAllowed:  opts.StaleReceiptClaim,
 		ReceiptBeforeResult:  opts.ReceiptBeforeResult,
 		RequiredEvidenceRefs: []string{"authority_decision", "policy_bundle", "runtime_envelope", "runtime_result", "validation_result", "replay_result"},
 	}
+}
+
+func runtimeAdapterEligibilityReceiptHash(opts RuntimeBrokerExternalAdapterEligibilityOptions) string {
+	if opts.MismatchedReceiptHash {
+		return "sha256:mismatched-runtimebroker-external-adapter-receipt-schema"
+	}
+	return "sha256:runtimebroker-external-adapter-receipt-schema"
 }
 
 func runtimeAdapterEligibilityValidationPlan(opts RuntimeBrokerExternalAdapterEligibilityOptions) RuntimeAdapterEligibilityValidationPlan {
@@ -731,6 +748,9 @@ func runtimeAdapterEligibilityBoundaryMissing(report RuntimeBrokerExternalAdapte
 		missing = append(missing, "execution receipt evidence missing")
 	}
 	if !report.ReceiptEvidence.HashRequired {
+		missing = append(missing, "execution receipt hash requirement missing")
+	}
+	if !report.ReceiptEvidence.HashMatches || report.ReceiptEvidence.ReceiptHash != report.ReceiptEvidence.ExpectedReceiptHash {
 		missing = append(missing, "execution receipt hash mismatch")
 	}
 	if report.ReceiptEvidence.StaleReceiptAllowed {
