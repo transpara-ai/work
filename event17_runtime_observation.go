@@ -24,30 +24,35 @@ type Event17GovernedRuntimeObservationOptions struct {
 	Causes         []types.EventID
 	WorkingDir     string
 
-	OmitAuthority                  bool
-	WidenAuthorityClaim            string
-	OmitEnvelope                   bool
-	OmitRuntimeResult              bool
-	OmitPolicyDecision             bool
-	OmitTrace                      bool
-	WidenTraceScope                bool
-	OmitTestRun                    bool
-	OmitGateResult                 bool
-	OmitAuditReport                bool
-	MismatchEnvelopeHash           bool
-	UnsafeNetworkPolicy            string
-	UnsafeSecretsPolicy            string
-	ExternalAdapterClaim           bool
-	ShellCommandClaim              bool
-	ProductionEventGraphWriteClaim bool
-	ProductionTruthClaim           bool
-	RuntimeSideEffectClaim         bool
-	OmitCivilizationPresence       bool
-	MalformedCivilizationPresence  bool
-	CivilizationRuntimeReadyClaim  bool
-	HiveActivityClaim              bool
-	IssueClosureAuthorityClaim     bool
-	AutonomyIncreaseClaim          bool
+	OmitAuthority                   bool
+	WidenAuthorityClaim             string
+	OmitEnvelope                    bool
+	OmitRuntimeResult               bool
+	OmitPolicyDecision              bool
+	OmitTrace                       bool
+	WidenTraceScope                 bool
+	OmitTestRun                     bool
+	OmitGateResult                  bool
+	OmitAuditReport                 bool
+	MismatchEnvelopeHash            bool
+	ObservedRuntimeAdapterID        string
+	ObservedNetworkAccessLog        []string
+	ObservedSecretAccessLog         []string
+	UnsafeNetworkPolicy             string
+	UnsafeSecretsPolicy             string
+	ExternalAdapterClaim            bool
+	ShellCommandClaim               bool
+	ProductionEventGraphWriteClaim  bool
+	ProductionTruthClaim            bool
+	EventGraphHandoffDescriptorLost bool
+	EventGraphHandoffWriteStatus    string
+	RuntimeSideEffectClaim          bool
+	OmitCivilizationPresence        bool
+	MalformedCivilizationPresence   bool
+	CivilizationRuntimeReadyClaim   bool
+	HiveActivityClaim               bool
+	IssueClosureAuthorityClaim      bool
+	AutonomyIncreaseClaim           bool
 }
 
 type Event17GovernedRuntimeObservationRun struct {
@@ -248,6 +253,9 @@ func event17EnvelopeObservation(event11Run Event11RuntimeEnvelopeDryRunRun, opts
 		deniedCommands = append([]string(nil), observed.DeniedCommands...)
 		deniedFiles = append([]string(nil), observed.DeniedFiles...)
 	}
+	if strings.TrimSpace(opts.ObservedRuntimeAdapterID) != "" {
+		runtimeAdapterID = opts.ObservedRuntimeAdapterID
+	}
 	if opts.OmitEnvelope {
 		status = "missing"
 		id = ""
@@ -282,12 +290,23 @@ func event17ResultObservation(event11Run Event11RuntimeEnvelopeDryRunRun, opts E
 	runtimeStatus := event11Run.RuntimeRun.Result.Result.Status
 	changed := event17FileArtifactPaths(event11Run.RuntimeRun.Result.Result.ChangedFiles)
 	artifacts := event17FileArtifactPaths(event11Run.RuntimeRun.Result.Result.Artifacts)
+	observed := event17ObservedRuntimeResult(event11Run)
+	var networkLog []string
+	var secretLog []string
+	if observed != nil {
+		networkLog = append([]string(nil), observed.NetworkAccessLog...)
+		secretLog = append([]string(nil), observed.SecretAccessLog...)
+	}
+	networkLog = append(networkLog, opts.ObservedNetworkAccessLog...)
+	secretLog = append(secretLog, opts.ObservedSecretAccessLog...)
 	if opts.OmitRuntimeResult {
 		status = "missing"
 		id = ""
 		runtimeStatus = ""
 		changed = nil
 		artifacts = nil
+		networkLog = nil
+		secretLog = nil
 	}
 	return Event17ResultObservation{
 		Status:            status,
@@ -295,8 +314,8 @@ func event17ResultObservation(event11Run Event11RuntimeEnvelopeDryRunRun, opts E
 		RuntimeStatus:     runtimeStatus,
 		ChangedFiles:      changed,
 		Artifacts:         artifacts,
-		NetworkAccessLog:  nil,
-		SecretAccessLog:   nil,
+		NetworkAccessLog:  event17UniqueStrings(networkLog),
+		SecretAccessLog:   event17UniqueStrings(secretLog),
 		SideEffectClaimed: opts.RuntimeSideEffectClaim,
 	}
 }
@@ -313,8 +332,8 @@ func event17PolicyObservation(event11Run Event11RuntimeEnvelopeDryRunRun, opts E
 		Status:                 status,
 		PolicyDecisionRefs:     refs,
 		PolicyCases:            cases,
-		NetworkDisabled:        reportPolicyIsDisabled(event11Run, opts),
-		SecretsDenied:          reportSecretsAreDenied(event11Run, opts),
+		NetworkDisabled:        event17PolicyIsDisabled(event11Run, opts),
+		SecretsDenied:          event17SecretsAreDenied(event11Run, opts),
 		ExternalAdapterClaimed: opts.ExternalAdapterClaim,
 		ShellCommandClaimed:    opts.ShellCommandClaim,
 	}
@@ -368,10 +387,14 @@ func event17EvidenceObservation(status, id string, refs []string) Event17Evidenc
 }
 
 func event17EventGraphHandoff(event11Run Event11RuntimeEnvelopeDryRunRun, opts Event17GovernedRuntimeObservationOptions) Event17EventGraphHandoff {
+	persistentWriteStatus := "not_written"
+	if strings.TrimSpace(opts.EventGraphHandoffWriteStatus) != "" {
+		persistentWriteStatus = opts.EventGraphHandoffWriteStatus
+	}
 	return Event17EventGraphHandoff{
 		Status:                 "descriptor_only",
-		DescriptorOnly:         true,
-		PersistentWriteStatus:  "not_written",
+		DescriptorOnly:         !opts.EventGraphHandoffDescriptorLost,
+		PersistentWriteStatus:  persistentWriteStatus,
 		PersistentWriteClaimed: opts.ProductionEventGraphWriteClaim,
 		ProductionTruthClaimed: opts.ProductionTruthClaim,
 		EventGraphRefs:         append([]string(nil), event11Run.Report.EventGraphHandoff.EventGraphRefs...),
@@ -476,13 +499,19 @@ func event17Missing(event11Run Event11RuntimeEnvelopeDryRunRun, opts Event17Gove
 	if report.Envelope.SecretsPolicy != "none" || opts.UnsafeSecretsPolicy != "" || !report.Policy.SecretsDenied {
 		missing = append(missing, "secrets policy widened")
 	}
-	if report.Envelope.RuntimeAdapterID != "local_deterministic" {
+	if report.Envelope.RuntimeAdapterID != localDeterministicWorker {
 		missing = append(missing, "runtime adapter not local_deterministic")
 	}
-	for _, denied := range []string{"shell", "network_attempt", "secret_attempt", "gh pr merge", "git push origin main", "deploy", "production operation", "value allocation"} {
+	for _, denied := range event11DeniedCommands() {
 		if !stringIn(denied, report.Envelope.DeniedCommands) {
 			missing = append(missing, "runtime envelope denied_commands missing "+denied)
 		}
+	}
+	if len(report.Result.NetworkAccessLog) != 0 {
+		missing = append(missing, "RuntimeResult network access observed")
+	}
+	if len(report.Result.SecretAccessLog) != 0 {
+		missing = append(missing, "RuntimeResult secret access observed")
 	}
 	if opts.ExternalAdapterClaim {
 		missing = append(missing, "external adapter claim")
@@ -555,7 +584,22 @@ func event17ObservedRuntimeEnvelope(event11Run Event11RuntimeEnvelopeDryRunRun) 
 	return envelope
 }
 
-func reportPolicyIsDisabled(event11Run Event11RuntimeEnvelopeDryRunRun, opts Event17GovernedRuntimeObservationOptions) bool {
+func event17ObservedRuntimeResult(event11Run Event11RuntimeEnvelopeDryRunRun) *v39.RuntimeResult {
+	if event11Run.EventGraph == nil || strings.TrimSpace(event11Run.RuntimeResultID) == "" {
+		return nil
+	}
+	record, err := event11Run.EventGraph.Get(event11Run.RuntimeResultID)
+	if err != nil {
+		return nil
+	}
+	result, ok := record.(*v39.RuntimeResult)
+	if !ok {
+		return nil
+	}
+	return result
+}
+
+func event17PolicyIsDisabled(event11Run Event11RuntimeEnvelopeDryRunRun, opts Event17GovernedRuntimeObservationOptions) bool {
 	if opts.UnsafeNetworkPolicy != "" {
 		return false
 	}
@@ -563,7 +607,7 @@ func reportPolicyIsDisabled(event11Run Event11RuntimeEnvelopeDryRunRun, opts Eve
 	return observed != nil && observed.NetworkPolicy == "disabled"
 }
 
-func reportSecretsAreDenied(event11Run Event11RuntimeEnvelopeDryRunRun, opts Event17GovernedRuntimeObservationOptions) bool {
+func event17SecretsAreDenied(event11Run Event11RuntimeEnvelopeDryRunRun, opts Event17GovernedRuntimeObservationOptions) bool {
 	if opts.UnsafeSecretsPolicy != "" {
 		return false
 	}

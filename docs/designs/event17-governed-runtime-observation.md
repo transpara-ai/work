@@ -49,6 +49,12 @@ EventGraph record. The Event 17 report must fail closed if the observed
 RuntimeEnvelope adapter, network policy, secrets policy, or denied-command set
 widens away from the local deterministic fixture contract.
 
+RuntimeResult access-log fields are observed from the Event 11 in-memory
+EventGraph record. The Event 17 report must fail closed if network or secret
+access is observed in the recorded RuntimeResult. `ChangedFiles` and
+`Artifacts` remain declarative runtime evidence for the deterministic dry-run
+fixture, not a live filesystem mutation claim.
+
 `EventGraphHandoff` is a non-executing descriptor. It must report
 `persistent_write_status: not_written`, `persistent_write_claimed: false`, and
 `production_truth_claimed: false` on the passing path.
@@ -68,6 +74,8 @@ The report fails when any of these conditions are present:
 - missing pre-run envelope;
 - non-local runtime adapter;
 - missing runtime result;
+- RuntimeResult network access observed;
+- RuntimeResult secret access observed;
 - missing policy decision;
 - missing trace evidence;
 - widened trace scope;

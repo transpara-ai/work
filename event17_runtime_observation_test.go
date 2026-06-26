@@ -107,12 +107,25 @@ func TestEvent17GovernedRuntimeObservationFixtureFailsClosed(t *testing.T) {
 		{name: "missing gate result", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.OmitGateResult = true }, wantMissing: "GateResult observation missing"},
 		{name: "missing audit report", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.OmitAuditReport = true }, wantMissing: "AuditReport observation missing"},
 		{name: "mismatched envelope hash", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.MismatchEnvelopeHash = true }, wantMissing: "envelope hash mismatch"},
+		{name: "non local runtime adapter", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) {
+			opts.ObservedRuntimeAdapterID = "external_adapter"
+		}, wantMissing: "runtime adapter not local_deterministic"},
+		{name: "network access observed", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) {
+			opts.ObservedNetworkAccessLog = []string{"example.com"}
+		}, wantMissing: "RuntimeResult network access observed"},
+		{name: "secret access observed", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) {
+			opts.ObservedSecretAccessLog = []string{"secret://fixture"}
+		}, wantMissing: "RuntimeResult secret access observed"},
 		{name: "widened network", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.UnsafeNetworkPolicy = "allowed" }, wantMissing: "network policy widened"},
 		{name: "widened secrets", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.UnsafeSecretsPolicy = "explicit" }, wantMissing: "secrets policy widened"},
 		{name: "external adapter claim", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.ExternalAdapterClaim = true }, wantMissing: "external adapter claim"},
 		{name: "shell command claim", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.ShellCommandClaim = true }, wantMissing: "shell/general command execution claim"},
 		{name: "production eventgraph write claim", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.ProductionEventGraphWriteClaim = true }, wantMissing: "production EventGraph write claim"},
 		{name: "production truth claim", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.ProductionTruthClaim = true }, wantMissing: "production truth claim"},
+		{name: "handoff descriptor lost", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.EventGraphHandoffDescriptorLost = true }, wantMissing: "EventGraph handoff descriptor-only invariant missing"},
+		{name: "handoff write status changed", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) {
+			opts.EventGraphHandoffWriteStatus = "written"
+		}, wantMissing: "EventGraph handoff persistent write status is not not_written"},
 		{name: "runtime side-effect claim", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.RuntimeSideEffectClaim = true }, wantMissing: "runtime side-effect claim"},
 		{name: "missing civilization presence", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.OmitCivilizationPresence = true }, wantMissing: "civilization-presence boundary metadata missing"},
 		{name: "malformed civilization presence", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.MalformedCivilizationPresence = true }, wantMissing: "civilization-presence boundary metadata malformed"},
