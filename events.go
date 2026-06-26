@@ -30,6 +30,9 @@ const (
 	// FactoryOrderModelOverridesArtifactLabel carries validated per-order model
 	// override policy as structured JSON, not free-form markdown intent text.
 	FactoryOrderModelOverridesArtifactLabel = "factory_order_model_overrides"
+	// FactoryOrderSourceIssuesArtifactLabel carries GitHub issue records as
+	// source intent only. It does not grant authority for protected actions.
+	FactoryOrderSourceIssuesArtifactLabel = "factory_order_source_issues"
 )
 
 // RequiredReadinessGateLabels returns the artifact labels that must exist before

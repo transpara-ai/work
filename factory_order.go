@@ -49,7 +49,25 @@ type FactoryOrder struct {
 	RequirementIDs         []string // v3.9 req_ IDs; derived from ID if empty
 	AcceptanceCriterionIDs []string // v3.9 ac_ IDs; derived from ID if empty
 	ExpectedOutputs        []string
+	SourceIssueRecords     []FactoryOrderSourceIssueRecord
 	ModelOverrides         []FactoryOrderModelOverride
+}
+
+// FactoryOrderSourceIssueRecord is caller-supplied GitHub issue source
+// evidence. Work normalizes it into artifacts and projections; it never fetches
+// GitHub itself and never treats issue text as authority.
+type FactoryOrderSourceIssueRecord struct {
+	Repo               string   `json:"repo"`
+	Number             int      `json:"number"`
+	URL                string   `json:"url,omitempty"`
+	Title              string   `json:"title"`
+	Goal               string   `json:"goal,omitempty"`
+	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
+	Assumptions        []string `json:"assumptions,omitempty"`
+	Ambiguities        []string `json:"ambiguities,omitempty"`
+	RiskNotes          []string `json:"risk_notes,omitempty"`
+	Labels             []string `json:"labels,omitempty"`
+	SourceRefs         []string `json:"source_refs,omitempty"`
 }
 
 // FactoryOrderModelOverride is structured, durable model-selection policy for
@@ -115,6 +133,10 @@ func SeedFactoryOrder(ts *TaskStore, source types.ActorID, order FactoryOrder, c
 	if err != nil {
 		return Task{}, err
 	}
+	sourceIssuesBody, err := factoryOrderSourceIssuesArtifactBody(order.SourceIssueRecords)
+	if err != nil {
+		return Task{}, err
+	}
 
 	task, err := ts.CreateV39(source, TaskCreateOptions{
 		Title:                  order.Title,
@@ -145,6 +167,13 @@ func SeedFactoryOrder(ts *TaskStore, source types.ActorID, order FactoryOrder, c
 			modelOverrideBody,
 		})
 	}
+	if sourceIssuesBody != "" {
+		gates = append(gates, struct{ label, mime, body string }{
+			FactoryOrderSourceIssuesArtifactLabel,
+			"application/json",
+			sourceIssuesBody,
+		})
+	}
 	for _, g := range gates {
 		// A required gate with no body is left unwritten — the planner attaches it
 		// later, and Readiness keeps the task not-ready until a non-empty body
@@ -157,6 +186,104 @@ func SeedFactoryOrder(ts *TaskStore, source types.ActorID, order FactoryOrder, c
 		}
 	}
 	return task, nil
+}
+
+func factoryOrderSourceIssuesArtifactBody(records []FactoryOrderSourceIssueRecord) (string, error) {
+	normalized, err := normalizeFactoryOrderSourceIssueRecords(records, "source_issue_records")
+	if err != nil {
+		return "", err
+	}
+	if len(normalized) == 0 {
+		return "", nil
+	}
+	body := struct {
+		SourceIssueRecords  []FactoryOrderSourceIssueRecord `json:"source_issue_records"`
+		AuthorityExclusions []string                        `json:"authority_exclusions"`
+	}{
+		SourceIssueRecords: normalized,
+		AuthorityExclusions: []string{
+			"github_issue_records_are_source_intent_only",
+			"no_protected_action_authority",
+			"no_runtime_execution",
+			"no_eventgraph_write",
+			"no_hive_write_action_or_authority_api",
+			"no_deployment",
+			"no_test_001_green",
+			"no_docs_172_closure",
+			"no_autonomy_increase",
+			"no_value_allocation",
+			"no_residual_risk_closure",
+			"no_branch_pr_or_merge_authority",
+		},
+	}
+	encoded, err := json.MarshalIndent(body, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal factory order source issues: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func normalizeFactoryOrderSourceIssueRecords(records []FactoryOrderSourceIssueRecord, field string) ([]FactoryOrderSourceIssueRecord, error) {
+	if len(records) == 0 {
+		return nil, nil
+	}
+	out := make([]FactoryOrderSourceIssueRecord, 0, len(records))
+	for i, record := range records {
+		normalized := FactoryOrderSourceIssueRecord{
+			Repo:               strings.TrimSpace(record.Repo),
+			Number:             record.Number,
+			URL:                strings.TrimSpace(record.URL),
+			Title:              strings.TrimSpace(record.Title),
+			Goal:               strings.TrimSpace(record.Goal),
+			AcceptanceCriteria: cloneStrings(record.AcceptanceCriteria),
+			Assumptions:        cloneStrings(record.Assumptions),
+			Ambiguities:        cloneStrings(record.Ambiguities),
+			RiskNotes:          cloneStrings(record.RiskNotes),
+			Labels:             cloneStrings(record.Labels),
+			SourceRefs:         cloneStrings(record.SourceRefs),
+		}
+		if normalized.Repo == "" {
+			return nil, fmt.Errorf("%s[%d].repo is required", field, i)
+		}
+		if normalized.Number <= 0 {
+			return nil, fmt.Errorf("%s[%d].number must be positive", field, i)
+		}
+		if normalized.Title == "" {
+			return nil, fmt.Errorf("%s[%d].title is required", field, i)
+		}
+		if normalized.Goal == "" {
+			normalized.Goal = normalized.Title
+		}
+		if len(normalized.SourceRefs) == 0 {
+			normalized.SourceRefs = []string{issueSourceRef(normalized)}
+		}
+		if factoryOrderSourceIssueRecordHasControlRune(normalized) {
+			return nil, fmt.Errorf("%s[%d] contains control characters", field, i)
+		}
+		out = append(out, normalized)
+	}
+	return out, nil
+}
+
+func factoryOrderSourceIssueRecordHasControlRune(record FactoryOrderSourceIssueRecord) bool {
+	if hasControlRune(record.Repo) || hasControlRune(record.URL) || hasControlRune(record.Title) || hasControlRune(record.Goal) {
+		return true
+	}
+	for _, values := range [][]string{
+		record.AcceptanceCriteria,
+		record.Assumptions,
+		record.Ambiguities,
+		record.RiskNotes,
+		record.Labels,
+		record.SourceRefs,
+	} {
+		for _, value := range values {
+			if hasControlRune(value) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func factoryOrderModelOverridesArtifactBody(overrides []FactoryOrderModelOverride) (string, error) {
@@ -271,6 +398,33 @@ func (ts *TaskStore) projectFactoryOrderModelOverrides(taskID types.EventID) ([]
 		return nil, fmt.Errorf("parse factory order model overrides: %w", err)
 	}
 	normalized, err := normalizeFactoryOrderModelOverrides(decoded.ModelOverrides)
+	if err != nil {
+		return nil, err
+	}
+	return normalized, nil
+}
+
+func (ts *TaskStore) projectFactoryOrderSourceIssueRecords(taskID types.EventID) ([]FactoryOrderSourceIssueRecord, error) {
+	artifacts, err := ts.ListArtifacts(taskID)
+	if err != nil {
+		return nil, err
+	}
+	var body string
+	for _, artifact := range artifacts {
+		if artifact.Label == FactoryOrderSourceIssuesArtifactLabel {
+			body = artifact.Body
+		}
+	}
+	if strings.TrimSpace(body) == "" {
+		return nil, nil
+	}
+	var decoded struct {
+		SourceIssueRecords []FactoryOrderSourceIssueRecord `json:"source_issue_records"`
+	}
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		return nil, fmt.Errorf("parse factory order source issues: %w", err)
+	}
+	normalized, err := normalizeFactoryOrderSourceIssueRecords(decoded.SourceIssueRecords, "source_issue_records")
 	if err != nil {
 		return nil, err
 	}
