@@ -190,6 +190,150 @@ func TestSeedFactoryOrderRecordsStructuredModelOverrides(t *testing.T) {
 	}
 }
 
+func TestSeedFactoryOrderRecordsSourceIssueRecords(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	task, err := work.SeedFactoryOrder(ts, testActor, work.FactoryOrder{
+		ID:                 "fo_source_issue",
+		Title:              "Source issue",
+		Intent:             "Seed with GitHub issue source intent.",
+		DefinitionOfDone:   "d",
+		AcceptanceCriteria: "a",
+		TestPlan:           "t",
+		SourceIssueRecords: []work.FactoryOrderSourceIssueRecord{
+			{
+				Repo:   " transpara-ai/work ",
+				Number: 60,
+				URL:    " https://github.com/transpara-ai/work/issues/60 ",
+				Title:  " FactoryOrder source-intent ingestion from GitHub issues ",
+				Goal:   " Make GitHub issues usable as source intent without treating issues as authority. ",
+				AcceptanceCriteria: []string{
+					" source issue refs are preserved ",
+					"",
+					" replay projection exposes normalized records ",
+				},
+				RiskNotes:  []string{" issue records are not authority ", ""},
+				Labels:     []string{" cc:intake ", " cc:pr-ready "},
+				SourceRefs: []string{" work#60 "},
+			},
+			{
+				Repo:   "transpara-ai/docs",
+				Number: 197,
+				Title:  "Development Arc issue-source migration parent tracker",
+			},
+		},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("SeedFactoryOrder: %v", err)
+	}
+
+	artifacts, err := ts.ListArtifacts(task.ID)
+	if err != nil {
+		t.Fatalf("ListArtifacts: %v", err)
+	}
+	var body string
+	for _, artifact := range artifacts {
+		if artifact.Label == work.FactoryOrderSourceIssuesArtifactLabel {
+			if artifact.MediaType != "application/json" {
+				t.Fatalf("source issue artifact media type = %q, want application/json", artifact.MediaType)
+			}
+			body = artifact.Body
+			break
+		}
+	}
+	if body == "" {
+		t.Fatalf("missing %s artifact in %+v", work.FactoryOrderSourceIssuesArtifactLabel, artifacts)
+	}
+
+	var decoded struct {
+		SourceIssueRecords  []work.FactoryOrderSourceIssueRecord `json:"source_issue_records"`
+		AuthorityExclusions []string                             `json:"authority_exclusions"`
+	}
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Fatalf("source issue artifact is not JSON: %v\n%s", err, body)
+	}
+	if len(decoded.SourceIssueRecords) != 2 {
+		t.Fatalf("source_issue_records = %+v, want two records", decoded.SourceIssueRecords)
+	}
+	first := decoded.SourceIssueRecords[0]
+	if first.Repo != "transpara-ai/work" || first.Number != 60 || first.URL != "https://github.com/transpara-ai/work/issues/60" {
+		t.Fatalf("first issue = %+v, want normalized work#60", first)
+	}
+	if strings.Join(first.AcceptanceCriteria, "|") != "source issue refs are preserved|replay projection exposes normalized records" {
+		t.Fatalf("acceptance criteria = %#v; want trimmed non-empty values", first.AcceptanceCriteria)
+	}
+	if strings.Join(first.SourceRefs, ",") != "work#60" {
+		t.Fatalf("source refs = %#v; want caller-provided compact ref", first.SourceRefs)
+	}
+	second := decoded.SourceIssueRecords[1]
+	if second.Goal != second.Title || strings.Join(second.SourceRefs, ",") != "transpara-ai/docs#197" {
+		t.Fatalf("second issue = %+v, want derived goal and source ref", second)
+	}
+	if !containsString(decoded.AuthorityExclusions, "no_protected_action_authority") || !containsString(decoded.AuthorityExclusions, "no_eventgraph_write") {
+		t.Fatalf("authority exclusions = %#v; want protected-action and EventGraph exclusions", decoded.AuthorityExclusions)
+	}
+
+	replayed := newTaskStore(t, s)
+	projection, err := replayed.ProjectTask(task.ID)
+	if err != nil {
+		t.Fatalf("ProjectTask: %v", err)
+	}
+	if len(projection.SourceIssueRecords) != 2 {
+		t.Fatalf("projected source issues = %+v, want two", projection.SourceIssueRecords)
+	}
+	if projection.SourceIssueRecords[0].Repo != "transpara-ai/work" || strings.Join(projection.SourceIssueRecords[1].SourceRefs, ",") != "transpara-ai/docs#197" {
+		t.Fatalf("projected source issues = %+v, want normalized replay", projection.SourceIssueRecords)
+	}
+}
+
+func TestSeedFactoryOrderRejectsInvalidSourceIssueRecords(t *testing.T) {
+	tests := []struct {
+		name    string
+		record  work.FactoryOrderSourceIssueRecord
+		wantErr string
+	}{
+		{
+			name:    "missing repo",
+			record:  work.FactoryOrderSourceIssueRecord{Number: 60, Title: "issue"},
+			wantErr: "source_issue_records[0].repo is required",
+		},
+		{
+			name:    "missing number",
+			record:  work.FactoryOrderSourceIssueRecord{Repo: "transpara-ai/work", Title: "issue"},
+			wantErr: "source_issue_records[0].number must be positive",
+		},
+		{
+			name:    "missing title",
+			record:  work.FactoryOrderSourceIssueRecord{Repo: "transpara-ai/work", Number: 60},
+			wantErr: "source_issue_records[0].title is required",
+		},
+		{
+			name:    "control character",
+			record:  work.FactoryOrderSourceIssueRecord{Repo: "transpara-ai/work", Number: 60, Title: "issue\nrecord"},
+			wantErr: "source_issue_records[0] contains control characters",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, causes := setupStore(t)
+			ts := newTaskStore(t, s)
+
+			_, err := work.SeedFactoryOrder(ts, testActor, work.FactoryOrder{
+				ID:                 "fo_bad_source_issue",
+				Title:              "Bad source issue",
+				DefinitionOfDone:   "d",
+				AcceptanceCriteria: "a",
+				TestPlan:           "t",
+				SourceIssueRecords: []work.FactoryOrderSourceIssueRecord{tt.record},
+			}, causes, testConv)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected source issue error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestSeedFactoryOrderRejectsInvalidModelOverrides(t *testing.T) {
 	negativeCost := -0.01
 	tests := []struct {

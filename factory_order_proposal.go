@@ -67,22 +67,9 @@ type FactoryOrderProtectedActionClaim struct {
 	Summary string `json:"summary,omitempty"`
 }
 
-// FactoryOrderProposalIssueSourceRecord is caller-supplied GitHub issue source
-// evidence. The builder normalizes it into proposal evidence; it never fetches
-// GitHub itself.
-type FactoryOrderProposalIssueSourceRecord struct {
-	Repo               string   `json:"repo"`
-	Number             int      `json:"number"`
-	URL                string   `json:"url,omitempty"`
-	Title              string   `json:"title"`
-	Goal               string   `json:"goal,omitempty"`
-	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
-	Assumptions        []string `json:"assumptions,omitempty"`
-	Ambiguities        []string `json:"ambiguities,omitempty"`
-	RiskNotes          []string `json:"risk_notes,omitempty"`
-	Labels             []string `json:"labels,omitempty"`
-	SourceRefs         []string `json:"source_refs,omitempty"`
-}
+// FactoryOrderProposalIssueSourceRecord preserves the pre-existing proposal API
+// name while sharing the central FactoryOrder source-issue JSON shape.
+type FactoryOrderProposalIssueSourceRecord = FactoryOrderSourceIssueRecord
 
 // FactoryOrderDevelopmentProposal is the structured proposal evidence returned
 // by BuildFactoryOrderDevelopmentProposal.
@@ -354,34 +341,11 @@ func normalizeFactoryOrderDevelopmentProposalOptions(opts FactoryOrderDevelopmen
 	if err := validateV39Reference(v39.TypeTask, "task_id", normalized.TaskID); err != nil {
 		return normalized, err
 	}
-	for i, record := range normalized.IssueSourceRecords {
-		record.Repo = strings.TrimSpace(record.Repo)
-		record.URL = strings.TrimSpace(record.URL)
-		record.Title = strings.TrimSpace(record.Title)
-		record.Goal = strings.TrimSpace(record.Goal)
-		record.AcceptanceCriteria = cloneStrings(record.AcceptanceCriteria)
-		record.Assumptions = cloneStrings(record.Assumptions)
-		record.Ambiguities = cloneStrings(record.Ambiguities)
-		record.RiskNotes = cloneStrings(record.RiskNotes)
-		record.Labels = cloneStrings(record.Labels)
-		record.SourceRefs = cloneStrings(record.SourceRefs)
-		if record.Repo == "" {
-			return normalized, fmt.Errorf("issue_source_records[%d].repo is required", i)
-		}
-		if record.Number <= 0 {
-			return normalized, fmt.Errorf("issue_source_records[%d].number must be positive", i)
-		}
-		if record.Title == "" {
-			return normalized, fmt.Errorf("issue_source_records[%d].title is required", i)
-		}
-		if record.Goal == "" {
-			record.Goal = record.Title
-		}
-		if len(record.SourceRefs) == 0 {
-			record.SourceRefs = []string{issueSourceRef(record)}
-		}
-		normalized.IssueSourceRecords[i] = record
+	issueRecords, err := normalizeFactoryOrderSourceIssueRecords(normalized.IssueSourceRecords, "issue_source_records")
+	if err != nil {
+		return normalized, err
 	}
+	normalized.IssueSourceRecords = issueRecords
 	if len(normalized.ChangedFileIntent) == 0 {
 		return normalized, fmt.Errorf("changed_file_intent must be non-empty")
 	}
