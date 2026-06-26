@@ -35,6 +35,7 @@ The Event 17 report carries typed fields for:
 - pre-run RuntimeEnvelope observation;
 - post-run RuntimeResult observation;
 - policy decisions and policy cases;
+- exact Event 17 authority references;
 - trace completeness;
 - TestRun, GateResult, and AuditReport evidence;
 - EventGraph handoff descriptor;
@@ -42,6 +43,11 @@ The Event 17 report carries typed fields for:
 - forbidden actions;
 - residual risks;
 - evidence refs.
+
+RuntimeEnvelope policy fields are observed from the Event 11 in-memory
+EventGraph record. The Event 17 report must fail closed if the observed
+RuntimeEnvelope adapter, network policy, secrets policy, or denied-command set
+widens away from the local deterministic fixture contract.
 
 `EventGraphHandoff` is a non-executing descriptor. It must report
 `persistent_write_status: not_written`, `persistent_write_claimed: false`, and
@@ -58,7 +64,9 @@ The report fails when any of these conditions are present:
 
 - missing authority;
 - widened or mismatched authority;
+- missing Event 17 authority references;
 - missing pre-run envelope;
+- non-local runtime adapter;
 - missing runtime result;
 - missing policy decision;
 - missing trace evidence;
@@ -79,6 +87,9 @@ The report fails when any of these conditions are present:
 - Civilization runtime readiness claim;
 - Hive activity, wake, or start claim;
 - issue-closure authority claim.
+- autonomy-increase claim;
+- EventGraph handoff descriptor-only invariant loss;
+- EventGraph handoff persistent write invariant loss.
 
 ## Validation
 

@@ -36,6 +36,11 @@ func TestEvent17GovernedRuntimeObservationFixtureBuildsCompleteEvidence(t *testi
 	if report.Envelope.NetworkPolicy != "disabled" || report.Envelope.SecretsPolicy != "none" {
 		t.Fatalf("envelope policy = %#v; want disabled/none", report.Envelope)
 	}
+	for _, denied := range []string{"shell", "network_attempt", "secret_attempt", "gh pr merge", "git push origin main", "deploy", "production operation", "value allocation"} {
+		if !containsString(report.Envelope.DeniedCommands, denied) {
+			t.Fatalf("envelope denied commands = %#v; want %q", report.Envelope.DeniedCommands, denied)
+		}
+	}
 	if report.Result.Status != "recorded" || report.Result.SideEffectClaimed {
 		t.Fatalf("result = %#v; want recorded without side-effect claim", report.Result)
 	}
@@ -45,6 +50,11 @@ func TestEvent17GovernedRuntimeObservationFixtureBuildsCompleteEvidence(t *testi
 	if report.Policy.Status != "recorded" || !report.Policy.NetworkDisabled || !report.Policy.SecretsDenied ||
 		report.Policy.ExternalAdapterClaimed || report.Policy.ShellCommandClaimed {
 		t.Fatalf("policy = %#v; want local disabled/denied policy", report.Policy)
+	}
+	for _, ref := range []string{"DF-V4.0-EPIC-017-AUTHORITY-DECISION", "transpara-ai/docs#207", "ad7ecdf69bf6c7f599264c216014c3f2f8ed2f8c", "transpara-ai/work#59"} {
+		if !containsString(report.AuthorityRefs, ref) || !containsString(report.Policy.PolicyDecisionRefs, ref) {
+			t.Fatalf("authority refs report=%#v policy=%#v; want %q", report.AuthorityRefs, report.Policy.PolicyDecisionRefs, ref)
+		}
 	}
 	if report.Trace.Status != "recorded" || !report.Trace.TraceCompleted ||
 		report.Trace.TestRunID == "" || report.Trace.GateResultID == "" || report.Trace.AuditReportID == "" {
@@ -109,6 +119,7 @@ func TestEvent17GovernedRuntimeObservationFixtureFailsClosed(t *testing.T) {
 		{name: "civilization runtime ready claim", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.CivilizationRuntimeReadyClaim = true }, wantMissing: "civilization runtime readiness claim"},
 		{name: "hive activity claim", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.HiveActivityClaim = true }, wantMissing: "Hive activity or wake/start claim"},
 		{name: "issue closure authority claim", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.IssueClosureAuthorityClaim = true }, wantMissing: "issue-closure authority claim"},
+		{name: "autonomy increase claim", mutate: func(opts *work.Event17GovernedRuntimeObservationOptions) { opts.AutonomyIncreaseClaim = true }, wantMissing: "autonomy increase claim"},
 	}
 
 	for _, tc := range tests {
