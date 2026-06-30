@@ -36,6 +36,63 @@ func newListTasksTestServer(t *testing.T) (*server, []types.EventID) {
 	}, []types.EventID{head.Unwrap().ID()}
 }
 
+func TestListTasksEmitsKanbanFields(t *testing.T) {
+	sv, causes := newListTasksTestServer(t)
+	convID := types.MustConversationID("conv_00000000000000000000000000000002")
+
+	// Seed a plain task first (keys must be present even when values are empty).
+	_, err := sv.ts.Create(sv.humanID, "Plain task", "", causes, convID)
+	if err != nil {
+		t.Fatalf("Create plain task: %v", err)
+	}
+
+	// Seed a task with RiskClass and Cell populated (no factory linkage to avoid
+	// the RequirementIDs requirement in validateTaskLinkage).
+	_, err = sv.ts.CreateV39(sv.humanID, work.TaskCreateOptions{
+		Title:     "Kanban test task",
+		RiskClass: "high",
+		Cell:      "cell_test",
+	}, causes, convID)
+	if err != nil {
+		t.Fatalf("CreateV39 with risk class: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/tasks", nil)
+	sv.listTasks(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Tasks []map[string]any `json:"tasks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Tasks) == 0 {
+		t.Fatal("no tasks returned")
+	}
+	// Every task item must carry all four Kanban keys.
+	for _, key := range []string{"risk_class", "cell", "factory_order_id", "created_at"} {
+		if _, ok := resp.Tasks[0][key]; !ok {
+			t.Fatalf("/tasks item missing key %q", key)
+		}
+	}
+	// The most-recently seeded task (index 0 — ListSummaries returns newest-first)
+	// has non-empty risk_class and cell — verify they round-trip correctly.
+	newest := resp.Tasks[0]
+	if v, _ := newest["risk_class"].(string); v != "high" {
+		t.Fatalf("risk_class = %q, want %q", v, "high")
+	}
+	if v, _ := newest["cell"].(string); v != "cell_test" {
+		t.Fatalf("cell = %q, want %q", v, "cell_test")
+	}
+	if v, _ := newest["created_at"].(string); v == "" {
+		t.Fatal("created_at is empty")
+	}
+}
+
 func TestListTasksOpenOnlyExcludesCanonicalTerminalStatuses(t *testing.T) {
 	sv, causes := newListTasksTestServer(t)
 	convID := types.MustConversationID("conv_00000000000000000000000000000001")

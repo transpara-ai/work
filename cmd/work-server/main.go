@@ -1116,8 +1116,12 @@ func (sv *server) listTasks(w http.ResponseWriter, r *http.Request) {
 			"artifact_count": s.ArtifactCount,
 			"waived":         s.Waived,
 			"ready":          s.Ready,
-			"missing_gates":  s.MissingGates,
-			"missing_facts":  s.MissingFacts,
+			"missing_gates":    s.MissingGates,
+			"missing_facts":    s.MissingFacts,
+			"risk_class":       s.Task.RiskClass,
+			"cell":             s.Task.Cell,
+			"factory_order_id": s.Task.FactoryOrderID,
+			"created_at":       s.Task.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": items})
