@@ -755,3 +755,42 @@ func TestListPopulatesCreatedAt(t *testing.T) {
 		t.Fatalf("CreatedAt %v is before test start %v", found.CreatedAt, before)
 	}
 }
+
+func TestListReflectsCurrentFactoryLinkage(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	// create a task with NO factory order
+	task, err := ts.Create(testActor, "Link-later task", "no linkage at creation", causes, testConv)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// link it to a factory order AFTER creation
+	linkage := work.TaskLinkage{
+		FactoryOrderID:         "fo_123",
+		RequirementIDs:         []string{"req_001"},
+		AcceptanceCriterionIDs: []string{"ac_001"},
+	}
+	if err := ts.LinkTask(testActor, task.ID, linkage, causes, testConv); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+
+	tasks, err := ts.List(10)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var found *work.Task
+	for i := range tasks {
+		if tasks[i].ID == task.ID {
+			found = &tasks[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("task not returned by List")
+	}
+	if found.FactoryOrderID != "fo_123" {
+		t.Fatalf("FactoryOrderID = %q, want the linked value %q (List must reflect current linkage)", found.FactoryOrderID, "fo_123")
+	}
+}
