@@ -351,6 +351,9 @@ func (ts *TaskStore) List(limit int) ([]Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list tasks: fetch link events: %w", err)
 	}
+	// newestLink is keyed by the task's creation-event ID. TaskLinkedContent.TaskID
+	// stores the creation-event ID (same convention projectLinkage relies on), so the
+	// later newestLink[t.ID] lookup — where t.ID is ev.ID() of the created event — matches.
 	newestLink := make(map[types.EventID]TaskLinkedContent)
 	for _, ev := range linkPage.Items() {
 		c, ok := ev.Content().(TaskLinkedContent)

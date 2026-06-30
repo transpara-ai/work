@@ -1,6 +1,7 @@
 package work_test
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -792,5 +793,11 @@ func TestListReflectsCurrentFactoryLinkage(t *testing.T) {
 	}
 	if found.FactoryOrderID != "fo_123" {
 		t.Fatalf("FactoryOrderID = %q, want the linked value %q (List must reflect current linkage)", found.FactoryOrderID, "fo_123")
+	}
+	if !reflect.DeepEqual(found.RequirementIDs, []string{"req_001"}) {
+		t.Fatalf("RequirementIDs = %v, want %v (List must reflect current linkage)", found.RequirementIDs, []string{"req_001"})
+	}
+	if !reflect.DeepEqual(found.AcceptanceCriterionIDs, []string{"ac_001"}) {
+		t.Fatalf("AcceptanceCriterionIDs = %v, want %v (List must reflect current linkage)", found.AcceptanceCriterionIDs, []string{"ac_001"})
 	}
 }
