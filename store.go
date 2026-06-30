@@ -83,6 +83,7 @@ type Task struct {
 	Cell                   string
 	RiskClass              string
 	ExpectedOutputs        []string
+	CreatedAt              time.Time // timestamp of the work.task.created event
 }
 
 // TaskSummary extends Task with computed state fields for efficient list views.
@@ -332,6 +333,9 @@ func (ts *TaskStore) create(
 }
 
 // List returns up to limit work.task.created events as Tasks.
+// Linkage fields (FactoryOrderID, CanonicalTaskID, RequirementIDs,
+// AcceptanceCriterionIDs) are reconciled against the newest work.task.linked
+// event per task so that tasks linked after creation return current values.
 func (ts *TaskStore) List(limit int) ([]Task, error) {
 	if limit <= 0 {
 		limit = 20
@@ -340,6 +344,27 @@ func (ts *TaskStore) List(limit int) ([]Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list tasks: %w", err)
 	}
+
+	// Build a map of the newest TaskLinkedContent per task ID (ByType returns
+	// newest-first, so the first entry seen per task is the most recent).
+	linkPage, err := ts.store.ByType(EventTypeTaskLinked, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return nil, fmt.Errorf("list tasks: fetch link events: %w", err)
+	}
+	// newestLink is keyed by the task's creation-event ID. TaskLinkedContent.TaskID
+	// stores the creation-event ID (same convention projectLinkage relies on), so the
+	// later newestLink[t.ID] lookup — where t.ID is ev.ID() of the created event — matches.
+	newestLink := make(map[types.EventID]TaskLinkedContent)
+	for _, ev := range linkPage.Items() {
+		c, ok := ev.Content().(TaskLinkedContent)
+		if !ok {
+			continue
+		}
+		if _, seen := newestLink[c.TaskID]; !seen {
+			newestLink[c.TaskID] = c
+		}
+	}
+
 	tasks := make([]Task, 0, len(page.Items()))
 	for _, ev := range page.Items() {
 		c, ok := ev.Content().(TaskCreatedContent)
@@ -350,7 +375,7 @@ func (ts *TaskStore) List(limit int) ([]Task, error) {
 		if p == "" {
 			p = DefaultPriority
 		}
-		tasks = append(tasks, Task{
+		t := Task{
 			ID:                     ev.ID(),
 			Title:                  c.Title,
 			Description:            c.Description,
@@ -364,7 +389,26 @@ func (ts *TaskStore) List(limit int) ([]Task, error) {
 			Cell:                   c.Cell,
 			RiskClass:              c.RiskClass,
 			ExpectedOutputs:        cloneStrings(c.ExpectedOutputs),
-		})
+			CreatedAt:              ev.Timestamp().Value(),
+		}
+		// Override linkage fields with the newest TaskLinkedContent, mirroring
+		// the projectLinkage semantics: only override when the linked value is
+		// non-empty so a partial re-link does not erase existing values.
+		if lc, ok := newestLink[t.ID]; ok {
+			if lc.CanonicalTaskID != "" {
+				t.CanonicalTaskID = lc.CanonicalTaskID
+			}
+			if lc.FactoryOrderID != "" {
+				t.FactoryOrderID = lc.FactoryOrderID
+			}
+			if len(lc.RequirementIDs) > 0 {
+				t.RequirementIDs = cloneStrings(lc.RequirementIDs)
+			}
+			if len(lc.AcceptanceCriterionIDs) > 0 {
+				t.AcceptanceCriterionIDs = cloneStrings(lc.AcceptanceCriterionIDs)
+			}
+		}
+		tasks = append(tasks, t)
 	}
 	return tasks, nil
 }
