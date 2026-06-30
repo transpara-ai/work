@@ -83,6 +83,7 @@ type Task struct {
 	Cell                   string
 	RiskClass              string
 	ExpectedOutputs        []string
+	CreatedAt              time.Time // timestamp of the work.task.created event
 }
 
 // TaskSummary extends Task with computed state fields for efficient list views.
@@ -364,6 +365,7 @@ func (ts *TaskStore) List(limit int) ([]Task, error) {
 			Cell:                   c.Cell,
 			RiskClass:              c.RiskClass,
 			ExpectedOutputs:        cloneStrings(c.ExpectedOutputs),
+			CreatedAt:              ev.Timestamp().Value(),
 		})
 	}
 	return tasks, nil

@@ -2,6 +2,7 @@ package work_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/transpara-ai/eventgraph/go/pkg/event"
 	"github.com/transpara-ai/eventgraph/go/pkg/store"
@@ -721,5 +722,36 @@ func TestTaskStore_ListOpen_UnblocksAfterDepCompleted(t *testing.T) {
 	}
 	if open[0].ID != taskB.ID {
 		t.Errorf("open task = %v; want %v (Task B)", open[0].ID, taskB.ID)
+	}
+}
+
+func TestListPopulatesCreatedAt(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	before := time.Now().UTC().Add(-time.Second)
+
+	task, err := ts.Create(testActor, "kanban aging task", "desc", causes, testConv)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	tasks, err := ts.List(10)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var found *work.Task
+	for i := range tasks {
+		if tasks[i].ID == task.ID {
+			found = &tasks[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("created task not returned by List")
+	}
+	if found.CreatedAt.IsZero() {
+		t.Fatal("CreatedAt is zero; want the creation-event timestamp")
+	}
+	if found.CreatedAt.Before(before) {
+		t.Fatalf("CreatedAt %v is before test start %v", found.CreatedAt, before)
 	}
 }
