@@ -386,9 +386,13 @@ func (f *taskFoldState) summariesFromFold(tasks []Task) []TaskSummary {
 			ArtifactCount: f.artifactCount[t.ID],
 			Waived:        f.waived[t.ID],
 			MissingGates:  missing,
-			// LegacyStatus, Ready, MissingFacts are finished by the caller
-			// once the per-request fact pass has run (facts are excluded
-			// from the fold — see foldEventTypes doc comment).
+			// MissingFacts must be an EMPTY (non-nil) slice for JSON shape
+			// stability: the pre-fold code always got a non-nil slice from
+			// factReadiness, serializing as []; nil would serialize as null.
+			MissingFacts: []string{},
+			// LegacyStatus, Ready are finished by the caller once the
+			// per-request fact pass has run (facts are excluded from the
+			// fold — see foldEventTypes doc comment).
 		})
 	}
 	return summaries
