@@ -2,6 +2,7 @@ package work
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -323,10 +324,31 @@ func (f *taskFoldState) blockedFold(satisfiedIDs map[types.EventID]bool) map[typ
 	return blocked
 }
 
+// cloneTaskForServe returns a copy of t whose reference-typed fields are
+// deep-cloned. INVARIANT: nothing returned by ListSummariesCached may alias
+// fold-state memory. The fold state is memoized ACROSS requests, so a
+// returned TaskSummary sharing a backing array with the held generation
+// would let any caller mutation corrupt the memo and poison every later
+// cached response — unlike List()/ListSummaries(), which build fresh slices
+// from events on every call. Every reference-typed field on Task must be
+// cloned here, in this one place; when adding a field to Task, add its
+// clone here too. As of this writing the complete set is the three
+// []string fields — every other Task field is a value type. slices.Clone
+// preserves nil-ness, so the cached JSON shape stays byte-identical to the
+// batch path's.
+func cloneTaskForServe(t Task) Task {
+	t.RequirementIDs = slices.Clone(t.RequirementIDs)
+	t.AcceptanceCriterionIDs = slices.Clone(t.AcceptanceCriterionIDs)
+	t.ExpectedOutputs = slices.Clone(t.ExpectedOutputs)
+	return t
+}
+
 // listTasksFold reconstructs List(limit) from the fold state:
 // createdOldestFirst is maintained oldest-first (see its doc comment), so
 // this walks backward from the end to reproduce ByType's newest-first page
 // order, with the newestLink overlay applied exactly as List() applies it.
+// Tasks are cloned via cloneTaskForServe so the returned values never alias
+// memoized fold state (see that helper's invariant).
 func (f *taskFoldState) listTasksFold(limit int) []Task {
 	if limit <= 0 {
 		limit = 20
@@ -337,7 +359,7 @@ func (f *taskFoldState) listTasksFold(limit int) []Task {
 	}
 	out := make([]Task, 0, n)
 	for i := len(f.createdOldestFirst) - 1; i >= 0 && len(out) < n; i-- {
-		t := f.createdOldestFirst[i]
+		t := cloneTaskForServe(f.createdOldestFirst[i])
 		if lc, ok := f.newestLink[t.ID]; ok {
 			if lc.CanonicalTaskID != "" {
 				t.CanonicalTaskID = lc.CanonicalTaskID

@@ -781,6 +781,121 @@ func TestListSummariesCached_ScratchRebuildMidFoldAppendIsNotMemoized(t *testing
 	summariesEqualIgnoringOrder(t, second, scratch)
 }
 
+// TestListSummariesCached_ReturnedSummariesDoNotAliasFoldState pins the
+// serve-time isolation invariant (codex CFAR round 2): nothing returned by
+// ListSummariesCached may alias fold-state memory. The fold state is
+// memoized ACROSS requests, so a returned TaskSummary whose Task slice
+// fields (RequirementIDs, AcceptanceCriterionIDs, ExpectedOutputs — the
+// complete reference-typed field set on Task) share backing arrays with the
+// held generation lets any caller mutation corrupt the memo and poison
+// every later cached response. List()/ListSummaries() are immune (fresh
+// slices from events per call) — which also makes ListSummaries the clean
+// oracle here. Element-level writes are the sharpest probe: unlike append
+// (which may reallocate and hide the aliasing), an element write reaches a
+// shared backing array directly.
+//
+// MissingGates/MissingFacts are covered too: they are computed fresh per
+// request by construction, and the test pins that property so the whole
+// TaskSummary class stays mutation-safe, not just the named Task fields.
+func TestListSummariesCached_ReturnedSummariesDoNotAliasFoldState(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	// Probe task carrying every reference-typed Task field non-empty. No
+	// link overlay: the overlay path already clones per call, so an
+	// un-linked task is the one whose fields alias the memo on unfixed
+	// code.
+	probe, err := ts.CreateV39(testActor, work.TaskCreateOptions{
+		Title:                  "aliasing probe",
+		CanonicalTaskID:        "tsk_alias_probe",
+		FactoryOrderID:         "fo_alias_probe",
+		RequirementIDs:         []string{"req_1", "req_2"},
+		AcceptanceCriterionIDs: []string{"ac_1"},
+		Cell:                   "implementation",
+		RiskClass:              "low",
+		ExpectedOutputs:        []string{"out_1", "out_2"},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("CreateV39 probe: %v", err)
+	}
+
+	// Warm: promote a stable generation, then take the served summaries.
+	first, err := ts.ListSummariesCached(100)
+	if err != nil {
+		t.Fatalf("first ListSummariesCached: %v", err)
+	}
+	firstIdx := -1
+	for i := range first {
+		if first[i].Task.ID == probe.ID {
+			firstIdx = i
+			break
+		}
+	}
+	if firstIdx < 0 {
+		t.Fatalf("probe task missing from first ListSummariesCached result")
+	}
+
+	// Vandalize EVERY slice field of the returned summary in place.
+	got := &first[firstIdx]
+	for _, field := range [][]string{
+		got.RequirementIDs,
+		got.AcceptanceCriterionIDs,
+		got.ExpectedOutputs,
+		got.MissingGates,
+		got.MissingFacts,
+	} {
+		for i := range field {
+			field[i] = "CORRUPTED"
+		}
+	}
+
+	// Second call at the SAME head — a memo hit on the held generation. It
+	// must be untouched by the caller's mutations.
+	second, err := ts.ListSummariesCached(100)
+	if err != nil {
+		t.Fatalf("second ListSummariesCached: %v", err)
+	}
+	secondIdx := -1
+	for i := range second {
+		if second[i].Task.ID == probe.ID {
+			secondIdx = i
+			break
+		}
+	}
+	if secondIdx < 0 {
+		t.Fatalf("probe task missing from second ListSummariesCached result")
+	}
+	sp := second[secondIdx]
+	if !reflect.DeepEqual(sp.RequirementIDs, []string{"req_1", "req_2"}) {
+		t.Errorf("RequirementIDs = %#v after caller mutation of a previous result — returned slice aliases fold-state memory", sp.RequirementIDs)
+	}
+	if !reflect.DeepEqual(sp.AcceptanceCriterionIDs, []string{"ac_1"}) {
+		t.Errorf("AcceptanceCriterionIDs = %#v after caller mutation of a previous result — returned slice aliases fold-state memory", sp.AcceptanceCriterionIDs)
+	}
+	if !reflect.DeepEqual(sp.ExpectedOutputs, []string{"out_1", "out_2"}) {
+		t.Errorf("ExpectedOutputs = %#v after caller mutation of a previous result — returned slice aliases fold-state memory", sp.ExpectedOutputs)
+	}
+	for _, gate := range sp.MissingGates {
+		if gate == "CORRUPTED" {
+			t.Errorf("MissingGates contains a caller mutation — per-request slice is shared across calls")
+		}
+	}
+	for _, fact := range sp.MissingFacts {
+		if fact == "CORRUPTED" {
+			t.Errorf("MissingFacts contains a caller mutation — per-request slice is shared across calls")
+		}
+	}
+
+	// And the memoized state must still agree with the from-scratch oracle
+	// (ListSummaries never touches the fold cache, so it reflects the true
+	// event-derived values).
+	scratch, err := ts.ListSummaries(100)
+	if err != nil {
+		t.Fatalf("ListSummaries oracle: %v", err)
+	}
+	summariesEqualIgnoringOrder(t, second, scratch)
+}
+
 // --- (c2) singleflight collapse (D2 stampede control, TDD plan item 4) ---
 
 // TestListSummariesCached_SingleflightCollapse pins CFADA1-5 stampede
