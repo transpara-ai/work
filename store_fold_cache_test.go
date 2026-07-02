@@ -6,6 +6,7 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/transpara-ai/eventgraph/go/pkg/event"
 	"github.com/transpara-ai/eventgraph/go/pkg/store"
@@ -18,17 +19,28 @@ import (
 // faultInjectingStore embeds a real *store.InMemoryStore and selectively
 // overrides Head/ByType to return errors on demand, so the fail-closed
 // table test can exercise "head read fails", "page read fails", and "both
-// fail" without a custom Store reimplementation.
+// fail" without a custom Store reimplementation. It can also OMIT a single
+// event ID from every ByType page (omitEventID) to simulate a violated
+// pagination contract — the frontier event silently vanishing — which is
+// the D2 "frontier event not found within the paged window" fail-closed
+// trigger (errFrontierNotFound).
 type faultInjectingStore struct {
 	*store.InMemoryStore
 	mu           sync.Mutex
 	failHead     bool
 	failByType   map[string]bool // eventType.Value() -> fail
 	byTypeCalls  int
+	byTypeByType map[string]int // eventType.Value() -> ByType call count
+	omitEventID  types.EventID  // when set, filtered out of every ByType page
+	byTypeDelay  time.Duration  // when set, every ByType call sleeps this long
 }
 
 func newFaultInjectingStore(s *store.InMemoryStore) *faultInjectingStore {
-	return &faultInjectingStore{InMemoryStore: s, failByType: make(map[string]bool)}
+	return &faultInjectingStore{
+		InMemoryStore: s,
+		failByType:    make(map[string]bool),
+		byTypeByType:  make(map[string]int),
+	}
 }
 
 func (f *faultInjectingStore) Head() (types.Option[event.Event], error) {
@@ -44,12 +56,36 @@ func (f *faultInjectingStore) Head() (types.Option[event.Event], error) {
 func (f *faultInjectingStore) ByType(eventType types.EventType, limit int, after types.Option[types.Cursor]) (types.Page[event.Event], error) {
 	f.mu.Lock()
 	f.byTypeCalls++
+	f.byTypeByType[eventType.Value()]++
 	fail := f.failByType[eventType.Value()]
+	omit := f.omitEventID
+	delay := f.byTypeDelay
 	f.mu.Unlock()
+	if delay > 0 {
+		// Simulated page-read latency (outside the mutex): widens the fold
+		// window so the singleflight collapse test can observe genuinely
+		// concurrent callers instead of a fold finishing before the second
+		// goroutine is even scheduled.
+		time.Sleep(delay)
+	}
 	if fail {
 		return types.Page[event.Event]{}, fmt.Errorf("injected ByType failure for %s", eventType.Value())
 	}
-	return f.InMemoryStore.ByType(eventType, limit, after)
+	page, err := f.InMemoryStore.ByType(eventType, limit, after)
+	if err != nil || omit.IsZero() {
+		return page, err
+	}
+	// Filter the omitted event ID out of the page, preserving order,
+	// cursor, and HasMore — the event silently vanishes from pagination.
+	items := page.Items()
+	filtered := make([]event.Event, 0, len(items))
+	for _, ev := range items {
+		if ev.ID() == omit {
+			continue
+		}
+		filtered = append(filtered, ev)
+	}
+	return types.NewPage(filtered, page.Cursor(), page.HasMore()), nil
 }
 
 func (f *faultInjectingStore) setFailHead(v bool) {
@@ -62,6 +98,43 @@ func (f *faultInjectingStore) setFailByType(et types.EventType, v bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.failByType[et.Value()] = v
+}
+
+func (f *faultInjectingStore) setOmitEventID(id types.EventID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.omitEventID = id
+}
+
+func (f *faultInjectingStore) setByTypeDelay(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.byTypeDelay = d
+}
+
+// resetByTypeCounts zeroes both the total and the per-type ByType call
+// counters so a test can meter exactly one request.
+func (f *faultInjectingStore) resetByTypeCounts() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.byTypeCalls = 0
+	f.byTypeByType = make(map[string]int)
+}
+
+// callsForType returns how many ByType calls were made for et since the
+// last resetByTypeCounts.
+func (f *faultInjectingStore) callsForType(et types.EventType) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.byTypeByType[et.Value()]
+}
+
+// totalByTypeCalls returns the total ByType call count since the last
+// resetByTypeCounts.
+func (f *faultInjectingStore) totalByTypeCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.byTypeCalls
 }
 
 // newFaultTaskStore builds a TaskStore over a faultInjectingStore so the
@@ -376,7 +449,8 @@ func TestFoldPromotion_OlderHeadNeverClobbersNewer(t *testing.T) {
 	// distinguished from H2 — but since ListSummariesCached always reads a
 	// fresh headBefore per call, the only way to simulate a genuinely
 	// stale flight finishing late is at the unit level (see
-	// store_fold_cache_unit_test.go's promote() test in package work). This
+	// TestPromote_OlderHeadNeverOverwritesNewerHeldGeneration in
+	// store_fold_cache_unit_test.go, package work). This
 	// black-box test instead pins the observable contract: repeated calls
 	// interleaved with concurrent writers never regress the served task
 	// count, which is the externally-visible symptom the no-promotion rule
@@ -500,6 +574,201 @@ func TestListSummariesCached_FailClosedTable(t *testing.T) {
 			t.Fatalf("len(recovered) = %d, want 1", len(recovered))
 		}
 	})
+
+	t.Run("frontier miss triggers full scratch rebuild and serves without error", func(t *testing.T) {
+		// D2 enumerated fail-closed trigger: "frontier event not found
+		// within the paged window" (errFrontierNotFound). Warm the cache so
+		// a frontier is recorded for work.task.assigned, then make that
+		// exact event vanish from every ByType page and move the head: the
+		// increment's newest-first walk pages work.task.assigned to
+		// exhaustion without ever meeting its frontier, the flight fails
+		// with errFrontierNotFound, and ListSummariesCached must fall back
+		// to a full scratch rebuild — NOT error, and NOT serve a silently
+		// incomplete increment.
+		ts, fs, causes := newFaultTaskStore(t)
+		task1, err := ts.Create(testActor, "task 1", "", causes, testConv)
+		if err != nil {
+			t.Fatalf("Create 1: %v", err)
+		}
+		if err := ts.Assign(testActor, task1.ID, testActor, causes, testConv); err != nil {
+			t.Fatalf("Assign 1: %v", err)
+		}
+
+		// Warm: promotes a stable generation whose frontier for
+		// work.task.assigned is the (single) assignment event.
+		if _, err := ts.ListSummariesCached(1000); err != nil {
+			t.Fatalf("warm ListSummariesCached: %v", err)
+		}
+
+		// Identify the recorded frontier event (newest work.task.assigned)
+		// via the UNWRAPPED inner store, then omit it from all future pages.
+		page, err := fs.InMemoryStore.ByType(work.EventTypeTaskAssigned, 10, types.None[types.Cursor]())
+		if err != nil {
+			t.Fatalf("ByType (locate frontier): %v", err)
+		}
+		if len(page.Items()) == 0 {
+			t.Fatal("no work.task.assigned events found; cannot locate frontier")
+		}
+		frontierEvent := page.Items()[0].ID()
+		fs.setOmitEventID(frontierEvent)
+
+		// Move the head so the next request misses the memo and increments.
+		if _, err := ts.Create(testActor, "task 2", "", causes, testConv); err != nil {
+			t.Fatalf("Create 2: %v", err)
+		}
+
+		fs.resetByTypeCounts()
+		got, err := ts.ListSummariesCached(1000)
+		if err != nil {
+			t.Fatalf("ListSummariesCached after frontier miss: %v (frontier miss must fail closed into a scratch rebuild, not an error)", err)
+		}
+
+		// Prove the increment died at work.task.assigned and a FULL scratch
+		// rebuild ran: assigned was paged twice (failed increment + scratch
+		// rebuild), while a type ordered AFTER assigned in foldEventTypes
+		// (work.task.lifecycle.transitioned) was paged exactly once — the
+		// increment never reached it, only the scratch rebuild did.
+		if calls := fs.callsForType(work.EventTypeTaskAssigned); calls != 2 {
+			t.Errorf("work.task.assigned ByType calls = %d, want 2 (one failed increment walk + one scratch rebuild walk)", calls)
+		}
+		if calls := fs.callsForType(work.EventTypeTaskLifecycleTransitioned); calls != 1 {
+			t.Errorf("work.task.lifecycle.transitioned ByType calls = %d, want 1 (scratch rebuild only — increment must abort before reaching it)", calls)
+		}
+
+		// The served result must deep-equal a from-scratch fold at this
+		// head. ListSummaries reads through the SAME fault-injecting store
+		// (the omitted event is invisible to both paths), so this compares
+		// scratch-fold output to scratch-scan output at an identical view.
+		scratch, err := ts.ListSummaries(1000)
+		if err != nil {
+			t.Fatalf("ListSummaries oracle: %v", err)
+		}
+		summariesEqualIgnoringOrder(t, got, scratch)
+		if len(got) != 2 {
+			t.Fatalf("len(got) = %d, want 2", len(got))
+		}
+	})
+}
+
+// --- (c2) singleflight collapse (D2 stampede control, TDD plan item 4) ---
+
+// TestListSummariesCached_SingleflightCollapse pins CFADA1-5 stampede
+// control: N concurrent ListSummariesCached callers that observed the SAME
+// head must collapse into far fewer than N full fold computations. Fold
+// work is metered by the fault-injecting store's ByType call counter — one
+// complete fold pass over this small store costs exactly 11 ByType calls
+// (one single-page walk per folded event type; see foldEventTypes), so N
+// uncollapsed folds would cost N*11.
+//
+// Two phases per attempt, both hammering with goroutines released by a
+// shared gate:
+//
+//   - WARM phase (deterministic): the cache holds a stable generation at
+//     the current head, so every caller must memo-hit and serve from held
+//     state with ZERO ByType calls (the fact pass is empty — no
+//     fact-requiring tasks are seeded — and a memo hit performs no folded-
+//     domain scans by construction). Any non-zero count fails immediately.
+//   - COLD phase (statistical): the head moves by ONE append, then all N
+//     callers observe the new head and miss; singleflight (keyed by that
+//     head) must collapse their folds. An injected per-ByType-call delay
+//     (setByTypeDelay) widens the fold window so the callers are genuinely
+//     concurrent — without it, a microsecond fold finishes and promotes
+//     before the second goroutine is even scheduled, and the memo alone
+//     would mask a singleflight regression. The first flight promotes a
+//     stable generation, late arrivals memo-hit, and only callers in the
+//     narrow memo-check-to-Do window can start an extra flight — so total
+//     ByType calls stay well under N*11 (budget: 4 fold passes = 44 calls;
+//     verified discriminating: with group.Do bypassed, this measured 352 =
+//     N*11 on every attempt).
+//
+// The cold-phase count is scheduler-dependent, so the assertion uses the
+// bounded-retry statistical pattern from the design packet's TDD plan item
+// 4 (hive PR #241 — computations < N with bounded retry): up to 3 attempts,
+// pass if ANY attempt collapses within budget. A genuine total-loss-of-
+// collapse regression (singleflight removed or memo never hit) costs ~N*11
+// = 352 calls on EVERY attempt and fails all three deterministically.
+func TestListSummariesCached_SingleflightCollapse(t *testing.T) {
+	const (
+		goroutines       = 32
+		maxAttempts      = 3
+		foldTypeCount    = 11 // len(foldEventTypes) — one ByType call per type per fold pass
+		coldBudgetPasses = 4  // tolerated fold passes across all N cold callers
+	)
+	const coldBudgetCalls = coldBudgetPasses * foldTypeCount
+
+	hammer := func(t *testing.T, ts *work.TaskStore) {
+		t.Helper()
+		gate := make(chan struct{})
+		var wg sync.WaitGroup
+		errs := make(chan error, goroutines)
+		for i := 0; i < goroutines; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-gate
+				got, err := ts.ListSummariesCached(1000)
+				if err != nil {
+					errs <- err
+					return
+				}
+				if len(got) == 0 {
+					errs <- fmt.Errorf("concurrent ListSummariesCached returned no summaries")
+				}
+			}()
+		}
+		close(gate)
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			t.Fatalf("concurrent ListSummariesCached: %v", err)
+		}
+	}
+
+	var lastCold int
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		ts, fs, causes := newFaultTaskStore(t)
+		for i := 0; i < 5; i++ {
+			if _, err := ts.Create(testActor, fmt.Sprintf("collapse seed %d", i), "", causes, testConv); err != nil {
+				t.Fatalf("Create seed %d: %v", i, err)
+			}
+		}
+		// Warm: promote a stable generation at the current head.
+		if _, err := ts.ListSummariesCached(1000); err != nil {
+			t.Fatalf("warm ListSummariesCached: %v", err)
+		}
+
+		// Widen the fold window (see doc comment). Memo hits perform zero
+		// ByType calls, so the warm phase is unaffected; only actual fold
+		// passes pay the delay.
+		fs.setByTypeDelay(2 * time.Millisecond)
+
+		// WARM phase: identical-head hammer against the held generation.
+		fs.resetByTypeCounts()
+		hammer(t, ts)
+		if warmCalls := fs.totalByTypeCalls(); warmCalls != 0 {
+			// Deterministic property — a memo hit performs zero folded-
+			// domain scans. Any non-zero count is a real regression, not
+			// scheduler noise: fail immediately, no retry.
+			t.Fatalf("warm identical-head hammer made %d ByType calls, want 0 (every caller must serve from the held stable generation)", warmCalls)
+		}
+
+		// COLD phase: move the head once, then hammer — all callers observe
+		// the same new head and must share (or memo-hit behind) a flight.
+		if _, err := ts.Create(testActor, "collapse head mover", "", causes, testConv); err != nil {
+			t.Fatalf("Create head mover: %v", err)
+		}
+		fs.resetByTypeCounts()
+		hammer(t, ts)
+		lastCold = fs.totalByTypeCalls()
+		t.Logf("attempt %d/%d: cold-phase ByType calls = %d (budget %d; no-collapse worst case = %d)",
+			attempt, maxAttempts, lastCold, coldBudgetCalls, goroutines*foldTypeCount)
+		if lastCold <= coldBudgetCalls {
+			return // collapse observed — fold computations << N
+		}
+		t.Logf("attempt %d/%d exceeded the collapse budget; retrying (scheduler-dependent extra flights — see doc comment)", attempt, maxAttempts)
+	}
+	t.Fatalf("all %d attempts exceeded the collapse budget: last cold-phase ByType calls = %d, budget %d (no-collapse worst case %d) — singleflight/memo collapse is not happening",
+		maxAttempts, lastCold, coldBudgetCalls, goroutines*foldTypeCount)
 }
 
 // --- (d) pagination conformance on InMemory ---

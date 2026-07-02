@@ -216,56 +216,89 @@ func TestListSummariesCached_LiveScaleLatencyBudget(t *testing.T) {
 // bump). The near-linear CLAIM in the design packet is about the fold
 // algorithm's own complexity; this test's budget is calibrated to the
 // store it can actually exercise in this worktree.
+//
+// Flake control (bounded retry): the assertion is a RATIO of two sub-200ms
+// wall-clock measurements, which is inherently contention-sensitive — on a
+// busy CI host, scheduler noise on one side alone can push a clean ~2x
+// ratio past 3x (observed: 1.96x-2.89x on clean runs, 3.486x once under CPU
+// contention) without any code regression. The check therefore re-measures
+// up to maxRatioAttempts times and PASSES if ANY attempt's ratio lands
+// within budget (the bounded-retry statistical pattern from hive PR #241,
+// per the design packet's TDD plan). A genuine O(n^2) regression in the
+// fold fails every attempt deterministically: its ratio inflation (~2x on
+// top of the linear baseline, i.e. ~4x+) exceeds the budget regardless of
+// contention, so the retry loosens only the noise sensitivity, never the
+// regression gate. Seeding is done once per scale; only the timed fold
+// samples are repeated per attempt.
 func TestListSummariesCached_ColdScalingNearLinear(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping cold-scaling test in -short mode")
 	}
 
 	const nearLinearBudgetMultiplier = 3.0
+	const maxRatioAttempts = 3
 
-	// measure seeds a fresh store, settles the heap (runtime.GC()) so seeding's
-	// allocation burst does not bleed a GC pause into the timed window, then
-	// takes the MEDIAN of several independent cold folds (a fresh TaskStore —
-	// and therefore a fresh, empty foldCache — per sample) to absorb
-	// scheduler/GC jitter at this sub-100ms absolute scale. Each sample is a
-	// genuine cold fold: no state is shared between samples.
-	const samplesPerScale = 5
-	measure := func(targetEvents int) (elapsed time.Duration, taskCount, totalEvents int) {
+	// seedScale seeds a fresh store once; the timed samples reuse it with a
+	// fresh TaskStore (and therefore a fresh, empty foldCache) per sample.
+	type seededScale struct {
+		s       *store.InMemoryStore
+		factory *event.EventFactory
+	}
+	seedScale := func(targetEvents int) seededScale {
 		s, causes := setupStore(t)
 		registry := event.DefaultRegistry()
 		work.RegisterWithRegistry(registry)
 		factory := event.NewEventFactory(registry)
-		taskCount, totalEvents = seedLiveScaleStore(t, s, factory, causes, targetEvents)
+		taskCount, totalEvents := seedLiveScaleStore(t, s, factory, causes, targetEvents)
+		t.Logf("seeded %d-event scale: %d tasks, %d events", targetEvents, taskCount, totalEvents)
+		return seededScale{s: s, factory: factory}
+	}
 
+	// measure settles the heap (runtime.GC()) so allocation bursts do not
+	// bleed a GC pause into the timed window, then takes the MEDIAN of
+	// several independent cold folds to absorb scheduler/GC jitter at this
+	// sub-100ms absolute scale. Each sample is a genuine cold fold: no fold
+	// state is shared between samples.
+	const samplesPerScale = 5
+	measure := func(sc seededScale, label string) time.Duration {
 		samples := make([]time.Duration, 0, samplesPerScale)
 		for i := 0; i < samplesPerScale; i++ {
-			ts := work.NewTaskStore(s, factory, testSigner{})
+			ts := work.NewTaskStore(sc.s, sc.factory, testSigner{})
 			runtime.GC()
 			start := time.Now()
 			if _, err := ts.ListSummariesCached(100); err != nil {
-				t.Fatalf("cold ListSummariesCached (target=%d, sample=%d): %v", targetEvents, i, err)
+				t.Fatalf("cold ListSummariesCached (%s, sample=%d): %v", label, i, err)
 			}
 			samples = append(samples, time.Since(start))
 		}
 		sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
-		return samples[len(samples)/2], taskCount, totalEvents
+		return samples[len(samples)/2]
 	}
 
-	elapsed25k, tasks25k, events25k := measure(25000)
-	t.Logf("25k-scale cold fold: %s (%d tasks, %d events)", elapsed25k, tasks25k, events25k)
+	scale25k := seedScale(25000)
+	scale50k := seedScale(50000)
 
-	elapsed50k, tasks50k, events50k := measure(50000)
-	t.Logf("50k-scale cold fold: %s (%d tasks, %d events)", elapsed50k, tasks50k, events50k)
+	var lastRatio float64
+	for attempt := 1; attempt <= maxRatioAttempts; attempt++ {
+		elapsed25k := measure(scale25k, "25k")
+		elapsed50k := measure(scale50k, "50k")
 
-	// Guard against a degenerate near-zero baseline making the ratio
-	// meaningless (e.g. if the 25k fold completed in under a millisecond).
-	if elapsed25k <= 0 {
-		t.Fatalf("25k-scale cold fold measured as non-positive duration: %s", elapsed25k)
+		// Guard against a degenerate near-zero baseline making the ratio
+		// meaningless (e.g. if the 25k fold completed in under a millisecond).
+		if elapsed25k <= 0 {
+			t.Fatalf("attempt %d: 25k-scale cold fold measured as non-positive duration: %s", attempt, elapsed25k)
+		}
+
+		lastRatio = float64(elapsed50k) / float64(elapsed25k)
+		maxAllowed := time.Duration(float64(elapsed25k) * nearLinearBudgetMultiplier)
+		t.Logf("attempt %d/%d: 25k cold fold = %s, 50k cold fold = %s, 50k/25k ratio = %.3f (max allowed %.1fx = %s)",
+			attempt, maxRatioAttempts, elapsed25k, elapsed50k, lastRatio, nearLinearBudgetMultiplier, maxAllowed)
+		if elapsed50k < maxAllowed {
+			return // within budget — near-linear scaling confirmed
+		}
+		t.Logf("attempt %d/%d exceeded the %.1fx budget; re-measuring (contention-sensitive wall-clock ratio — see doc comment)",
+			attempt, maxRatioAttempts, nearLinearBudgetMultiplier)
 	}
-
-	maxAllowed := time.Duration(float64(elapsed25k) * nearLinearBudgetMultiplier)
-	t.Logf("50k/25k ratio = %.3f (max allowed %.1fx = %s)", float64(elapsed50k)/float64(elapsed25k), nearLinearBudgetMultiplier, maxAllowed)
-	if elapsed50k >= maxAllowed {
-		t.Fatalf("50k-scale cold fold = %s, want < %.1fx the 25k-scale cold fold (%s); scaling looks super-linear beyond the documented InMemoryStore cursor-resolution tax", elapsed50k, nearLinearBudgetMultiplier, maxAllowed)
-	}
+	t.Fatalf("all %d attempts exceeded the %.1fx near-linear budget (last ratio %.3f); scaling looks super-linear beyond the documented InMemoryStore cursor-resolution tax",
+		maxRatioAttempts, nearLinearBudgetMultiplier, lastRatio)
 }
