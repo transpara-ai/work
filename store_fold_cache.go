@@ -74,7 +74,7 @@ type taskFoldState struct {
 	// derived from these two on every read (cheap: O(tasks with
 	// completions)), never stored as a standalone boolean.
 	completions map[types.EventID][]types.EventID // taskID -> completion event IDs (append-order)
-	reopenRefs  map[types.EventID]bool             // completion event ID -> true if referenced by any reopen
+	reopenRefs  map[types.EventID]bool            // completion event ID -> true if referenced by any reopen
 
 	// dependencyPairs is every (taskID, dependsOnID) pair observed, in the
 	// order folded. unblocked is the explicit unblock override set.
