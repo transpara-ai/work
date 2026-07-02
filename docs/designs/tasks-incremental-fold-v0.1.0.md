@@ -1,8 +1,8 @@
 # Tasks Batch + Incremental Fold — Design Packet
 
 - **doc_id:** WORK-TASKS-INCREMENTAL-FOLD-DESIGN-001
-- **version:** v0.2.0 (CFADA round 1 resolved)
-- **status:** CFADA round 2
+- **version:** v0.3.0 (CFADA PASS)
+- **status:** CFADA PASS — building under TDD
 - **issue:** https://github.com/transpara-ai/work/issues/82
 - **base:** work main @ 5804038
 - **scope:** `store.go` list-path restructure + a new fold-cache layer + `cmd/work-server` wiring; no schema/DB changes, no writes, single-task endpoints untouched.
@@ -70,3 +70,7 @@ No DB materialization, no schema/index changes (even though a `type` index would
 - **CFADA1-4 (created/linked outside the fold):** the fold scope now enumerates the complete /tasks domain incl. created ordering and linked overlays with frontiers.
 - **CFADA1-5 (singleflight head mixing):** flights keyed by observed head; no caller can receive a fold older than the head it observed.
 - Advisories adopted: complete domain enumeration incl. declared out-of-scope event types (adv1); supported-store boundary pgstore+InMemory with a pagination conformance test, SQLite excluded (adv2); measurement rescaled to live scale ~25k + 50k near-linear scaling assertion (adv3); fail-closed cases enumerated incl. restart/empty-head/frontier-miss + memory bound documented (adv4).
+
+### Round 2 (codex, 2026-07-02) — VERDICT: PASS (0 blockers)
+
+Advisories adopted into the build plan: (1) concurrent different-head flight test — an older finishing flight must never promote over a newer stable generation; (2) fact-requirement pre-scan conformance-tested against factReadiness (codex verified requirements are only created via work.task.fact.required today); (3) PR body must call out D1a's visible Site impact (ready/missing_gates may shift fail-closed; codex found no automation consumer of the old fail-open list behavior). Codex confirmed the frontier algorithm is implementable on pgstore + InMemory cursor semantics.
