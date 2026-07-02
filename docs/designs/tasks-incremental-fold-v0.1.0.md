@@ -1,8 +1,8 @@
 # Tasks Batch + Incremental Fold — Design Packet
 
 - **doc_id:** WORK-TASKS-INCREMENTAL-FOLD-DESIGN-001
-- **version:** v0.3.0 (CFADA PASS)
-- **status:** CFADA PASS — building under TDD
+- **version:** v0.4.0 (CFADA PASS + IAR APPROVED)
+- **status:** built; IAR APPROVED at 7c0ce0e — CFAR pending
 - **issue:** https://github.com/transpara-ai/work/issues/82
 - **base:** work main @ 5804038
 - **scope:** `store.go` list-path restructure + a new fold-cache layer + `cmd/work-server` wiring; no schema/DB changes, no writes, single-task endpoints untouched.
@@ -78,3 +78,15 @@ Advisories adopted into the build plan: (1) concurrent different-head flight tes
 ### D1b — Build-phase amendment: batch scans page to exhaustion (silent-truncation fail-open removed)
 
 Discovered during Task 2: `batchStatus`'s six batch scans read a SINGLE `ByType(…, 1000, None)` page — beyond 1000 events of any one type, list output silently diverges from the single-task oracle (which pages to exhaustion). At live scale (~22k events) this is a real, pre-existing fail-open (wrong assignee/artifact/blocked values with no error). Amendment, same authority as D1a: every batch scan pages to exhaustion, matching the per-task oracle exactly; a dedicated regression test seeds >1000 events of one type with the discriminating record outside the newest page and asserts correctness (fails on the old code). Declared in the PR body as the second intentional list-path correction.
+
+## 7. IAR record (2026-07-02)
+
+Combined Tasks 2+3 + whole-branch IAR (independent reviewer, isolated context) at 572edf2: **FIX BEFORE MERGE** — 2 blockers, 2 advisories.
+
+- **IAR-B1:** `missing_facts` defaulted to nil in the batch path (`batchStatus`) while the fold path emitted `[]` — the two /tasks-family endpoints diverged, and the mid-branch fix commit's message wrongly claimed both paths were fixed. Root cause of the test blindness: both equivalence tests nil-normalize before DeepEqual. Fixed (1813920) with a shape test asserting literal non-nil on BOTH paths, proven red with the fix reverted.
+- **IAR-B2:** the frontier-miss fail-closed trigger (D2's `errFrontierNotFound`) was enumerated but untested. Fixed (eb9a3d7): fault store gained `omitEventID` (frontier event vanishes from pagination); per-type ByType call counters structurally pin increment-abort → scratch rebuild; coverage + broken-fallback red run prove the sentinel fires.
+- **IAR-A1:** the white-box `promote()` unit test referenced by comments/reports did not exist. Added: full branch-domain coverage incl. the adversarial older-finishes-late ordering (CFADA2-adv1), timestamp-tie refusal, empty/headless acceptance.
+- **IAR-A2:** the 50k/25k cold-scaling ratio test flaked under CPU contention (3.486x vs 3.0x budget). Fixed with the bounded 3-attempt re-measure pattern — noise tolerance widened, regression gate unchanged (a genuine O(n^2) fails all attempts).
+- **IAR-follow-on:** the singleflight collapse test promised by TDD plan item 4 had never been written. Added with proven two-way discrimination: `group.Do` bypassed → deterministic fail at exactly N*11 scans on all attempts; restored → 11 scans (perfect collapse). Key finding: on a microsecond-fast InMemoryStore the head-keyed memo alone masks singleflight loss, so the test injects 2ms per-ByType latency to make callers genuinely concurrent.
+
+**Re-review at 7c0ce0e: APPROVED, zero blockers.** Reviewer independently re-ran build/vet/full suite/-race (green, no data races) and verified each fix structurally, incl. that the shape test is immune to nil-normalization and the collapse test's latency-injection reasoning holds.
