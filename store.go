@@ -1440,6 +1440,17 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 		return nil, err
 	}
 
+	// liveCompletedIDs (legacy completion only, WITHOUT issue-scan certification)
+	// is the exact set ProjectLegacyTask checks for LegacyStatusCompleted — kept
+	// separate from completedIDs (scan 1) above, which additionally credits
+	// certified issue-scan tasks for downstream dependency satisfaction. Folding
+	// these two together would wrongly report a certified-but-not-legacy-completed
+	// issue-scan task as legacy "completed".
+	liveCompletedIDs, err := ts.liveCompletedIDs()
+	if err != nil {
+		return nil, err
+	}
+
 	// Scan 2: assigned events (newest-first) → current assignee per task.
 	assignedPage, err := ts.store.ByType(EventTypeTaskAssigned, 1000, types.None[types.Cursor]())
 	if err != nil {
@@ -1480,7 +1491,13 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 		}
 	}
 
-	// Scan 5: artifact events → count and readiness labels per task.
+	// Scan 5: artifact events → count and readiness labels per task. A required
+	// gate counts as present only when its body is non-empty (D1a): this is the
+	// same rule Readiness enforces (store.go Readiness, "a label-only (empty)
+	// artifact does not satisfy readiness") — the list path previously counted a
+	// required gate as present on label alone, a fail-open divergence from the
+	// documented contract. Aligning here is the one intentional /tasks output
+	// change in this packet.
 	artifactPage, err := ts.store.ByType(EventTypeTaskArtifact, 1000, types.None[types.Cursor]())
 	if err != nil {
 		return nil, fmt.Errorf("fetch artifact events: %w", err)
@@ -1491,7 +1508,7 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 		if c, ok := ev.Content().(TaskArtifactContent); ok {
 			artifactCount[c.TaskID]++
 			label := normalizeGateLabel(c.Label)
-			if isRequiredGateLabel(label) {
+			if isRequiredGateLabel(label) && strings.TrimSpace(c.Body) != "" {
 				if gatesByTask[c.TaskID] == nil {
 					gatesByTask[c.TaskID] = make(map[string]bool)
 				}
@@ -1512,30 +1529,78 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 		}
 	}
 
+	// Scan 7: one latestLifecycleStatuses() call replaces a per-task GetStatus
+	// call — identical fold (newest-wins over EventTypeTaskLifecycleTransitioned,
+	// StatusCreated default for a task with no transition).
+	statuses, err := ts.latestLifecycleStatuses()
+	if err != nil {
+		return nil, err
+	}
+
+	// Scan 8: one work.task.fact.required scan identifies the (rare) set of
+	// fact-requiring task IDs. Fact satisfaction is causal (Descendants/Get
+	// queries, not a per-type frontier — see factReadiness), so only tasks that
+	// actually carry a fact requirement pay the per-task factReadiness cost;
+	// every other task short-circuits to no missing facts.
+	factReqPage, err := ts.store.ByType(EventTypeTaskFactRequired, 1000, types.None[types.Cursor]())
+	if err != nil {
+		return nil, fmt.Errorf("fetch fact requirement events: %w", err)
+	}
+	factRequiringTasks := make(map[types.EventID]bool)
+	for _, ev := range factReqPage.Items() {
+		if c, ok := ev.Content().(TaskFactRequiredContent); ok {
+			factRequiringTasks[c.TaskID] = true
+		}
+	}
+
 	summaries := make([]TaskSummary, 0, len(tasks))
 	for _, t := range tasks {
-		status, err := ts.GetStatus(t.ID)
-		if err != nil {
-			return nil, err
+		status, ok := statuses[t.ID]
+		if !ok {
+			status = StatusCreated
 		}
-		legacyStatus, err := ts.GetCompatibilityStatus(t.ID)
-		if err != nil {
-			return nil, err
-		}
+
+		assignee := assigneeMap[t.ID]
+		blocked := blockedMap[t.ID] && !unblockedMap[t.ID]
 		missing := missingRequiredGates(gatesByTask[t.ID])
-		_, missingFacts, err := ts.factReadiness(t.ID)
-		if err != nil {
-			return nil, err
+
+		var missingFacts []string
+		if factRequiringTasks[t.ID] {
+			_, missingFacts, err = ts.factReadiness(t.ID)
+			if err != nil {
+				return nil, err
+			}
 		}
+		ready := len(missing) == 0 && len(missingFacts) == 0
+
+		// Batch legacy-status fold — replicates ProjectLegacyTask's STATUS
+		// derivation exactly (store.go ProjectLegacyTask): completed (live,
+		// legacy-only) takes priority, then blocked, then assigned, then ready,
+		// else pending. Each input (liveCompletedIDs, blocked, assignee, ready)
+		// is the same value ProjectLegacyTask itself would compute for this task.
+		var legacyStatus LegacyTaskStatus
+		switch {
+		case liveCompletedIDs[t.ID]:
+			legacyStatus = LegacyStatusCompleted
+		case blocked:
+			legacyStatus = LegacyStatusBlocked
+		case !assignee.IsZero():
+			legacyStatus = LegacyStatusAssigned
+		case ready:
+			legacyStatus = LegacyStatusReady
+		default:
+			legacyStatus = LegacyStatusPending
+		}
+
 		summaries = append(summaries, TaskSummary{
 			Task:          t,
 			Status:        status,
 			LegacyStatus:  legacyStatus,
-			Assignee:      assigneeMap[t.ID],
-			Blocked:       blockedMap[t.ID] && !unblockedMap[t.ID],
+			Assignee:      assignee,
+			Blocked:       blocked,
 			ArtifactCount: artifactCount[t.ID],
 			Waived:        waivedMap[t.ID],
-			Ready:         len(missing) == 0 && len(missingFacts) == 0,
+			Ready:         ready,
 			MissingGates:  missing,
 			MissingFacts:  missingFacts,
 		})
@@ -1543,8 +1608,10 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 	return summaries, nil
 }
 
-// ListSummaries returns up to limit tasks with Status, Assignee, and Blocked
-// populated via three batch store scans (rather than N per-task queries).
+// ListSummaries returns up to limit tasks with Status, LegacyStatus, Assignee,
+// Blocked, artifact/gate readiness, and fact readiness populated via batched
+// store scans (rather than per-task GetStatus/GetCompatibilityStatus/
+// factReadiness/Readiness calls) — see batchStatus.
 func (ts *TaskStore) ListSummaries(limit int) ([]TaskSummary, error) {
 	tasks, err := ts.List(limit)
 	if err != nil {
