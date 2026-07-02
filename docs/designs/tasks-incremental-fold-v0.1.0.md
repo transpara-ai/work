@@ -74,3 +74,7 @@ No DB materialization, no schema/index changes (even though a `type` index would
 ### Round 2 (codex, 2026-07-02) — VERDICT: PASS (0 blockers)
 
 Advisories adopted into the build plan: (1) concurrent different-head flight test — an older finishing flight must never promote over a newer stable generation; (2) fact-requirement pre-scan conformance-tested against factReadiness (codex verified requirements are only created via work.task.fact.required today); (3) PR body must call out D1a's visible Site impact (ready/missing_gates may shift fail-closed; codex found no automation consumer of the old fail-open list behavior). Codex confirmed the frontier algorithm is implementable on pgstore + InMemory cursor semantics.
+
+### D1b — Build-phase amendment: batch scans page to exhaustion (silent-truncation fail-open removed)
+
+Discovered during Task 2: `batchStatus`'s six batch scans read a SINGLE `ByType(…, 1000, None)` page — beyond 1000 events of any one type, list output silently diverges from the single-task oracle (which pages to exhaustion). At live scale (~22k events) this is a real, pre-existing fail-open (wrong assignee/artifact/blocked values with no error). Amendment, same authority as D1a: every batch scan pages to exhaustion, matching the per-task oracle exactly; a dedicated regression test seeds >1000 events of one type with the discriminating record outside the newest page and asserts correctness (fails on the old code). Declared in the PR body as the second intentional list-path correction.
