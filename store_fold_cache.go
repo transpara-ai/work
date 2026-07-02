@@ -439,13 +439,6 @@ func newFoldCache() *foldCache {
 	return &foldCache{}
 }
 
-// headSentinel is the singleflight/state key used for an empty store (no
-// Head()). types.EventID's zero value already serializes to "" via Value(),
-// so this is purely documentation of that convention — kept as a named
-// constant so the empty-store path is never confused with an unset/error
-// state.
-const headSentinel = ""
-
 // ListSummariesCached is the incrementally-memoized equivalent of
 // ListSummaries, wired ONLY into the GET /tasks handler (D2). Read order:
 //
@@ -500,7 +493,9 @@ func (fc *foldCache) listSummaries(s store.Store, ts *TaskStore, limit int) ([]T
 	}
 
 	// Miss: singleflight-deduplicated rebuild/increment keyed by the
-	// OBSERVED head (CFADA1-5).
+	// OBSERVED head (CFADA1-5). types.EventID{}.Value() is "" for an empty
+	// store, which is a valid, distinct flight key on its own (there is
+	// only ever one "empty store" state to key against).
 	flightKey := headBeforeID.Value()
 	resultAny, err, _ := fc.group.Do(flightKey, func() (any, error) {
 		return fc.rebuildOrIncrement(s, headBeforeID)

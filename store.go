@@ -244,9 +244,16 @@ type TaskStore struct {
 	signer  event.Signer
 
 	// fold is the head-keyed fold-generation memo used by
-	// ListSummariesCached (store_fold_cache.go). It is process-memory only
-	// and safe for concurrent use; nil-safe (lazily initialized) so zero-value
-	// TaskStore construction in older tests keeps working.
+	// ListSummariesCached (store_fold_cache.go). Once set, its own internals
+	// (mutex + singleflight.Group) are safe for concurrent use. It is always
+	// set by NewTaskStore, the only constructor in this codebase — the
+	// nil-check fallback in ListSummariesCached exists purely so a
+	// zero-value TaskStore{} (constructed outside NewTaskStore, e.g. in a
+	// future test) fails safe with a working fold cache rather than a nil
+	// dereference; that fallback path is NOT itself safe for concurrent
+	// first-use across goroutines (ordinary Go nil-check-then-assign race),
+	// so callers must go through NewTaskStore for any concurrent use, which
+	// this codebase always does.
 	fold *foldCache
 }
 
