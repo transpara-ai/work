@@ -1059,7 +1059,7 @@ func (sv *server) listTasks(w http.ResponseWriter, r *http.Request) {
 	priorityFilter := r.URL.Query().Get("priority")
 	assigneeFilter := r.URL.Query().Get("assignee")
 
-	summaries, err := sv.ts.ListSummaries(100)
+	summaries, err := sv.ts.ListSummariesCached(100)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "list tasks: "+err.Error())
 		return
