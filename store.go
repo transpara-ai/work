@@ -1621,7 +1621,12 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 		blocked := blockedMap[t.ID] && !unblockedMap[t.ID]
 		missing := missingRequiredGates(gatesByTask[t.ID])
 
-		var missingFacts []string
+		// missingFacts must be an EMPTY (non-nil) slice for JSON shape
+		// stability: factReadiness always returns a non-nil slice (so tasks
+		// WITH fact requirements serialize as []); a nil default for tasks
+		// WITHOUT requirements would serialize as null. Mirrors
+		// summariesFromFold's MissingFacts handling (store_fold_cache.go).
+		missingFacts := []string{}
 		if factRequiringTasks[t.ID] {
 			_, missingFacts, err = ts.factReadiness(t.ID)
 			if err != nil {

@@ -337,6 +337,64 @@ func TestListSummaries_GoldenEquivalence(t *testing.T) {
 	}
 }
 
+// TestListSummaries_MissingFactsNeverNil pins the JSON wire shape of the
+// missing_facts (and missing_gates) fields: EVERY summary returned by BOTH
+// ListSummaries (batch path, store.go batchStatus) and ListSummariesCached
+// (fold path, store_fold_cache.go summariesFromFold) must carry a non-nil
+// slice, so it serializes as [] and never as null. The golden-equivalence
+// and interleaved tests normalize nil->[] before DeepEqual, which makes
+// them structurally blind to exactly this regression — this test asserts
+// the raw slices directly, with no normalization. It fails on a batch path
+// that defaults missingFacts to a nil slice for tasks without fact
+// requirements.
+func TestListSummaries_MissingFactsNeverNil(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+
+	// Task WITHOUT any fact requirement — the path where a nil default
+	// would survive to the output untouched.
+	if _, err := ts.Create(testActor, "task without fact requirements", "", causes, testConv); err != nil {
+		t.Fatalf("Create (no facts): %v", err)
+	}
+
+	// Task WITH a (missing) fact requirement — exercises the factReadiness
+	// overwrite path, which returns a non-nil slice by construction.
+	withFacts, err := ts.Create(testActor, "task with fact requirement", "", causes, testConv)
+	if err != nil {
+		t.Fatalf("Create (with facts): %v", err)
+	}
+	factType := types.MustEventType("agent.identity.registered")
+	if err := ts.AddFactRequirement(testActor, withFacts.ID, factType, types.EventID{}, "requires agent registration", causes, testConv); err != nil {
+		t.Fatalf("AddFactRequirement: %v", err)
+	}
+
+	batch, err := ts.ListSummaries(100)
+	if err != nil {
+		t.Fatalf("ListSummaries: %v", err)
+	}
+	cached, err := ts.ListSummariesCached(100)
+	if err != nil {
+		t.Fatalf("ListSummariesCached: %v", err)
+	}
+
+	for name, list := range map[string][]work.TaskSummary{
+		"ListSummaries":       batch,
+		"ListSummariesCached": cached,
+	} {
+		if len(list) < 2 {
+			t.Fatalf("%s returned %d summaries, want at least 2", name, len(list))
+		}
+		for _, sum := range list {
+			if sum.MissingFacts == nil {
+				t.Errorf("%s: task %s MissingFacts is nil — serializes as JSON null, want [] (empty slice)", name, sum.Task.ID.Value())
+			}
+			if sum.MissingGates == nil {
+				t.Errorf("%s: task %s MissingGates is nil — serializes as JSON null, want [] (empty slice)", name, sum.Task.ID.Value())
+			}
+		}
+	}
+}
+
 // diffSummaryFields deep-compares the computed fields of two TaskSummary
 // values (excluding the embedded Task identity fields, which are asserted by
 // map-lookup identity in the caller) and returns a human-readable diff per
