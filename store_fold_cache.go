@@ -573,6 +573,14 @@ func (fc *foldCache) rebuildOrIncrement(s store.Store, headBeforeID types.EventI
 // candidate is NOT promoted over an existing held generation — ties favor
 // keeping the already-held state rather than risking a spurious downgrade,
 // since two different heads can never be proven ordered from the tie alone.
+//
+// ZERO heads are decided BEFORE any TimestampMS call: the zero EventID is
+// the valid stableHead of an empty-store fold (headSet=true, D2), but
+// TimestampMS() on it panics (it slices an empty string). A zero head is
+// strictly older than any real head — a zero-held generation never blocks
+// a real candidate, and a zero candidate never displaces a real held
+// generation (refuse, fail-safe). Zero-vs-zero is caught by the same-head
+// branch above and never reaches the comparison.
 func (fc *foldCache) promote(candidate *taskFoldState) {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
@@ -587,9 +595,24 @@ func (fc *foldCache) promote(candidate *taskFoldState) {
 		// Same head already held (e.g. a duplicate flight for the same
 		// key, or a re-promotion) — still safe to replace since content is
 		// identical by construction of the fold; keep generation moving
-		// forward for observability.
+		// forward for observability. This includes zero-vs-zero (two
+		// empty-store folds).
 		candidate.generation = current.generation + 1
 		fc.state = candidate
+		return
+	}
+	if current.stableHead.IsZero() {
+		// Held state was folded against a genuinely empty store; the
+		// candidate's head differs, so it is a real event — strictly newer
+		// than "no events at all". Promote.
+		candidate.generation = current.generation + 1
+		fc.state = candidate
+		return
+	}
+	if candidate.stableHead.IsZero() {
+		// Candidate folded against an empty store while a real head is
+		// held: strictly older — refuse. The held generation remains
+		// authoritative.
 		return
 	}
 	if candidate.stableHead.TimestampMS() > current.stableHead.TimestampMS() {
@@ -606,10 +629,27 @@ func (fc *foldCache) promote(candidate *taskFoldState) {
 // ANY error from the fast path (head read, flight/page/frontier error), the
 // held state is discarded and one full scratch rebuild is attempted. If
 // that ALSO fails, the original error is returned — no stale serve.
+//
+// Promotion applies the SAME stable/provisional rule as rebuildOrIncrement:
+// the head is observed before the fold and re-read after it, and the fold
+// is memoized only when the two are equal. A write landing while
+// foldFromScratch runs may already be past its type's scan — headAfter
+// would include the event while the fold does not — so unconditionally
+// memoizing under headAfter would let every subsequent same-head request
+// memo-hit that stale fold until another append moves the head. When the
+// heads differ the fold is still SERVED (provisional — at least as fresh
+// as its fold start) but never memoized; the next request misses and folds
+// again, self-healing within one request cycle.
 func (fc *foldCache) scratchRebuildAndServe(s store.Store, ts *TaskStore, limit int, cause error) ([]TaskSummary, error) {
 	fc.mu.Lock()
 	fc.state = nil
 	fc.mu.Unlock()
+
+	headStart, err := s.Head()
+	if err != nil {
+		return nil, fmt.Errorf("fold rebuild after fail-closed discard (cause: %v): read head: %w", cause, err)
+	}
+	headStartID := headEventID(headStart)
 
 	fresh, err := foldFromScratch(s)
 	if err != nil {
@@ -621,7 +661,10 @@ func (fc *foldCache) scratchRebuildAndServe(s store.Store, ts *TaskStore, limit 
 	}
 	fresh.stableHead = headEventID(headAfter)
 	fresh.headSet = true
-	fc.promote(fresh)
+	if fresh.stableHead == headStartID {
+		// Stable: no write landed during the scratch fold — safe to memoize.
+		fc.promote(fresh)
+	}
 
 	return fc.assembleAndFinishFacts(ts, fresh, limit)
 }

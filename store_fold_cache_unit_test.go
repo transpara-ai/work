@@ -158,3 +158,81 @@ func TestPromote_EmptyOrHeadlessCacheAcceptsCandidate(t *testing.T) {
 		}
 	})
 }
+
+// --- zero-head branches (codex CFAR-2) ---
+//
+// A held state memoized against a GENUINELY EMPTY store carries the zero
+// EventID as its stableHead (with headSet=true — the documented D2
+// empty-store case). types.EventID{}.TimestampMS() panics (it slices an
+// empty string), so promote() must decide every zero-head pairing BEFORE
+// any TimestampMS call: a zero head is treated as strictly older than any
+// real head (promote the real candidate), a zero candidate never displaces
+// a real held head (refuse, fail-safe), and zero-vs-zero is the same-head
+// replace. These tests panic, not merely fail, on the unfixed comparison.
+
+// TestPromote_RealHeadPromotesOverZeroHeldHead: the first append after an
+// empty-store memo must be able to promote (zero held head is strictly
+// older than any real head). Unfixed code panics here.
+func TestPromote_RealHeadPromotesOverZeroHeldHead(t *testing.T) {
+	fc := newFoldCache()
+
+	zeroHeld := stateWithHead(types.EventID{})
+	fc.promote(zeroHeld)
+	if fc.state != zeroHeld {
+		t.Fatalf("setup: zero-head state was not installed into the empty cache")
+	}
+
+	real := stateWithHead(olderHeadID)
+	fc.promote(real)
+
+	if fc.state != real {
+		t.Fatalf("real-head candidate was not promoted over the zero held head")
+	}
+	if real.generation != zeroHeld.generation+1 {
+		t.Fatalf("promoted generation = %d, want %d", real.generation, zeroHeld.generation+1)
+	}
+}
+
+// TestPromote_ZeroCandidateNeverDisplacesRealHeldHead: a candidate folded
+// against an empty store is strictly older than any real held generation —
+// refuse, fail-safe. Unfixed code panics here.
+func TestPromote_ZeroCandidateNeverDisplacesRealHeldHead(t *testing.T) {
+	fc := newFoldCache()
+
+	held := stateWithHead(olderHeadID)
+	fc.promote(held)
+	heldGen := held.generation
+
+	zeroCandidate := stateWithHead(types.EventID{})
+	fc.promote(zeroCandidate)
+
+	if fc.state != held {
+		t.Fatalf("zero-head candidate displaced the real held generation")
+	}
+	if fc.state.generation != heldGen {
+		t.Fatalf("held generation counter changed from %d to %d despite refused promotion", heldGen, fc.state.generation)
+	}
+	if zeroCandidate.generation != 0 {
+		t.Fatalf("refused candidate was assigned generation %d, want 0 (untouched)", zeroCandidate.generation)
+	}
+}
+
+// TestPromote_ZeroOverZeroIsSameHeadReplace: two empty-store folds share
+// the zero head — the existing same-head branch replaces (content is
+// identical by construction) and keeps the generation counter moving.
+func TestPromote_ZeroOverZeroIsSameHeadReplace(t *testing.T) {
+	fc := newFoldCache()
+
+	first := stateWithHead(types.EventID{})
+	fc.promote(first)
+
+	second := stateWithHead(types.EventID{})
+	fc.promote(second)
+
+	if fc.state != second {
+		t.Fatalf("zero-over-zero re-promotion did not replace the held state")
+	}
+	if second.generation != first.generation+1 {
+		t.Fatalf("re-promotion generation = %d, want %d", second.generation, first.generation+1)
+	}
+}

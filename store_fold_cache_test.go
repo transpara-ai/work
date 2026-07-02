@@ -33,13 +33,23 @@ type faultInjectingStore struct {
 	byTypeByType map[string]int // eventType.Value() -> ByType call count
 	omitEventID  types.EventID  // when set, filtered out of every ByType page
 	byTypeDelay  time.Duration  // when set, every ByType call sleeps this long
+
+	// afterByTypeOnce holds at most one one-shot hook per event type, fired
+	// (and cleared) after the next ByType call for that type has read its
+	// page from the inner store, just before the page is returned to the
+	// caller. Used to deterministically land a write MID-FOLD: arm it on a
+	// type the fold scans LATE, have the hook append an event of a type the
+	// fold scanned EARLIER — the fold misses the new event while the
+	// post-fold head read sees it.
+	afterByTypeOnce map[string]func()
 }
 
 func newFaultInjectingStore(s *store.InMemoryStore) *faultInjectingStore {
 	return &faultInjectingStore{
-		InMemoryStore: s,
-		failByType:    make(map[string]bool),
-		byTypeByType:  make(map[string]int),
+		InMemoryStore:   s,
+		failByType:      make(map[string]bool),
+		byTypeByType:    make(map[string]int),
+		afterByTypeOnce: make(map[string]func()),
 	}
 }
 
@@ -60,6 +70,10 @@ func (f *faultInjectingStore) ByType(eventType types.EventType, limit int, after
 	fail := f.failByType[eventType.Value()]
 	omit := f.omitEventID
 	delay := f.byTypeDelay
+	hook := f.afterByTypeOnce[eventType.Value()]
+	if hook != nil {
+		delete(f.afterByTypeOnce, eventType.Value()) // one-shot
+	}
 	f.mu.Unlock()
 	if delay > 0 {
 		// Simulated page-read latency (outside the mutex): widens the fold
@@ -72,6 +86,14 @@ func (f *faultInjectingStore) ByType(eventType types.EventType, limit int, after
 		return types.Page[event.Event]{}, fmt.Errorf("injected ByType failure for %s", eventType.Value())
 	}
 	page, err := f.InMemoryStore.ByType(eventType, limit, after)
+	if hook != nil {
+		// Fire AFTER the page content is fixed (read from the inner store)
+		// but before the caller sees it: anything the hook appends is
+		// invisible to this page and to any earlier-scanned type, exactly
+		// like a concurrent writer landing mid-fold. No fault-store locks
+		// are held here, so the hook may append through the TaskStore.
+		hook()
+	}
 	if err != nil || omit.IsZero() {
 		return page, err
 	}
@@ -110,6 +132,14 @@ func (f *faultInjectingStore) setByTypeDelay(d time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.byTypeDelay = d
+}
+
+// armAfterByTypeOnce registers a one-shot hook fired after the NEXT ByType
+// call for et (see afterByTypeOnce).
+func (f *faultInjectingStore) armAfterByTypeOnce(et types.EventType, hook func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.afterByTypeOnce[et.Value()] = hook
 }
 
 // resetByTypeCounts zeroes both the total and the per-type ByType call
@@ -650,6 +680,107 @@ func TestListSummariesCached_FailClosedTable(t *testing.T) {
 	})
 }
 
+// TestListSummariesCached_ScratchRebuildMidFoldAppendIsNotMemoized pins the
+// stable/provisional rule on the FAIL-CLOSED scratch path (codex CFAR-1):
+// if a write lands while foldFromScratch is running, AFTER its event type
+// has already been scanned, the post-fold head includes the event but the
+// fold does not. scratchRebuildAndServe must therefore only promote/memoize
+// the scratch fold when the head observed at fold start equals the head
+// re-read after the fold — exactly rebuildOrIncrement's rule. Serving the
+// incomplete fold once is fine (provisional — at least as fresh as its fold
+// start); MEMOIZING it under the newer head is not: every subsequent
+// same-head request would memo-hit stale output until another append moves
+// the head.
+//
+// Determinism: the scratch path is forced via the omitEventID frontier-miss
+// fault, and the mid-fold write is landed by a one-shot ByType hook armed
+// on work.task.completed — a type foldFromScratch scans AFTER
+// work.task.created (and one the aborted increment never reaches, since it
+// dies at work.task.assigned) — appending a NEW task. The scratch fold has
+// already finished scanning work.task.created when the hook fires, so it
+// deterministically misses the new task while headAfter sees it.
+func TestListSummariesCached_ScratchRebuildMidFoldAppendIsNotMemoized(t *testing.T) {
+	ts, fs, causes := newFaultTaskStore(t)
+	task1, err := ts.Create(testActor, "task 1", "", causes, testConv)
+	if err != nil {
+		t.Fatalf("Create 1: %v", err)
+	}
+	if err := ts.Assign(testActor, task1.ID, testActor, causes, testConv); err != nil {
+		t.Fatalf("Assign 1: %v", err)
+	}
+	// Warm: record a frontier for work.task.assigned.
+	if _, err := ts.ListSummariesCached(1000); err != nil {
+		t.Fatalf("warm ListSummariesCached: %v", err)
+	}
+
+	// Vanish the assigned frontier event so the next increment fails with
+	// errFrontierNotFound and falls back to the scratch rebuild.
+	page, err := fs.InMemoryStore.ByType(work.EventTypeTaskAssigned, 10, types.None[types.Cursor]())
+	if err != nil {
+		t.Fatalf("ByType (locate frontier): %v", err)
+	}
+	if len(page.Items()) == 0 {
+		t.Fatal("no work.task.assigned events found; cannot locate frontier")
+	}
+	fs.setOmitEventID(page.Items()[0].ID())
+
+	// Move the head so the request misses the memo and attempts the
+	// (doomed) increment.
+	if _, err := ts.Create(testActor, "task 2", "", causes, testConv); err != nil {
+		t.Fatalf("Create 2: %v", err)
+	}
+
+	// Arm the mid-fold writer: when the scratch fold pages
+	// work.task.completed (created is already fully scanned by then), a
+	// third task is appended. The scratch fold cannot contain it; the head
+	// re-read after the fold does.
+	var task3 work.Task
+	fs.armAfterByTypeOnce(work.EventTypeTaskCompleted, func() {
+		var hookErr error
+		task3, hookErr = ts.Create(testActor, "task 3 (lands mid-scratch-fold)", "", causes, testConv)
+		if hookErr != nil {
+			t.Errorf("mid-fold Create 3: %v", hookErr)
+		}
+	})
+
+	first, err := ts.ListSummariesCached(1000)
+	if err != nil {
+		t.Fatalf("ListSummariesCached (scratch rebuild with mid-fold append): %v", err)
+	}
+	if task3.ID.IsZero() {
+		t.Fatal("mid-fold hook never fired — the scratch rebuild did not page work.task.completed")
+	}
+	t.Logf("scratch-rebuild serve returned %d summaries (provisional serve MAY lack the mid-fold task — that is allowed)", len(first))
+
+	// THE contract: the NEXT request observes task3's head. It must not be
+	// answered by a memoized generation that was folded before task3
+	// existed — task3 must be present. Before the CFAR-1 fix the stale
+	// scratch fold is promoted under task3's head, this call memo-hits it,
+	// and task3 is missing.
+	second, err := ts.ListSummariesCached(1000)
+	if err != nil {
+		t.Fatalf("ListSummariesCached (after mid-fold append): %v", err)
+	}
+	found := false
+	for _, s := range second {
+		if s.Task.ID == task3.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("task 3 (appended mid-scratch-fold) missing from the NEXT ListSummariesCached call — a stale scratch fold was memoized under a head that includes it (got %d summaries)", len(second))
+	}
+
+	// And the served state must fully agree with the from-scratch oracle at
+	// this head (both read through the same faulted view).
+	scratch, err := ts.ListSummaries(1000)
+	if err != nil {
+		t.Fatalf("ListSummaries oracle: %v", err)
+	}
+	summariesEqualIgnoringOrder(t, second, scratch)
+}
+
 // --- (c2) singleflight collapse (D2 stampede control, TDD plan item 4) ---
 
 // TestListSummariesCached_SingleflightCollapse pins CFADA1-5 stampede
@@ -1018,5 +1149,66 @@ func TestListSummariesCached_EmptyStore(t *testing.T) {
 	}
 	if len(got2) != 0 {
 		t.Fatalf("len(got2) = %d, want 0", len(got2))
+	}
+}
+
+// TestListSummariesCached_GenuinelyEmptyStoreThenFirstAppend pins the
+// ZERO-head memo transition (codex CFAR-2): a genuinely empty store —
+// Head() returns None, unlike setupStore's bootstrapped stores — memoizes a
+// stable generation under the zero EventID (documented D2 empty-store
+// case). The FIRST later append then makes promote() compare the new real
+// head against that zero held head; before the fix,
+// types.EventID{}.TimestampMS() slices an empty string and PANICS, taking
+// the first post-append /tasks request down with it. The request must not
+// panic, must not error, and must show the new task.
+func TestListSummariesCached_GenuinelyEmptyStoreThenFirstAppend(t *testing.T) {
+	s := store.NewInMemoryStore()
+	registry := event.DefaultRegistry()
+	work.RegisterWithRegistry(registry)
+	factory := event.NewEventFactory(registry)
+	ts := work.NewTaskStore(s, factory, testSigner{})
+
+	// 1. Fold the truly empty store: memoizes under the zero head.
+	empty, err := ts.ListSummariesCached(100)
+	if err != nil {
+		t.Fatalf("ListSummariesCached on genuinely empty store: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("len(empty) = %d, want 0", len(empty))
+	}
+
+	// 2. First real appends: bootstrap genesis, then one task.
+	bf := event.NewBootstrapFactory(registry)
+	boot, err := bf.Init(testActor, testSigner{})
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	stored, err := s.Append(boot)
+	if err != nil {
+		t.Fatalf("append genesis: %v", err)
+	}
+	task, err := ts.Create(testActor, "first task after zero-head memo", "", []types.EventID{stored.ID()}, testConv)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// 3. The next request promotes a real head over the held zero head —
+	// must not panic, and must include the task.
+	after, err := ts.ListSummariesCached(100)
+	if err != nil {
+		t.Fatalf("ListSummariesCached after first append: %v", err)
+	}
+	if len(after) != 1 || after[0].Task.ID != task.ID {
+		t.Fatalf("post-append summaries = %d rows, want exactly the new task %s", len(after), task.ID.Value())
+	}
+
+	// And a second same-head request must memo-hit the promoted real-head
+	// generation identically.
+	again, err := ts.ListSummariesCached(100)
+	if err != nil {
+		t.Fatalf("ListSummariesCached memo-hit after promotion over zero head: %v", err)
+	}
+	if !reflect.DeepEqual(after, again) {
+		t.Fatalf("memo-hit result differs from the fold that promoted over the zero head")
 	}
 }
