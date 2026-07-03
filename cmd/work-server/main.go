@@ -1103,26 +1103,28 @@ func (sv *server) listTasks(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]map[string]any, 0, len(summaries))
 	for _, s := range summaries {
-		items = append(items, map[string]any{
-			"id":             s.Task.ID.Value(),
-			"title":          s.Task.Title,
-			"description":    s.Task.Description,
-			"priority":       string(s.Task.Priority),
-			"created_by":     s.Task.CreatedBy.Value(),
-			"status":         string(s.Status),
-			"legacy_status":  string(s.LegacyStatus),
-			"assignee":       s.Assignee.Value(),
-			"blocked":        s.Blocked,
-			"artifact_count": s.ArtifactCount,
-			"waived":         s.Waived,
-			"ready":          s.Ready,
+		item := map[string]any{
+			"id":               s.Task.ID.Value(),
+			"title":            s.Task.Title,
+			"description":      s.Task.Description,
+			"priority":         string(s.Task.Priority),
+			"created_by":       s.Task.CreatedBy.Value(),
+			"status":           string(s.Status),
+			"legacy_status":    string(s.LegacyStatus),
+			"assignee":         s.Assignee.Value(),
+			"blocked":          s.Blocked,
+			"artifact_count":   s.ArtifactCount,
+			"waived":           s.Waived,
+			"ready":            s.Ready,
 			"missing_gates":    s.MissingGates,
 			"missing_facts":    s.MissingFacts,
 			"risk_class":       s.Task.RiskClass,
 			"cell":             s.Task.Cell,
 			"factory_order_id": s.Task.FactoryOrderID,
 			"created_at":       s.Task.CreatedAt.UTC().Format(time.RFC3339),
-		})
+		}
+		addCanonicalTaskSummaryFields(item, s)
+		items = append(items, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": items})
 }
@@ -1839,7 +1841,7 @@ func (sv *server) listWorkspaceTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]map[string]any, 0, len(summaries))
 	for _, s := range summaries {
-		items = append(items, map[string]any{
+		item := map[string]any{
 			"id":             s.Task.ID.Value(),
 			"title":          s.Task.Title,
 			"description":    s.Task.Description,
@@ -1855,12 +1857,24 @@ func (sv *server) listWorkspaceTasks(w http.ResponseWriter, r *http.Request) {
 			"ready":          s.Ready,
 			"missing_gates":  s.MissingGates,
 			"missing_facts":  s.MissingFacts,
-		})
+		}
+		addCanonicalTaskSummaryFields(item, s)
+		items = append(items, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"workspace": workspace, "tasks": items})
 }
 
 // --- Helpers ---
+
+func addCanonicalTaskSummaryFields(item map[string]any, summary work.TaskSummary) {
+	if summary.Canonical != nil {
+		item["canonical"] = summary.Canonical
+		return
+	}
+	if summary.CanonicalError != "" {
+		item["canonical_error"] = summary.CanonicalError
+	}
+}
 
 // currentCauses fetches the current graph head to use as a cause for new events.
 func (sv *server) currentCauses() ([]types.EventID, error) {

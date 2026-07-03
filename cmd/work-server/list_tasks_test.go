@@ -163,3 +163,171 @@ func TestListTasksOpenOnlyExcludesCanonicalTerminalStatuses(t *testing.T) {
 		}
 	}
 }
+
+func TestTC6_AC7iiiListTasksJSONCanonicalPair(t *testing.T) {
+	sv, causes := newListTasksTestServer(t)
+	convID := types.MustConversationID("conv_00000000000000000000000000000003")
+
+	known, err := sv.ts.Create(sv.humanID, "Known route task", "", causes, convID)
+	if err != nil {
+		t.Fatalf("Create known: %v", err)
+	}
+	if err := sv.ts.TransitionTask(sv.humanID, known.ID, work.StatusReady, "ready", nil, serverHeadCauses(t, sv), convID); err != nil {
+		t.Fatalf("TransitionTask known: %v", err)
+	}
+	unknown, err := sv.ts.Create(sv.humanID, "Unknown route task", "", serverHeadCauses(t, sv), convID)
+	if err != nil {
+		t.Fatalf("Create unknown: %v", err)
+	}
+	appendServerRawLifecycleTransition(t, sv, unknown.ID, work.StatusCreated, work.TaskStatus("paused"), convID)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/tasks", nil)
+	sv.listTasks(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Tasks []map[string]any `json:"tasks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	knownItem := findTaskItem(t, resp.Tasks, known.ID.Value())
+	unknownItem := findTaskItem(t, resp.Tasks, unknown.ID.Value())
+	assertRouteCanonicalSuccess(t, "/tasks known", knownItem)
+	assertRouteCanonicalError(t, "/tasks unknown", unknownItem)
+	assertRouteKeys(t, "/tasks", knownItem, []string{
+		"id", "title", "description", "priority", "created_by", "status",
+		"legacy_status", "assignee", "blocked", "artifact_count", "waived",
+		"ready", "missing_gates", "missing_facts", "risk_class", "cell",
+		"factory_order_id", "created_at", "canonical",
+	})
+}
+
+func TestTC6_AC7iiiWorkspaceTasksJSONCanonicalPair(t *testing.T) {
+	sv, causes := newListTasksTestServer(t)
+	convID := types.MustConversationID("conv_00000000000000000000000000000004")
+
+	known, err := sv.ts.CreateInWorkspace(sv.humanID, "Known workspace task", "", "ops", causes, convID)
+	if err != nil {
+		t.Fatalf("CreateInWorkspace known: %v", err)
+	}
+	if err := sv.ts.TransitionTask(sv.humanID, known.ID, work.StatusReady, "ready", nil, serverHeadCauses(t, sv), convID); err != nil {
+		t.Fatalf("TransitionTask known: %v", err)
+	}
+	unknown, err := sv.ts.CreateInWorkspace(sv.humanID, "Unknown workspace task", "", "ops", serverHeadCauses(t, sv), convID)
+	if err != nil {
+		t.Fatalf("CreateInWorkspace unknown: %v", err)
+	}
+	appendServerRawLifecycleTransition(t, sv, unknown.ID, work.StatusCreated, work.TaskStatus("paused"), convID)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/w/ops/tasks", nil)
+	req.SetPathValue("workspace", "ops")
+	sv.listWorkspaceTasks(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Workspace string           `json:"workspace"`
+		Tasks     []map[string]any `json:"tasks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Workspace != "ops" {
+		t.Fatalf("workspace = %q, want ops", resp.Workspace)
+	}
+	knownItem := findTaskItem(t, resp.Tasks, known.ID.Value())
+	unknownItem := findTaskItem(t, resp.Tasks, unknown.ID.Value())
+	assertRouteCanonicalSuccess(t, "/w/{workspace}/tasks known", knownItem)
+	assertRouteCanonicalError(t, "/w/{workspace}/tasks unknown", unknownItem)
+	assertRouteKeys(t, "/w/{workspace}/tasks", knownItem, []string{
+		"id", "title", "description", "priority", "workspace", "created_by",
+		"status", "legacy_status", "assignee", "blocked", "artifact_count",
+		"waived", "ready", "missing_gates", "missing_facts", "canonical",
+	})
+}
+
+func appendServerRawLifecycleTransition(t *testing.T, sv *server, taskID types.EventID, from, to work.TaskStatus, convID types.ConversationID) {
+	t.Helper()
+	registry := event.DefaultRegistry()
+	work.RegisterWithRegistry(registry)
+	factory := event.NewEventFactory(registry)
+	ev, err := factory.Create(work.EventTypeTaskLifecycleTransitioned, sv.humanID, work.TaskLifecycleTransitionContent{
+		TaskID:    taskID,
+		FromState: from,
+		ToState:   to,
+		Reason:    "future status fixture",
+		ChangedBy: sv.humanID,
+	}, serverHeadCauses(t, sv), convID, sv.store, deriveSignerFromID(sv.humanID))
+	if err != nil {
+		t.Fatalf("create raw lifecycle transition: %v", err)
+	}
+	if _, err := sv.store.Append(ev); err != nil {
+		t.Fatalf("append raw lifecycle transition: %v", err)
+	}
+}
+
+func serverHeadCauses(t *testing.T, sv *server) []types.EventID {
+	t.Helper()
+	head, err := sv.store.Head()
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	if head.IsNone() {
+		return nil
+	}
+	return []types.EventID{head.Unwrap().ID()}
+}
+
+func findTaskItem(t *testing.T, items []map[string]any, id string) map[string]any {
+	t.Helper()
+	for _, item := range items {
+		if got, _ := item["id"].(string); got == id {
+			return item
+		}
+	}
+	t.Fatalf("missing task item %s", id)
+	return nil
+}
+
+func assertRouteCanonicalSuccess(t *testing.T, label string, item map[string]any) {
+	t.Helper()
+	canonical, ok := item["canonical"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s missing canonical object: %#v", label, item["canonical"])
+	}
+	if _, ok := item["canonical_error"]; ok {
+		t.Fatalf("%s has canonical_error on success: %#v", label, item["canonical_error"])
+	}
+	if canonical["phase"] == "" {
+		t.Fatalf("%s canonical phase is empty: %#v", label, canonical)
+	}
+}
+
+func assertRouteCanonicalError(t *testing.T, label string, item map[string]any) {
+	t.Helper()
+	if _, ok := item["canonical"]; ok {
+		t.Fatalf("%s has canonical on error: %#v", label, item["canonical"])
+	}
+	errText, ok := item["canonical_error"].(string)
+	if !ok || errText == "" {
+		t.Fatalf("%s missing canonical_error string: %#v", label, item["canonical_error"])
+	}
+}
+
+func assertRouteKeys(t *testing.T, label string, item map[string]any, want []string) {
+	t.Helper()
+	if len(item) != len(want) {
+		t.Fatalf("%s key count = %d, want %d: %#v", label, len(item), len(want), item)
+	}
+	for _, key := range want {
+		if _, ok := item[key]; !ok {
+			t.Fatalf("%s missing key %q in %#v", label, key, item)
+		}
+	}
+}
