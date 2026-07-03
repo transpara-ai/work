@@ -400,7 +400,7 @@ func (f *taskFoldState) summariesFromFold(tasks []Task) []TaskSummary {
 		blocked := blockedMap[t.ID] && !f.unblocked[t.ID]
 		missing := missingRequiredGates(f.gatesByTask[t.ID])
 
-		summaries = append(summaries, TaskSummary{
+		summaries = append(summaries, newTaskSummary(taskSummaryFields{
 			Task:          t,
 			Status:        status,
 			Assignee:      assignee,
@@ -415,7 +415,7 @@ func (f *taskFoldState) summariesFromFold(tasks []Task) []TaskSummary {
 			// LegacyStatus, Ready are finished by the caller once the
 			// per-request fact pass has run (facts are excluded from the
 			// fold — see foldEventTypes doc comment).
-		})
+		}))
 	}
 	return summaries
 }
@@ -442,6 +442,7 @@ func (f *taskFoldState) finalizeLegacyStatusAndReadiness(summaries []TaskSummary
 		default:
 			s.LegacyStatus = LegacyStatusPending
 		}
+		attachCanonicalToTaskSummary(s)
 	}
 }
 

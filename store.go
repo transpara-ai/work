@@ -12,6 +12,7 @@ import (
 	"github.com/transpara-ai/eventgraph/go/pkg/event"
 	"github.com/transpara-ai/eventgraph/go/pkg/store"
 	"github.com/transpara-ai/eventgraph/go/pkg/types"
+	"github.com/transpara-ai/work/pkg/worklifecycle"
 )
 
 // ErrArtifactRequired is returned by Complete when the task has neither an
@@ -91,15 +92,17 @@ type Task struct {
 // ListSummaries using batch store scans.
 type TaskSummary struct {
 	Task
-	Status        TaskStatus
-	LegacyStatus  LegacyTaskStatus
-	Assignee      types.ActorID // zero value if unassigned
-	Blocked       bool
-	ArtifactCount int
-	Waived        bool
-	Ready         bool
-	MissingGates  []string
-	MissingFacts  []string
+	Status         TaskStatus
+	LegacyStatus   LegacyTaskStatus
+	Assignee       types.ActorID // zero value if unassigned
+	Blocked        bool
+	ArtifactCount  int
+	Waived         bool
+	Ready          bool
+	MissingGates   []string
+	MissingFacts   []string
+	Canonical      *worklifecycle.CanonicalWorkState `json:"canonical,omitempty"`
+	CanonicalError string                            `json:"canonical_error,omitempty"`
 }
 
 // TaskCreateOptions carries v3.9 Tier 0 lineage and scheduling metadata for a task.
@@ -154,6 +157,8 @@ type TaskProjection struct {
 	FailureRepair       FailureRepairReferences
 	SupersededBy        string
 	LastTransitionEvent types.EventID
+	Canonical           *worklifecycle.CanonicalWorkState `json:"canonical,omitempty"`
+	CanonicalError      string                            `json:"canonical_error,omitempty"`
 }
 
 // LegacyTaskProjection replays historical Work events without promoting
@@ -1654,7 +1659,7 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 			legacyStatus = LegacyStatusPending
 		}
 
-		summaries = append(summaries, TaskSummary{
+		summaries = append(summaries, newTaskSummary(taskSummaryFields{
 			Task:          t,
 			Status:        status,
 			LegacyStatus:  legacyStatus,
@@ -1665,7 +1670,7 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 			Ready:         ready,
 			MissingGates:  missing,
 			MissingFacts:  missingFacts,
-		})
+		}))
 	}
 	return summaries, nil
 }
@@ -1751,7 +1756,7 @@ func (ts *TaskStore) ProjectTask(taskID types.EventID) (TaskProjection, error) {
 	if err != nil {
 		return TaskProjection{}, err
 	}
-	return TaskProjection{
+	projection := TaskProjection{
 		Task:                task,
 		Status:              status,
 		Assignee:            assignee,
@@ -1764,7 +1769,19 @@ func (ts *TaskStore) ProjectTask(taskID types.EventID) (TaskProjection, error) {
 		FailureRepair:       failureRepair,
 		SupersededBy:        supersededBy,
 		LastTransitionEvent: lastTransition,
-	}, nil
+	}
+	legacy, err := ts.ProjectLegacyTask(taskID)
+	if err != nil {
+		projection.CanonicalError = "canonical legacy projection read failed: " + err.Error()
+		return projection, nil
+	}
+	canonical, err := canonicalStateForProjection(projection, legacy)
+	if err != nil {
+		projection.CanonicalError = err.Error()
+		return projection, nil
+	}
+	projection.Canonical = &canonical
+	return projection, nil
 }
 
 // AddComment records a work.task.comment event on the graph, attaching a
