@@ -242,11 +242,24 @@ type TaskStore struct {
 	store   store.Store
 	factory *event.EventFactory
 	signer  event.Signer
+
+	// fold is the head-keyed fold-generation memo used by
+	// ListSummariesCached (store_fold_cache.go). Once set, its own internals
+	// (mutex + singleflight.Group) are safe for concurrent use. It is always
+	// set by NewTaskStore, the only constructor in this codebase — the
+	// nil-check fallback in ListSummariesCached exists purely so a
+	// zero-value TaskStore{} (constructed outside NewTaskStore, e.g. in a
+	// future test) fails safe with a working fold cache rather than a nil
+	// dereference; that fallback path is NOT itself safe for concurrent
+	// first-use across goroutines (ordinary Go nil-check-then-assign race),
+	// so callers must go through NewTaskStore for any concurrent use, which
+	// this codebase always does.
+	fold *foldCache
 }
 
 // NewTaskStore creates a new TaskStore backed by the given event store.
 func NewTaskStore(s store.Store, factory *event.EventFactory, signer event.Signer) *TaskStore {
-	return &TaskStore{store: s, factory: factory, signer: signer}
+	return &TaskStore{store: s, factory: factory, signer: signer, fold: newFoldCache()}
 }
 
 // Create records a work.task.created event on the graph and returns the task.
@@ -347,22 +360,24 @@ func (ts *TaskStore) List(limit int) ([]Task, error) {
 
 	// Build a map of the newest TaskLinkedContent per task ID (ByType returns
 	// newest-first, so the first entry seen per task is the most recent).
-	linkPage, err := ts.store.ByType(EventTypeTaskLinked, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return nil, fmt.Errorf("list tasks: fetch link events: %w", err)
-	}
+	// Pages to exhaustion (D1b): this is a full-domain overlay scan (unlike
+	// the EventTypeTaskCreated read above, which is intentionally bounded by
+	// the caller's requested limit) — a link event beyond one page must not
+	// be silently missed.
 	// newestLink is keyed by the task's creation-event ID. TaskLinkedContent.TaskID
 	// stores the creation-event ID (same convention projectLinkage relies on), so the
 	// later newestLink[t.ID] lookup — where t.ID is ev.ID() of the created event — matches.
 	newestLink := make(map[types.EventID]TaskLinkedContent)
-	for _, ev := range linkPage.Items() {
+	if err := ts.pageAllByType(EventTypeTaskLinked, func(ev event.Event) {
 		c, ok := ev.Content().(TaskLinkedContent)
 		if !ok {
-			continue
+			return
 		}
 		if _, seen := newestLink[c.TaskID]; !seen {
 			newestLink[c.TaskID] = c
 		}
+	}); err != nil {
+		return nil, fmt.Errorf("list tasks: fetch link events: %w", err)
 	}
 
 	tasks := make([]Task, 0, len(page.Items()))
@@ -1098,14 +1113,18 @@ func (ts *TaskStore) IsBlocked(taskID types.EventID) (bool, error) {
 	}
 
 	// A work.task.unblocked event explicitly clears the blocked state.
-	unblockedPage, err := ts.store.ByType(EventTypeTaskUnblocked, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return false, fmt.Errorf("fetch unblocked events: %w", err)
-	}
-	for _, ev := range unblockedPage.Items() {
+	// Pages to exhaustion (D1b) — a matching unblock event beyond the first
+	// page must not be missed.
+	unblocked := false
+	if err := ts.pageAllByType(EventTypeTaskUnblocked, func(ev event.Event) {
 		if c, ok := ev.Content().(TaskUnblockedContent); ok && c.TaskID == taskID {
-			return false, nil
+			unblocked = true
 		}
+	}); err != nil {
+		return false, err
+	}
+	if unblocked {
+		return false, nil
 	}
 
 	// Collect all dependency-satisfying task IDs once (reopen-aware legacy
@@ -1152,32 +1171,31 @@ func (ts *TaskStore) UnblockTask(
 // return edge, run findings v12-F1). Pure set algebra over explicit references
 // — no event-order comparison anywhere, so the fold is identical across store
 // backends regardless of ByType page order. A task with at least one live
-// completion reads as completed. Page budget mirrors the file's existing
-// completion scans (the ByType pagination class is routed G-2.x).
+// completion reads as completed. Both scans page to exhaustion (D1b) —
+// this is the oracle-shared helper behind ProjectLegacyTask/IsBlocked/
+// ListOpen/batchStatus, so a single-page read here would silently diverge
+// every caller's completed/blocked semantics beyond one page of either type.
 func (ts *TaskStore) liveCompletionsByTask() (map[types.EventID][]types.EventID, error) {
-	completedPage, err := ts.store.ByType(EventTypeTaskCompleted, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return nil, fmt.Errorf("fetch completed events: %w", err)
-	}
-	reopenedPage, err := ts.store.ByType(EventTypeTaskReopened, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return nil, fmt.Errorf("fetch reopened events: %w", err)
-	}
 	superseded := make(map[types.EventID]bool)
-	for _, ev := range reopenedPage.Items() {
+	if err := ts.pageAllByType(EventTypeTaskReopened, func(ev event.Event) {
 		if c, ok := ev.Content().(TaskReopenedContent); ok {
 			for _, ref := range c.CompletionRefs {
 				superseded[ref] = true
 			}
 		}
+	}); err != nil {
+		return nil, err
 	}
+
 	live := make(map[types.EventID][]types.EventID)
-	for _, ev := range completedPage.Items() {
+	if err := ts.pageAllByType(EventTypeTaskCompleted, func(ev event.Event) {
 		c, ok := ev.Content().(TaskCompletedContent)
 		if !ok || superseded[ev.ID()] {
-			continue
+			return
 		}
 		live[c.TaskID] = append(live[c.TaskID], ev.ID())
+	}); err != nil {
+		return nil, err
 	}
 	return live, nil
 }
@@ -1427,8 +1445,50 @@ func (ts *TaskStore) GetPriority(taskID types.EventID) (TaskPriority, error) {
 	return c.Priority, nil
 }
 
+// pageAllByType pages eventType to exhaustion (looping on Page.HasMore/
+// Page.Cursor exactly like GetDependencies/latestLifecycleStatuses/
+// issueScanTaskIDs already do) and invokes visit for every event returned,
+// in the store's native newest-first order. A store backend that
+// genuinely holds more than one page of a given event type MUST have every
+// full-domain scan honor its pagination contract to exhaustion — a
+// single-page read silently truncates and diverges from every per-task
+// method (GetDependencies, GetStatus, Readiness, ProjectLegacyTask via
+// IsBlocked/liveCompletedIDs/projectAssignee) which already page fully.
+// D1b: this is the fix for that pre-existing, shared truncation bug —
+// applied uniformly to every full-domain ByType scan reachable from
+// ListSummaries/batchStatus AND the oracle methods it must match, so
+// equivalence holds at any event volume, not just below one page.
+func (ts *TaskStore) pageAllByType(eventType types.EventType, visit func(event.Event)) error {
+	after := types.None[types.Cursor]()
+	for {
+		page, err := ts.store.ByType(eventType, 1000, after)
+		if err != nil {
+			return fmt.Errorf("fetch %s events: %w", eventType.Value(), err)
+		}
+		for _, ev := range page.Items() {
+			visit(ev)
+		}
+		if !page.HasMore() {
+			return nil
+		}
+		after = page.Cursor()
+	}
+}
+
+// pageAllByTypeCollect is pageAllByType's slice-collecting convenience form
+// for call sites that build a []event.Event rather than folding into a map.
+func (ts *TaskStore) pageAllByTypeCollect(eventType types.EventType) ([]event.Event, error) {
+	var out []event.Event
+	if err := ts.pageAllByType(eventType, func(ev event.Event) {
+		out = append(out, ev)
+	}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // batchStatus enriches a slice of Tasks with computed Status, Assignee, and Blocked
-// fields using three batch store scans rather than N per-task queries.
+// fields using batch store scans (each paged to exhaustion — D1b) rather than N per-task queries.
 func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 	if len(tasks) == 0 {
 		return nil, nil
@@ -1440,102 +1500,169 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 		return nil, err
 	}
 
-	// Scan 2: assigned events (newest-first) → current assignee per task.
-	assignedPage, err := ts.store.ByType(EventTypeTaskAssigned, 1000, types.None[types.Cursor]())
+	// liveCompletedIDs (legacy completion only, WITHOUT issue-scan certification)
+	// is the exact set ProjectLegacyTask checks for LegacyStatusCompleted — kept
+	// separate from completedIDs (scan 1) above, which additionally credits
+	// certified issue-scan tasks for downstream dependency satisfaction. Folding
+	// these two together would wrongly report a certified-but-not-legacy-completed
+	// issue-scan task as legacy "completed".
+	liveCompletedIDs, err := ts.liveCompletedIDs()
 	if err != nil {
-		return nil, fmt.Errorf("fetch assigned events: %w", err)
+		return nil, err
 	}
-	assigneeMap := make(map[types.EventID]types.ActorID, len(assignedPage.Items()))
-	for _, ev := range assignedPage.Items() {
+
+	// Scan 2: assigned events (newest-first) → current assignee per task.
+	// Pages to exhaustion (D1b): stopping at one page would silently drop
+	// assignments beyond it and diverge from the per-task oracle
+	// (projectAssignee), which now also pages fully.
+	assigneeMap := make(map[types.EventID]types.ActorID)
+	if err := ts.pageAllByType(EventTypeTaskAssigned, func(ev event.Event) {
 		if c, ok := ev.Content().(TaskAssignedContent); ok {
 			if _, seen := assigneeMap[c.TaskID]; !seen {
 				assigneeMap[c.TaskID] = c.AssignedTo
 			}
 		}
+	}); err != nil {
+		return nil, err
 	}
 
 	// Scan 3: dependency events → blocked set (reuses completedIDs from scan 1).
-	depPage, err := ts.store.ByType(EventTypeTaskDependencyAdded, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return nil, fmt.Errorf("fetch dependency events: %w", err)
-	}
+	// Pages to exhaustion (D1b) — matches GetDependencies, which already does.
 	blockedMap := make(map[types.EventID]bool)
-	for _, ev := range depPage.Items() {
+	if err := ts.pageAllByType(EventTypeTaskDependencyAdded, func(ev event.Event) {
 		if c, ok := ev.Content().(TaskDependencyContent); ok {
 			if !completedIDs[c.DependsOnID] {
 				blockedMap[c.TaskID] = true
 			}
 		}
+	}); err != nil {
+		return nil, err
 	}
 
 	// Scan 4: unblocked events → explicitly unblocked set (clears blocked state).
-	unblockedPage, err := ts.store.ByType(EventTypeTaskUnblocked, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return nil, fmt.Errorf("fetch unblocked events: %w", err)
-	}
+	// Pages to exhaustion (D1b) — matches IsBlocked, which now also pages fully.
 	unblockedMap := make(map[types.EventID]bool)
-	for _, ev := range unblockedPage.Items() {
+	if err := ts.pageAllByType(EventTypeTaskUnblocked, func(ev event.Event) {
 		if c, ok := ev.Content().(TaskUnblockedContent); ok {
 			unblockedMap[c.TaskID] = true
 		}
+	}); err != nil {
+		return nil, err
 	}
 
-	// Scan 5: artifact events → count and readiness labels per task.
-	artifactPage, err := ts.store.ByType(EventTypeTaskArtifact, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return nil, fmt.Errorf("fetch artifact events: %w", err)
-	}
+	// Scan 5: artifact events → count and readiness labels per task. A required
+	// gate counts as present only when its body is non-empty (D1a): this is the
+	// same rule Readiness enforces (store.go Readiness, "a label-only (empty)
+	// artifact does not satisfy readiness") — the list path previously counted a
+	// required gate as present on label alone, a fail-open divergence from the
+	// documented contract. Aligning here is the one intentional /tasks output
+	// change in this packet. Pages to exhaustion (D1b) — matches Readiness,
+	// which now also pages fully.
 	artifactCount := make(map[types.EventID]int)
 	gatesByTask := make(map[types.EventID]map[string]bool)
-	for _, ev := range artifactPage.Items() {
+	if err := ts.pageAllByType(EventTypeTaskArtifact, func(ev event.Event) {
 		if c, ok := ev.Content().(TaskArtifactContent); ok {
 			artifactCount[c.TaskID]++
 			label := normalizeGateLabel(c.Label)
-			if isRequiredGateLabel(label) {
+			if isRequiredGateLabel(label) && strings.TrimSpace(c.Body) != "" {
 				if gatesByTask[c.TaskID] == nil {
 					gatesByTask[c.TaskID] = make(map[string]bool)
 				}
 				gatesByTask[c.TaskID][label] = true
 			}
 		}
+	}); err != nil {
+		return nil, err
 	}
 
-	// Scan 6: waiver events → waived set.
-	waiverPage, err := ts.store.ByType(EventTypeTaskArtifactWaived, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return nil, fmt.Errorf("fetch waiver events: %w", err)
-	}
+	// Scan 6: waiver events → waived set. Pages to exhaustion (D1b) —
+	// matches HasWaiver/findEventForTask, which now also page fully.
 	waivedMap := make(map[types.EventID]bool)
-	for _, ev := range waiverPage.Items() {
+	if err := ts.pageAllByType(EventTypeTaskArtifactWaived, func(ev event.Event) {
 		if c, ok := ev.Content().(TaskArtifactWaivedContent); ok {
 			waivedMap[c.TaskID] = true
 		}
+	}); err != nil {
+		return nil, err
+	}
+
+	// Scan 7: one latestLifecycleStatuses() call replaces a per-task GetStatus
+	// call — identical fold (newest-wins over EventTypeTaskLifecycleTransitioned,
+	// StatusCreated default for a task with no transition).
+	statuses, err := ts.latestLifecycleStatuses()
+	if err != nil {
+		return nil, err
+	}
+
+	// Scan 8: one work.task.fact.required scan identifies the (rare) set of
+	// fact-requiring task IDs. Fact satisfaction is causal (Descendants/Get
+	// queries, not a per-type frontier — see factReadiness), so only tasks that
+	// actually carry a fact requirement pay the per-task factReadiness cost;
+	// every other task short-circuits to no missing facts. Pages to
+	// exhaustion (D1b) — matches ListFactRequirements, which now also pages
+	// fully.
+	factRequiringTasks := make(map[types.EventID]bool)
+	if err := ts.pageAllByType(EventTypeTaskFactRequired, func(ev event.Event) {
+		if c, ok := ev.Content().(TaskFactRequiredContent); ok {
+			factRequiringTasks[c.TaskID] = true
+		}
+	}); err != nil {
+		return nil, err
 	}
 
 	summaries := make([]TaskSummary, 0, len(tasks))
 	for _, t := range tasks {
-		status, err := ts.GetStatus(t.ID)
-		if err != nil {
-			return nil, err
+		status, ok := statuses[t.ID]
+		if !ok {
+			status = StatusCreated
 		}
-		legacyStatus, err := ts.GetCompatibilityStatus(t.ID)
-		if err != nil {
-			return nil, err
-		}
+
+		assignee := assigneeMap[t.ID]
+		blocked := blockedMap[t.ID] && !unblockedMap[t.ID]
 		missing := missingRequiredGates(gatesByTask[t.ID])
-		_, missingFacts, err := ts.factReadiness(t.ID)
-		if err != nil {
-			return nil, err
+
+		// missingFacts must be an EMPTY (non-nil) slice for JSON shape
+		// stability: factReadiness always returns a non-nil slice (so tasks
+		// WITH fact requirements serialize as []); a nil default for tasks
+		// WITHOUT requirements would serialize as null. Mirrors
+		// summariesFromFold's MissingFacts handling (store_fold_cache.go).
+		missingFacts := []string{}
+		if factRequiringTasks[t.ID] {
+			_, missingFacts, err = ts.factReadiness(t.ID)
+			if err != nil {
+				return nil, err
+			}
 		}
+		ready := len(missing) == 0 && len(missingFacts) == 0
+
+		// Batch legacy-status fold — replicates ProjectLegacyTask's STATUS
+		// derivation exactly (store.go ProjectLegacyTask): completed (live,
+		// legacy-only) takes priority, then blocked, then assigned, then ready,
+		// else pending. Each input (liveCompletedIDs, blocked, assignee, ready)
+		// is the same value ProjectLegacyTask itself would compute for this task.
+		var legacyStatus LegacyTaskStatus
+		switch {
+		case liveCompletedIDs[t.ID]:
+			legacyStatus = LegacyStatusCompleted
+		case blocked:
+			legacyStatus = LegacyStatusBlocked
+		case !assignee.IsZero():
+			legacyStatus = LegacyStatusAssigned
+		case ready:
+			legacyStatus = LegacyStatusReady
+		default:
+			legacyStatus = LegacyStatusPending
+		}
+
 		summaries = append(summaries, TaskSummary{
 			Task:          t,
 			Status:        status,
 			LegacyStatus:  legacyStatus,
-			Assignee:      assigneeMap[t.ID],
-			Blocked:       blockedMap[t.ID] && !unblockedMap[t.ID],
+			Assignee:      assignee,
+			Blocked:       blocked,
 			ArtifactCount: artifactCount[t.ID],
 			Waived:        waivedMap[t.ID],
-			Ready:         len(missing) == 0 && len(missingFacts) == 0,
+			Ready:         ready,
 			MissingGates:  missing,
 			MissingFacts:  missingFacts,
 		})
@@ -1543,8 +1670,10 @@ func (ts *TaskStore) batchStatus(tasks []Task) ([]TaskSummary, error) {
 	return summaries, nil
 }
 
-// ListSummaries returns up to limit tasks with Status, Assignee, and Blocked
-// populated via three batch store scans (rather than N per-task queries).
+// ListSummaries returns up to limit tasks with Status, LegacyStatus, Assignee,
+// Blocked, artifact/gate readiness, and fact readiness populated via batched
+// store scans (rather than per-task GetStatus/GetCompatibilityStatus/
+// factReadiness/Readiness calls) — see batchStatus.
 func (ts *TaskStore) ListSummaries(limit int) ([]TaskSummary, error) {
 	tasks, err := ts.List(limit)
 	if err != nil {
@@ -1790,12 +1919,14 @@ func (ts *TaskStore) AddFactRequirement(
 // ListFactRequirements returns task readiness fact requirements with their
 // current satisfaction state derived from the shared EventGraph store.
 func (ts *TaskStore) ListFactRequirements(taskID types.EventID) ([]FactRequirement, error) {
-	page, err := ts.store.ByType(EventTypeTaskFactRequired, 1000, types.None[types.Cursor]())
+	// Pages to exhaustion (D1b): a task's fact requirement could be on any
+	// page once total work.task.fact.required events exceed one page.
+	page, err := ts.pageAllByTypeCollect(EventTypeTaskFactRequired)
 	if err != nil {
-		return nil, fmt.Errorf("fetch fact requirement events: %w", err)
+		return nil, err
 	}
 	requirements := make([]FactRequirement, 0)
-	for _, ev := range page.Items() {
+	for _, ev := range page {
 		c, ok := ev.Content().(TaskFactRequiredContent)
 		if !ok || c.TaskID != taskID {
 			continue
@@ -1878,15 +2009,13 @@ func (ts *TaskStore) ListReopens(taskID types.EventID) ([]ReopenEvent, error) {
 // Readiness reconstructs whether a task has the required implementation gates
 // and any declared Phase 3 fact prerequisites.
 func (ts *TaskStore) Readiness(taskID types.EventID) (TaskReadiness, error) {
-	page, err := ts.store.ByType(EventTypeTaskArtifact, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return TaskReadiness{}, fmt.Errorf("fetch artifact events: %w", err)
-	}
 	present := make(map[string]bool)
-	for _, ev := range page.Items() {
+	// Pages to exhaustion (D1b): a required gate's satisfying artifact
+	// could be on any page once total artifact events exceed one page.
+	if err := ts.pageAllByType(EventTypeTaskArtifact, func(ev event.Event) {
 		c, ok := ev.Content().(TaskArtifactContent)
 		if !ok || c.TaskID != taskID {
-			continue
+			return
 		}
 		label := normalizeGateLabel(c.Label)
 		// A required gate counts as present only when its body is non-empty: a
@@ -1896,6 +2025,8 @@ func (ts *TaskStore) Readiness(taskID types.EventID) (TaskReadiness, error) {
 		if isRequiredGateLabel(label) && strings.TrimSpace(c.Body) != "" {
 			present[label] = true
 		}
+	}); err != nil {
+		return TaskReadiness{}, err
 	}
 	missing := missingRequiredGates(present)
 	presentFacts, missingFacts, err := ts.factReadiness(taskID)
@@ -2199,16 +2330,26 @@ func canTransitionTask(from, to TaskStatus) bool {
 }
 
 func (ts *TaskStore) projectAssignee(taskID types.EventID) (types.ActorID, error) {
-	page, err := ts.store.ByType(EventTypeTaskAssigned, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return types.ActorID{}, fmt.Errorf("fetch assigned events: %w", err)
-	}
-	for _, ev := range page.Items() {
-		if c, ok := ev.Content().(TaskAssignedContent); ok && c.TaskID == taskID {
-			return c.AssignedTo, nil
+	// Pages to exhaustion (D1b): ByType is newest-first GLOBALLY, not
+	// per-task, so this task's newest assignment can live on any page —
+	// stopping at the first page would silently return a stale (or zero)
+	// assignee once total assignment events exceed one page.
+	after := types.None[types.Cursor]()
+	for {
+		page, err := ts.store.ByType(EventTypeTaskAssigned, 1000, after)
+		if err != nil {
+			return types.ActorID{}, fmt.Errorf("fetch assigned events: %w", err)
 		}
+		for _, ev := range page.Items() {
+			if c, ok := ev.Content().(TaskAssignedContent); ok && c.TaskID == taskID {
+				return c.AssignedTo, nil
+			}
+		}
+		if !page.HasMore() {
+			return types.ActorID{}, nil
+		}
+		after = page.Cursor()
 	}
-	return types.ActorID{}, nil
 }
 
 func (ts *TaskStore) projectLatestTransition(taskID types.EventID) (types.EventID, string, error) {
@@ -2327,21 +2468,34 @@ func (ts *TaskStore) HasWaiver(taskID types.EventID) (bool, error) {
 // artifact satisfies the gate, and ArtifactRef is a convenience pointer
 // not a completeness guarantee.
 func (ts *TaskStore) findEventForTask(eventType types.EventType, taskID types.EventID) (types.EventID, bool, error) {
-	page, err := ts.store.ByType(eventType, 1000, types.None[types.Cursor]())
-	if err != nil {
-		return types.EventID{}, false, fmt.Errorf("fetch %s events: %w", eventType.Value(), err)
-	}
-	for _, ev := range page.Items() {
-		switch c := ev.Content().(type) {
-		case TaskArtifactContent:
-			if c.TaskID == taskID {
-				return ev.ID(), true, nil
+	// Pages to exhaustion (D1b): a matching artifact/waiver could be on any
+	// page once total events of eventType exceed one page.
+	found := types.EventID{}
+	ok := false
+	after := types.None[types.Cursor]()
+	for {
+		page, err := ts.store.ByType(eventType, 1000, after)
+		if err != nil {
+			return types.EventID{}, false, fmt.Errorf("fetch %s events: %w", eventType.Value(), err)
+		}
+		for _, ev := range page.Items() {
+			switch c := ev.Content().(type) {
+			case TaskArtifactContent:
+				if c.TaskID == taskID {
+					found, ok = ev.ID(), true
+				}
+			case TaskArtifactWaivedContent:
+				if c.TaskID == taskID {
+					found, ok = ev.ID(), true
+				}
 			}
-		case TaskArtifactWaivedContent:
-			if c.TaskID == taskID {
-				return ev.ID(), true, nil
+			if ok {
+				return found, true, nil
 			}
 		}
+		if !page.HasMore() {
+			return types.EventID{}, false, nil
+		}
+		after = page.Cursor()
 	}
-	return types.EventID{}, false, nil
 }
