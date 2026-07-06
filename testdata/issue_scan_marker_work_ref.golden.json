@@ -1,0 +1,47 @@
+{
+  "acceptance_criterion_ids": [
+    "ac_issue_scan_2026_07_06_docs_256_transpara_ai_docs_256_research_issue_and_repo_context_cc56864a0bb3"
+  ],
+  "authority_exclusions": [
+    "github_issue_markers_are_projection_only",
+    "github_comments_are_not_work_lifecycle_truth",
+    "github_labels_are_not_work_lifecycle_truth",
+    "no_live_github_mutation_authority",
+    "no_eventgraph_production_write",
+    "no_hive_write_action_or_authority_api",
+    "no_deployment",
+    "no_test_001_green",
+    "no_merge_authority",
+    "no_issue_closure",
+    "no_autonomy_increase",
+    "no_value_allocation"
+  ],
+  "blocked": false,
+  "canonical_source": "work",
+  "canonical_task_id": "tsk_issue_scan_2026_07_06_docs_256_transpara_ai_docs_256_research_issue_and_repo_context_cc56864a0bb3",
+  "factory_order_id": "fo_issue_scan_2026_07_06_docs_256",
+  "failure_repair_refs": {},
+  "gate": "research_packet_posted",
+  "lifecycle_state": "created",
+  "missing_gates": [
+    "definition_of_done",
+    "acceptance_criteria",
+    "test_plan"
+  ],
+  "projection_kind": "work.issue_scan.source_marker_ref",
+  "projection_only": true,
+  "ready": false,
+  "requirement_ids": [
+    "req_issue_scan_2026_07_06_docs_256_transpara_ai_docs_256_research_issue_and_repo_context_cc56864a0bb3"
+  ],
+  "run_id": "2026-07-06-docs-256",
+  "schema_version": "1",
+  "stage": "research_issue_and_repo_context",
+  "stage_number": 1,
+  "target": {
+    "issue_number": 256,
+    "repository": "transpara-ai/docs"
+  },
+  "task_id": "<task_id>",
+  "verification_refs": {}
+}

@@ -2,6 +2,7 @@ package work
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -14,6 +15,13 @@ const (
 	// IssueScanWorkspace is the stable Work workspace for Civilization
 	// autonomous issue-scan stage tasks.
 	IssueScanWorkspace = "civilization.issue_scan"
+
+	// IssueScanMarkerSchemaVersion is the stable schema version for Work-owned
+	// source-issue marker reference packets.
+	IssueScanMarkerSchemaVersion = "1"
+	// IssueScanMarkerProjectionKind identifies Work source-issue marker refs for
+	// Hive, EventGraph, Site, and fixture consumers.
+	IssueScanMarkerProjectionKind = "work.issue_scan.source_marker_ref"
 
 	defaultIssueScanCell      = "cell_civilization_issue_scan"
 	defaultIssueScanRiskClass = "high"
@@ -219,6 +227,77 @@ type IssueScanStageGateResult struct {
 	Status  TaskStatus
 }
 
+// IssueScanMarkerWorkRef is the stable Work-owned reference packet that Hive,
+// EventGraph, and Site can cite when projecting source GitHub issue marker
+// state. It is derived from replayed Work events; callers must not derive it
+// from GitHub marker comments or labels.
+type IssueScanMarkerWorkRef struct {
+	SchemaVersion          string                      `json:"schema_version"`
+	ProjectionKind         string                      `json:"projection_kind"`
+	CanonicalSource        string                      `json:"canonical_source"`
+	ProjectionOnly         bool                        `json:"projection_only"`
+	RunID                  string                      `json:"run_id"`
+	Target                 IssueScanMarkerTargetRef    `json:"target"`
+	Stage                  IssueScanStageID            `json:"stage"`
+	StageNumber            int                         `json:"stage_number"`
+	Gate                   string                      `json:"gate"`
+	TaskID                 string                      `json:"task_id"`
+	CanonicalTaskID        string                      `json:"canonical_task_id"`
+	FactoryOrderID         string                      `json:"factory_order_id"`
+	RequirementIDs         []string                    `json:"requirement_ids,omitempty"`
+	AcceptanceCriterionIDs []string                    `json:"acceptance_criterion_ids,omitempty"`
+	LifecycleState         TaskStatus                  `json:"lifecycle_state"`
+	Blocked                bool                        `json:"blocked"`
+	Ready                  bool                        `json:"ready"`
+	MissingGates           []string                    `json:"missing_gates,omitempty"`
+	MissingFacts           []string                    `json:"missing_facts,omitempty"`
+	SupersededBy           string                      `json:"superseded_by,omitempty"`
+	LastTransitionEvent    string                      `json:"last_transition_event,omitempty"`
+	LatestBlocker          *IssueScanMarkerBlockerRef  `json:"latest_blocker,omitempty"`
+	LatestGate             *IssueScanMarkerGateRef     `json:"latest_gate,omitempty"`
+	VerificationRefs       IssueScanMarkerEvidenceRefs `json:"verification_refs"`
+	FailureRepairRefs      IssueScanMarkerEvidenceRefs `json:"failure_repair_refs"`
+	SourceIssueRefs        []string                    `json:"source_issue_refs,omitempty"`
+	AuthorityExclusions    []string                    `json:"authority_exclusions"`
+}
+
+// IssueScanMarkerTargetRef is the marker-packet JSON shape for a GitHub issue
+// target. It is separate from IssueScanTarget so persisted event content is not
+// affected by marker JSON field names.
+type IssueScanMarkerTargetRef struct {
+	Repository  string `json:"repository"`
+	IssueNumber int    `json:"issue_number"`
+}
+
+// Ref returns the compact repository issue reference.
+func (t IssueScanMarkerTargetRef) Ref() string {
+	return fmt.Sprintf("%s#%d", strings.TrimSpace(t.Repository), t.IssueNumber)
+}
+
+// IssueScanMarkerBlockerRef is the latest typed blocker Work knows for a stage.
+type IssueScanMarkerBlockerRef struct {
+	Reason       IssueScanBlockerReason `json:"reason"`
+	Detail       string                 `json:"detail,omitempty"`
+	EvidenceRefs []string               `json:"evidence_refs,omitempty"`
+}
+
+// IssueScanMarkerGateRef is the latest typed gate completion Work knows for a stage.
+type IssueScanMarkerGateRef struct {
+	Gate         string   `json:"gate"`
+	EvidenceRefs []string `json:"evidence_refs,omitempty"`
+}
+
+// IssueScanMarkerEvidenceRefs carries stable Work evidence references for
+// marker consumers without asking them to parse Work comments.
+type IssueScanMarkerEvidenceRefs struct {
+	TestCaseIDs      []string `json:"test_case_ids,omitempty"`
+	TestRunIDs       []string `json:"test_run_ids,omitempty"`
+	GateResultIDs    []string `json:"gate_result_ids,omitempty"`
+	FailureIDs       []string `json:"failure_ids,omitempty"`
+	RepairAttemptIDs []string `json:"repair_attempt_ids,omitempty"`
+	WaiverIDs        []string `json:"waiver_ids,omitempty"`
+}
+
 func (r IssueScanStageRecord) Ref() IssueScanStageRef {
 	return IssueScanStageRef{
 		TaskID: r.Task.ID,
@@ -226,6 +305,99 @@ func (r IssueScanStageRecord) Ref() IssueScanStageRef {
 		Target: r.Target,
 		Stage:  r.Stage,
 	}
+}
+
+// ProjectIssueScanMarkerWorkRef returns the Work-owned source-issue marker
+// reference for an issue-scan stage. The packet is projection output only:
+// Work remains the canonical source for lifecycle/readiness/blocking state,
+// and GitHub comments/labels remain derived human-visible markers.
+func (ts *TaskStore) ProjectIssueScanMarkerWorkRef(ref IssueScanStageRef) (IssueScanMarkerWorkRef, error) {
+	if err := ts.validateIssueScanStageRef(ref); err != nil {
+		return IssueScanMarkerWorkRef{}, err
+	}
+	projection, err := ts.ProjectTask(ref.TaskID)
+	if err != nil {
+		return IssueScanMarkerWorkRef{}, err
+	}
+	readiness, err := ts.Readiness(ref.TaskID)
+	if err != nil {
+		return IssueScanMarkerWorkRef{}, err
+	}
+	def, ok := issueScanStageDefinitions[ref.Stage]
+	if !ok {
+		return IssueScanMarkerWorkRef{}, fmt.Errorf("unknown issue-scan stage %q", ref.Stage)
+	}
+	out := IssueScanMarkerWorkRef{
+		SchemaVersion:          IssueScanMarkerSchemaVersion,
+		ProjectionKind:         IssueScanMarkerProjectionKind,
+		CanonicalSource:        "work",
+		ProjectionOnly:         true,
+		RunID:                  strings.TrimSpace(ref.RunID),
+		Target:                 IssueScanMarkerTargetRef{Repository: strings.TrimSpace(ref.Target.Repository), IssueNumber: ref.Target.IssueNumber},
+		Stage:                  ref.Stage,
+		StageNumber:            def.Number,
+		Gate:                   def.Gate,
+		TaskID:                 projection.Task.ID.Value(),
+		CanonicalTaskID:        projection.Linkage.CanonicalTaskID,
+		FactoryOrderID:         projection.Linkage.FactoryOrderID,
+		RequirementIDs:         cloneStrings(projection.Linkage.RequirementIDs),
+		AcceptanceCriterionIDs: cloneStrings(projection.Linkage.AcceptanceCriterionIDs),
+		LifecycleState:         projection.Status,
+		Blocked:                projection.Blocked,
+		Ready:                  projection.Ready,
+		MissingGates:           cloneStrings(readiness.MissingGates),
+		MissingFacts:           cloneStrings(readiness.MissingFacts),
+		SupersededBy:           projection.SupersededBy,
+		VerificationRefs: IssueScanMarkerEvidenceRefs{
+			TestCaseIDs:   cloneStrings(projection.Verification.TestCaseIDs),
+			TestRunIDs:    cloneStrings(projection.Verification.TestRunIDs),
+			GateResultIDs: cloneStrings(projection.Verification.GateResultIDs),
+			WaiverIDs:     cloneStrings(projection.Verification.WaiverIDs),
+		},
+		FailureRepairRefs: IssueScanMarkerEvidenceRefs{
+			FailureIDs:       cloneStrings(projection.FailureRepair.FailureIDs),
+			RepairAttemptIDs: cloneStrings(projection.FailureRepair.RepairAttemptIDs),
+			WaiverIDs:        cloneStrings(projection.FailureRepair.WaiverIDs),
+		},
+		SourceIssueRefs:     sourceIssueRefs(projection.SourceIssueRecords),
+		AuthorityExclusions: issueScanMarkerAuthorityExclusions(),
+	}
+	if projection.LastTransitionEvent != (types.EventID{}) {
+		out.LastTransitionEvent = projection.LastTransitionEvent.Value()
+	}
+	if latest, ok, err := ts.latestIssueScanBlocker(ref.TaskID); err != nil {
+		return IssueScanMarkerWorkRef{}, err
+	} else if ok {
+		out.LatestBlocker = &IssueScanMarkerBlockerRef{
+			Reason:       latest.BlockerReason,
+			Detail:       strings.TrimSpace(latest.Detail),
+			EvidenceRefs: cloneStrings(latest.EvidenceRefs),
+		}
+	}
+	if latest, ok, err := ts.latestIssueScanGate(ref.TaskID); err != nil {
+		return IssueScanMarkerWorkRef{}, err
+	} else if ok {
+		out.LatestGate = &IssueScanMarkerGateRef{
+			Gate:         latest.Gate,
+			EvidenceRefs: cloneStrings(latest.EvidenceRefs),
+		}
+	}
+	return out, nil
+}
+
+// ProjectIssueScanMarkerWorkRefJSON serializes ProjectIssueScanMarkerWorkRef
+// for consumers that need to embed the Work ref packet in an artifact or test
+// fixture.
+func (ts *TaskStore) ProjectIssueScanMarkerWorkRefJSON(ref IssueScanStageRef) (string, error) {
+	packet, err := ts.ProjectIssueScanMarkerWorkRef(ref)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.MarshalIndent(packet, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal issue-scan marker Work ref: %w", err)
+	}
+	return string(encoded), nil
 }
 
 // FindTaskByCanonicalTaskID returns the oldest task with the supplied canonical
@@ -688,6 +860,51 @@ func (ts *TaskStore) validateIssueScanStageRef(ref IssueScanStageRef) error {
 func isIssueScanTaskContent(c TaskCreatedContent) bool {
 	return strings.HasPrefix(strings.TrimSpace(c.CanonicalTaskID), "tsk_issue_scan_") &&
 		strings.HasPrefix(strings.TrimSpace(c.FactoryOrderID), "fo_issue_scan_")
+}
+
+func sourceIssueRefs(records []FactoryOrderSourceIssueRecord) []string {
+	out := make([]string, 0, len(records))
+	seen := make(map[string]bool)
+	for _, record := range records {
+		hadExplicitRef := false
+		for _, ref := range record.SourceRefs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			hadExplicitRef = true
+			if seen[ref] {
+				continue
+			}
+			seen[ref] = true
+			out = append(out, ref)
+		}
+		if !hadExplicitRef {
+			ref := issueSourceRef(record)
+			if ref != "" && !seen[ref] {
+				seen[ref] = true
+				out = append(out, ref)
+			}
+		}
+	}
+	return out
+}
+
+func issueScanMarkerAuthorityExclusions() []string {
+	return []string{
+		"github_issue_markers_are_projection_only",
+		"github_comments_are_not_work_lifecycle_truth",
+		"github_labels_are_not_work_lifecycle_truth",
+		"no_live_github_mutation_authority",
+		"no_eventgraph_production_write",
+		"no_hive_write_action_or_authority_api",
+		"no_deployment",
+		"no_test_001_green",
+		"no_merge_authority",
+		"no_issue_closure",
+		"no_autonomy_increase",
+		"no_value_allocation",
+	}
 }
 
 func validateIssueScanBlocker(blocker IssueScanBlocker) error {
