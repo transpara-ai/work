@@ -1,4 +1,4 @@
-# lovyou.ai — Summary
+# Transpara-AI — Summary
 
 Static resources for the Transpara AI hive on nucbuntu.
 
