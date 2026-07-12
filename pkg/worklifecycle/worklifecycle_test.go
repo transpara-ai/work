@@ -387,6 +387,38 @@ func TestTCTwoAxisPrototypeContractFixture(t *testing.T) {
 		if vector.IAR != "required" || vector.CFAR != "required" {
 			t.Fatalf("%s weakened IAR/CFAR: %s/%s", vector.ID, vector.IAR, vector.CFAR)
 		}
+
+		var evidence GovernanceEvidence
+		switch vector.GovernanceClass {
+		case GovernanceClassProtected:
+			evidence.Kinds = []GovernanceEvidenceKind{EvidenceProtectedAction}
+		case GovernanceClassStandard:
+			evidence.Kinds = []GovernanceEvidenceKind{EvidenceGovernedStandard}
+		case GovernanceClassPrototype:
+			evidence.Kinds = []GovernanceEvidenceKind{EvidenceNonGovernedPrototype}
+			evidence.PrototypeReason = vector.PrototypeReason
+		case GovernanceClassUnknown:
+			evidence.Uncertain = true
+		default:
+			t.Fatalf("%s has unsupported governance class %s", vector.ID, vector.GovernanceClass)
+		}
+		classified := ClassifyGovernance(evidence)
+		runtimeBlocked := classified == GovernanceClassUnknown
+		if runtimeBlocked != vector.Blocking {
+			t.Fatalf("%s runtime blocking=%v (class=%s), want %v",
+				vector.ID, runtimeBlocked, classified, vector.Blocking)
+		}
+		state := mustState(t, unitStateFields{
+			Macro: MacroDesigning,
+			Class: classified,
+			Gates: defaultGateRecords(),
+		})
+		runtimeOptional := skipAllowed(state, GateIADA, vector.PrototypeReason) &&
+			skipAllowed(state, GateCFADA, vector.PrototypeReason)
+		declaredOptional := vector.IADA == "optional" && vector.CFADA == "optional"
+		if runtimeOptional != declaredOptional {
+			t.Fatalf("%s runtime optional=%v, want %v", vector.ID, runtimeOptional, declaredOptional)
+		}
 		_ = vector.Maturity // maturity is evidence output only; it never enters allowed.
 	}
 }

@@ -16,7 +16,7 @@
   "canonical_records": [
     "pkg/worklifecycle/types.go@759d2ca",
     "FO-WORK-93-PROTOTYPE-GATE-CONTRACT v0.2.0 at blob 436b20b7bb6f20e00ed7dcf7be936a564d8f091d",
-    "transpara-ai/docs gate standard 4.4.0 at docs PR #274 blob 419ab7339863923dd1f3bc4e814d9f64f29c08ba",
+    "transpara-ai/docs gate standard 4.4.0 at docs PR #274 repaired head cb39f1e6e6066e7f93cde8632bd1caa72c871948 blob c9975c6d5bf703e58dd28ecbe9f7cf91b5ae6b96",
     "local Hive Postgres read-only authority.skipped inventory: 0 persisted occurrences on 2026-07-12"
   ],
   "result": "pass",
