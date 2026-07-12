@@ -1,0 +1,54 @@
+{
+  "gate": "IADA",
+  "packet_id": "WORK-PROTOTYPE-GATE-CONTRACT-DESIGN",
+  "packet_path": "docs/designs/work-prototype-gate-contract-v0.1.0.md",
+  "packet_blob_sha": "9991d994895ba9f4ec7083b523985eab6dda11be",
+  "packet_version": "0.1.1",
+  "repo": "transpara-ai/work",
+  "author_family": "codex",
+  "source_records": [
+    "https://github.com/transpara-ai/platform/issues/62",
+    "https://github.com/transpara-ai/platform/issues/63",
+    "https://github.com/transpara-ai/platform/issues/66",
+    "https://github.com/transpara-ai/docs/issues/272",
+    "https://github.com/transpara-ai/work/issues/93"
+  ],
+  "canonical_records": [
+    "pkg/worklifecycle/types.go@759d2ca",
+    "transpara-ai/docs gate standard 4.3.0 pending docs#272 reconciliation"
+  ],
+  "result": "pass",
+  "blocker_count": 0,
+  "findings": [
+    {
+      "id": "IADA-W93-1",
+      "severity": "major",
+      "finding": "The serialized optional policy label is easy to confuse with a discretionary bypass even though transitions deny ordinary-work skips.",
+      "disposition": "accepted_fixed",
+      "evidence": "The design preserves wire compatibility, documents class-conditional semantics, and adds complete decision-vector tests."
+    },
+    {
+      "id": "IADA-W93-2",
+      "severity": "major",
+      "finding": "The current prototype transition leaves IADA failed rather than explicitly omitted, making projection evidence ambiguous.",
+      "disposition": "accepted_fixed",
+      "evidence": "Design v0.1.1 selects one atomic IADA/CFADA skipped projection and requires golden/replay/Hive compatibility proof."
+    },
+    {
+      "id": "IADA-W93-3",
+      "severity": "blocker",
+      "finding": "A maturity flag entering skipAllowed would convert birth maturity into a governance bypass.",
+      "disposition": "accepted_fixed",
+      "evidence": "The design keeps maturity out of runtime exemption logic and tests both maturities against each governance class."
+    }
+  ],
+  "residual_risks": [
+    "Changing IADA projection from failed to skipped may reveal an undocumented consumer assumption and must return to HDR if so.",
+    "The copied contract fixture requires strict version/hash coordination to avoid drift.",
+    "Hive compile/consumer verification may be necessary even though Hive source changes are out of scope."
+  ],
+  "non_authorizations": [
+    "No implementation before HDR.",
+    "No reviewer runtime, Hive mutation, EventGraph write, deploy, merge, or issue closure."
+  ]
+}
