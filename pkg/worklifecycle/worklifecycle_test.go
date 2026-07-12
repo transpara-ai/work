@@ -1,13 +1,19 @@
 package worklifecycle
 
 import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+const prototypeContractFixtureSHA256 = "42801a522730b4578b26e91c4e8fc4c537e8a916b8fcccc5eda131c259409910"
 
 var (
 	headA = Head("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -59,8 +65,11 @@ func TestTCConstructionInvariant(t *testing.T) {
 	}{
 		{name: "default", gates: defaultGateRecords()},
 		{name: "cfar-passed", gates: withGate(defaultGateRecords(), GateCFAR, gateRecord(GatePolicyRequired, GateStatePassed, false, ""))},
-		{name: "cfada-skipped", gates: withGate(defaultGateRecords(), GateCFADA, gateRecord(GatePolicyOptional, GateStateFailed, true, "prototype"))},
+		{name: "design-gates-skipped", gates: withGate(withGate(defaultGateRecords(), GateIADA, gateRecord(GatePolicyOptional, GateStateFailed, true, "prototype")), GateCFADA, gateRecord(GatePolicyOptional, GateStateFailed, true, "prototype"))},
+		{name: "iada-only-skipped-illegal", gates: withGate(defaultGateRecords(), GateIADA, gateRecord(GatePolicyOptional, GateStateFailed, true, "prototype"))},
+		{name: "cfada-only-skipped-illegal", gates: withGate(defaultGateRecords(), GateCFADA, gateRecord(GatePolicyOptional, GateStateFailed, true, "prototype"))},
 		{name: "authorize-skipped", gates: withGate(defaultGateRecords(), GateAuthorize, gateRecord(GatePolicyOptional, GateStateFailed, true, "prototype"))},
+		{name: "iar-skipped-illegal", gates: withGate(defaultGateRecords(), GateIAR, gateRecord(GatePolicyOptional, GateStateFailed, true, "never"))},
 		{name: "cfar-skipped-illegal", gates: withGate(defaultGateRecords(), GateCFAR, gateRecord(GatePolicyRequired, GateStateFailed, true, "never"))},
 		{name: "skipped-and-passed-illegal", gates: withGate(defaultGateRecords(), GateCFADA, gateRecord(GatePolicyOptional, GateStatePassed, true, "bad"))},
 	}
@@ -132,7 +141,7 @@ func TestTCFullDomainReducer(t *testing.T) {
 
 	for _, kind := range []EventKind{
 		EventDesignOpened, EventDesignSubmitted, EventCFADASkipped, EventCFADAPassed,
-		EventCFADABlocked, EventAuthorityGranted, EventAuthorityDenied, EventAuthoritySkipped,
+		EventCFADABlocked, EventAuthorityGranted, EventAuthorityDenied,
 		EventExecSelfReviewed, EventExecVerified, EventExecCertified, EventCFARPassed,
 		EventCFARBlocked, EventMerged, EventBlockedRaised, EventBlockedCleared, EventSuperseded,
 	} {
@@ -207,26 +216,22 @@ func TestTCSkipNotPass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CFADA skip should be allowed for prototype class: %v", err)
 	}
-	record, _ := skipped.Gate(GateCFADA)
-	if record.State() != GateStateFailed || record.Projection() != GateProjectionSkipped {
-		t.Fatalf("CFADA skipped gate state/projection=%s/%s, want failed/skipped", record.State(), record.Projection())
-	}
-	if record.Projection() == GateProjectionPassed {
-		t.Fatal("skipped gate projected as passed")
+	for _, gate := range []Gate{GateIADA, GateCFADA} {
+		record, _ := skipped.Gate(gate)
+		if record.State() != GateStateFailed || record.Projection() != GateProjectionSkipped {
+			t.Fatalf("%s skipped gate state/projection=%s/%s, want failed/skipped", gate, record.State(), record.Projection())
+		}
+		reason, ok := record.SkipReason()
+		if !ok || reason != "prototype-only" {
+			t.Fatalf("%s skip reason=%q ok=%v, want prototype-only true", gate, reason, ok)
+		}
+		if record.Projection() == GateProjectionPassed {
+			t.Fatalf("%s skipped gate projected as passed", gate)
+		}
 	}
 
 	awaiting := mustState(t, unitStateFields{Macro: MacroAwaitingAuth, Class: GovernanceClassPrototype, Gates: defaultGateRecords()})
-	authSkipped, err := Apply(awaiting, AuthoritySkipped("prototype-only"))
-	if err != nil {
-		t.Fatalf("authority skip should be allowed for prototype class: %v", err)
-	}
-	record, _ = authSkipped.Gate(GateAuthorize)
-	if record.State() != GateStateFailed || record.Projection() != GateProjectionSkipped {
-		t.Fatalf("authorize skipped gate state/projection=%s/%s, want failed/skipped", record.State(), record.Projection())
-	}
-	if ProtectedActionAuthorized(authSkipped) {
-		t.Fatal("skipped authorize gate authorized protected action")
-	}
+	assertApplyDenied(t, awaiting, AuthoritySkipped("prototype-only"))
 }
 
 func TestTCClassGatedSkip(t *testing.T) {
@@ -241,7 +246,195 @@ func TestTCClassGatedSkip(t *testing.T) {
 	designing := mustState(t, unitStateFields{Macro: MacroDesigning, Class: GovernanceClassPrototype, Gates: defaultGateRecords()})
 	assertApplyAllowed(t, designing, CFADASkipped("recorded reason"))
 	awaiting := mustState(t, unitStateFields{Macro: MacroAwaitingAuth, Class: GovernanceClassPrototype, Gates: defaultGateRecords()})
-	assertApplyAllowed(t, awaiting, AuthoritySkipped("recorded reason"))
+	assertApplyDenied(t, awaiting, AuthoritySkipped("recorded reason"))
+}
+
+func TestTCPrototypeSkipIsDesignGatesOnly(t *testing.T) {
+	state := mustState(t, unitStateFields{
+		Macro: MacroDesigning,
+		Class: GovernanceClassPrototype,
+		Gates: defaultGateRecords(),
+	})
+	for _, gate := range []Gate{GateAuthorize, GateIAR, GateCFAR} {
+		if skipAllowed(state, gate, "bounded reason") {
+			t.Fatalf("skipAllowed admitted non-design gate %s", gate)
+		}
+	}
+	for _, gate := range []Gate{GateIADA, GateCFADA} {
+		if !skipAllowed(state, gate, "bounded reason") {
+			t.Fatalf("skipAllowed rejected design gate %s", gate)
+		}
+	}
+}
+
+func TestTCPrototypeSkipCannotErasePassedIADA(t *testing.T) {
+	state, err := Fold(prototypeEvidence(), []Event{
+		DesignOpened(),
+		DesignSubmitted(PassingInternalResult()),
+		CFADABlocked(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	iada, _ := state.Gate(GateIADA)
+	if iada.Projection() != GateProjectionPassed {
+		t.Fatalf("IADA projection=%s, want passed", iada.Projection())
+	}
+	assertApplyDenied(t, state, CFADASkipped("cannot erase passed audit"))
+}
+
+func TestTCPrototypeSkipReplayAndReasonInvariant(t *testing.T) {
+	events := []Event{DesignOpened(), CFADASkipped("bounded experiment")}
+	first, err := Fold(prototypeEvidence(), events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Fold(prototypeEvidence(), events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Equal(second) {
+		t.Fatal("identical prototype skip streams did not replay identically")
+	}
+
+	gates := defaultGateRecords()
+	gates[GateIADA] = gateRecord(GatePolicyOptional, GateStateFailed, true, "reason-a")
+	gates[GateCFADA] = gateRecord(GatePolicyOptional, GateStateFailed, true, "reason-b")
+	if _, err := newUnitState(unitStateFields{
+		Macro: MacroAwaitingAuth,
+		Class: GovernanceClassPrototype,
+		Gates: gates,
+	}); err == nil || !strings.Contains(err.Error(), "reasons must match") {
+		t.Fatalf("mismatched design skip reasons error=%v", err)
+	}
+}
+
+func TestTCTwoAxisPrototypeContractFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/two-axis-prototype-gates.v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != prototypeContractFixtureSHA256 {
+		t.Fatalf("prototype contract fixture sha256=%s, want %s", got, prototypeContractFixtureSHA256)
+	}
+	var fixture struct {
+		SchemaVersion    string `json:"schema_version"`
+		PlatformContract struct {
+			SchemaVersion   string `json:"schema_version"`
+			ContractVersion string `json:"contract_version"`
+			SourceSHA256    string `json:"source_sha256"`
+		} `json:"platform_contract"`
+		Activation struct {
+			RequiredEvidence         string `json:"required_evidence"`
+			SourcePullRequest        int    `json:"source_pull_request"`
+			FailClosedBeforeEvidence bool   `json:"fail_closed_before_evidence"`
+		} `json:"activation"`
+		DocsStandard struct {
+			Version       string `json:"version"`
+			SourceBlobSHA string `json:"source_blob_sha"`
+		} `json:"docs_standard"`
+		DecisionVectors []struct {
+			ID              string          `json:"id"`
+			Maturity        string          `json:"maturity"`
+			GovernanceClass GovernanceClass `json:"governance_class"`
+			PrototypeReason string          `json:"prototype_reason"`
+			IADA            string          `json:"iada"`
+			CFADA           string          `json:"cfada"`
+			IAR             string          `json:"iar"`
+			CFAR            string          `json:"cfar"`
+			Blocking        bool            `json:"blocking"`
+		} `json:"decision_vectors"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.SchemaVersion != "work-two-axis-prototype-projection/v1" ||
+		fixture.PlatformContract.SchemaVersion != "two-axis-prototype-gates/v1" ||
+		fixture.PlatformContract.ContractVersion != "1.0.0" ||
+		fixture.PlatformContract.SourceSHA256 != "e5b838a3c60efc9fdc1c23c8e3a908d58f1774af95b653813f6b031500d6ec28" ||
+		fixture.Activation.RequiredEvidence != "docs_standard_canonical_on_default_branch" ||
+		fixture.Activation.SourcePullRequest != 274 ||
+		!fixture.Activation.FailClosedBeforeEvidence ||
+		fixture.DocsStandard.Version != "4.4.0" ||
+		fixture.DocsStandard.SourceBlobSHA != "c9975c6d5bf703e58dd28ecbe9f7cf91b5ae6b96" {
+		t.Fatalf("prototype contract source binding drifted: %#v", fixture)
+	}
+	if len(fixture.DecisionVectors) != 4 {
+		t.Fatalf("decision vector count=%d, want 4", len(fixture.DecisionVectors))
+	}
+	expected := map[string]struct {
+		iada, cfada string
+		blocking    bool
+	}{
+		"prototype-maturity-protected":          {"required", "required", false},
+		"established-non-governed-with-reason":  {"optional", "optional", false},
+		"prototype-non-governed-without-reason": {"blocked", "blocked", true},
+		"prototype-unknown":                     {"blocked", "blocked", true},
+	}
+	for _, vector := range fixture.DecisionVectors {
+		want, ok := expected[vector.ID]
+		if !ok {
+			t.Fatalf("unexpected decision vector %s", vector.ID)
+		}
+		if vector.IADA != want.iada || vector.CFADA != want.cfada || vector.Blocking != want.blocking {
+			t.Fatalf("%s outcomes=%s/%s blocking=%v, want %s/%s blocking=%v",
+				vector.ID, vector.IADA, vector.CFADA, vector.Blocking, want.iada, want.cfada, want.blocking)
+		}
+		allowed := vector.GovernanceClass == GovernanceClassPrototype && strings.TrimSpace(vector.PrototypeReason) != ""
+		if got := vector.IADA == "optional" && vector.CFADA == "optional"; got != allowed {
+			t.Fatalf("%s design skip=%v, want %v", vector.ID, got, allowed)
+		}
+		if vector.IAR != "required" || vector.CFAR != "required" {
+			t.Fatalf("%s weakened IAR/CFAR: %s/%s", vector.ID, vector.IAR, vector.CFAR)
+		}
+
+		var evidence GovernanceEvidence
+		switch vector.GovernanceClass {
+		case GovernanceClassProtected:
+			evidence.Kinds = []GovernanceEvidenceKind{EvidenceProtectedAction}
+		case GovernanceClassStandard:
+			evidence.Kinds = []GovernanceEvidenceKind{EvidenceGovernedStandard}
+		case GovernanceClassPrototype:
+			evidence.Kinds = []GovernanceEvidenceKind{EvidenceNonGovernedPrototype}
+			evidence.PrototypeReason = vector.PrototypeReason
+		case GovernanceClassUnknown:
+			evidence.Uncertain = true
+		default:
+			t.Fatalf("%s has unsupported governance class %s", vector.ID, vector.GovernanceClass)
+		}
+		classified := ClassifyGovernance(evidence)
+		runtimeBlocked := classified == GovernanceClassUnknown
+		if runtimeBlocked != vector.Blocking {
+			t.Fatalf("%s runtime blocking=%v (class=%s), want %v",
+				vector.ID, runtimeBlocked, classified, vector.Blocking)
+		}
+		state := mustState(t, unitStateFields{
+			Macro: MacroDesigning,
+			Class: classified,
+			Gates: defaultGateRecords(),
+		})
+		runtimeOptional := skipAllowed(state, GateIADA, vector.PrototypeReason) &&
+			skipAllowed(state, GateCFADA, vector.PrototypeReason)
+		declaredOptional := vector.IADA == "optional" && vector.CFADA == "optional"
+		if runtimeOptional != declaredOptional {
+			t.Fatalf("%s runtime optional=%v, want %v", vector.ID, runtimeOptional, declaredOptional)
+		}
+		_ = vector.Maturity // maturity is evidence output only; it never enters allowed.
+	}
+}
+
+func TestTCRetiredAuthoritySkipFailsClosedAtFoldBoundary(t *testing.T) {
+	events := []Event{
+		DesignOpened(),
+		CFADASkipped("bounded experiment"),
+		AuthoritySkipped("historical omission"),
+	}
+	for i := 0; i < 2; i++ {
+		_, err := Fold(prototypeEvidence(), events)
+		if err == nil || !strings.Contains(err.Error(), "authority.skipped") {
+			t.Fatalf("Fold retired authority.skip attempt %d error=%v", i, err)
+		}
+	}
 }
 
 func TestTCClassDerivation(t *testing.T) {
@@ -364,16 +557,7 @@ func TestTCAuthTypedGrant(t *testing.T) {
 	}
 
 	prototype := mustState(t, unitStateFields{Macro: MacroAwaitingAuth, Class: GovernanceClassPrototype, Gates: defaultGateRecords()})
-	skipped, err := Apply(prototype, AuthoritySkipped("prototype lane"))
-	if err != nil {
-		t.Fatalf("prototype skip rejected: %v", err)
-	}
-	if skipped.Macro() != MacroCoding {
-		t.Fatalf("prototype skip macro=%s, want Coding", skipped.Macro())
-	}
-	if ProtectedActionAuthorized(skipped) {
-		t.Fatal("authorize skip granted protected action authority")
-	}
+	assertApplyDenied(t, prototype, AuthoritySkipped("prototype lane"))
 	assertApplyDenied(t, awaiting, AuthoritySkipped("governed skip denied"))
 }
 
@@ -544,8 +728,7 @@ func validDomainStates(t *testing.T) []UnitState {
 		defaultGateRecords(),
 		withGate(defaultGateRecords(), GateCFAR, gateRecord(GatePolicyRequired, GateStatePassed, false, "")),
 		withGate(withGate(defaultGateRecords(), GateCFAR, gateRecord(GatePolicyRequired, GateStatePassed, false, "")), GateAuthorize, gateRecord(GatePolicyOptional, GateStatePassed, false, "")),
-		withGate(defaultGateRecords(), GateCFADA, gateRecord(GatePolicyOptional, GateStateFailed, true, "prototype")),
-		withGate(defaultGateRecords(), GateAuthorize, gateRecord(GatePolicyOptional, GateStateFailed, true, "prototype")),
+		withGate(withGate(defaultGateRecords(), GateIADA, gateRecord(GatePolicyOptional, GateStateFailed, true, "prototype")), GateCFADA, gateRecord(GatePolicyOptional, GateStateFailed, true, "prototype")),
 	}
 
 	var states []UnitState
@@ -658,7 +841,7 @@ func constructibleByInvariant(fields unitStateFields) bool {
 	}
 	for gate, record := range mergedGates(fields.Gates) {
 		if record.Projection() == GateProjectionSkipped {
-			if gate == GateCFAR || class != GovernanceClassPrototype || record.State() != GateStateFailed {
+			if (gate != GateIADA && gate != GateCFADA) || class != GovernanceClassPrototype || record.State() != GateStateFailed {
 				return false
 			}
 			if reason, ok := record.SkipReason(); !ok || strings.TrimSpace(reason) == "" {
@@ -666,6 +849,18 @@ func constructibleByInvariant(fields unitStateFields) bool {
 			}
 		}
 		if record.State() == GateStatePassed && record.Projection() == GateProjectionSkipped {
+			return false
+		}
+	}
+	merged := mergedGates(fields.Gates)
+	iada, cfada := merged[GateIADA], merged[GateCFADA]
+	if (iada.Projection() == GateProjectionSkipped) != (cfada.Projection() == GateProjectionSkipped) {
+		return false
+	}
+	if iada.Projection() == GateProjectionSkipped {
+		iadaReason, _ := iada.SkipReason()
+		cfadaReason, _ := cfada.SkipReason()
+		if iadaReason != cfadaReason {
 			return false
 		}
 	}
@@ -716,6 +911,13 @@ func assertApplyAllowedState(t *testing.T, state UnitState, ev Event, allowed bo
 
 func protectedEvidence() GovernanceEvidence {
 	return GovernanceEvidence{Kinds: []GovernanceEvidenceKind{EvidenceProtectedAction}}
+}
+
+func prototypeEvidence() GovernanceEvidence {
+	return GovernanceEvidence{
+		Kinds:           []GovernanceEvidenceKind{EvidenceNonGovernedPrototype},
+		PrototypeReason: "bounded experiment",
+	}
 }
 
 func withGate(in map[Gate]GateRecord, gate Gate, record GateRecord) map[Gate]GateRecord {

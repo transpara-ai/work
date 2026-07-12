@@ -63,7 +63,10 @@ const (
 type GatePolicy string
 
 const (
-	GatePolicyUnknown  GatePolicy = "unknown"
+	GatePolicyUnknown GatePolicy = "unknown"
+	// GatePolicyOptional is retained for wire compatibility. It never means a
+	// caller may skip arbitrarily: contract 1.0.0 permits skipped projections
+	// only for IADA/CFADA on a reason-bearing non_governed_prototype.
 	GatePolicyOptional GatePolicy = "optional"
 	GatePolicyRequired GatePolicy = "required"
 )
@@ -363,12 +366,16 @@ var transitionTable = []transitionRow{
 	{
 		name: "Designing/cfada.skipped/AwaitingAuth",
 		apply: func(state UnitState, event Event) (UnitState, bool) {
-			if state.macro != MacroDesigning || state.hasBlocked || event.kind != EventCFADASkipped || !skipAllowed(state, GateCFADA, event.payload) {
+			iada, iadaOK := state.Gate(GateIADA)
+			if state.macro != MacroDesigning || state.hasBlocked || event.kind != EventCFADASkipped ||
+				!skipAllowed(state, GateCFADA, event.payload) || !iadaOK ||
+				iada.Projection() != GateProjectionFailed {
 				return UnitState{}, false
 			}
 			reason, _ := skipReason(event.payload)
 			return mutate(state, func(fields *unitStateFields) {
 				fields.Macro = MacroAwaitingAuth
+				fields.Gates[GateIADA] = gateRecord(GatePolicyOptional, GateStateFailed, true, reason)
 				fields.Gates[GateCFADA] = gateRecord(GatePolicyOptional, GateStateFailed, true, reason)
 			})
 		},
@@ -419,21 +426,6 @@ var transitionTable = []transitionRow{
 			}
 			return mutate(state, func(fields *unitStateFields) {
 				fields.Macro = MacroDenied
-			})
-		},
-	},
-	{
-		name: "AwaitingAuth/authority.skipped/Coding",
-		apply: func(state UnitState, event Event) (UnitState, bool) {
-			if state.macro != MacroAwaitingAuth || state.hasBlocked || event.kind != EventAuthoritySkipped || !skipAllowed(state, GateAuthorize, event.payload) {
-				return UnitState{}, false
-			}
-			reason, _ := skipReason(event.payload)
-			exec := ExecStateImplementing
-			return mutate(state, func(fields *unitStateFields) {
-				fields.Macro = MacroCoding
-				fields.Exec = &exec
-				fields.Gates[GateAuthorize] = gateRecord(GatePolicyOptional, GateStateFailed, true, reason)
 			})
 		},
 	},
@@ -616,6 +608,10 @@ func AuthorityGranted(decision AuthorityDecision) Event {
 	return Event{kind: EventAuthorityGranted, payload: decision}
 }
 func AuthorityDenied() Event { return Event{kind: EventAuthorityDenied} }
+
+// AuthoritySkipped is retained as a wire event constructor so historical
+// streams remain recognizable. Contract 1.0.0 defines no legal transition for
+// it; replay fails closed instead of inventing Human Design Review approval.
 func AuthoritySkipped(reason string) Event {
 	return Event{kind: EventAuthoritySkipped, payload: strings.TrimSpace(reason)}
 }
@@ -852,8 +848,8 @@ func validateGates(class GovernanceClass, macro MacroState, hasReviewedHead bool
 			return fmt.Errorf("gate %s policy must remain optional in SP0", gate)
 		}
 		if record.skipped {
-			if gate == GateCFAR {
-				return fmt.Errorf("CFAR cannot be skipped")
+			if gate != GateIADA && gate != GateCFADA {
+				return fmt.Errorf("gate %s cannot be skipped", gate)
 			}
 			if class != GovernanceClassPrototype {
 				return fmt.Errorf("gate %s skip denied for class %s", gate, class)
@@ -862,6 +858,14 @@ func validateGates(class GovernanceClass, macro MacroState, hasReviewedHead bool
 				return fmt.Errorf("invalid skipped gate record for %s", gate)
 			}
 		}
+	}
+	iada := gates[GateIADA]
+	cfada := gates[GateCFADA]
+	if iada.skipped != cfada.skipped {
+		return fmt.Errorf("IADA and CFADA prototype skip projections must be atomic")
+	}
+	if iada.skipped && iada.skipReason != cfada.skipReason {
+		return fmt.Errorf("IADA and CFADA prototype skip reasons must match")
 	}
 	if macro == MacroReady {
 		cfar := gates[GateCFAR]
@@ -997,7 +1001,7 @@ func skipAllowed(state UnitState, gate Gate, payload any) bool {
 	if !ok || strings.TrimSpace(reason) == "" {
 		return false
 	}
-	if state.class != GovernanceClassPrototype || gate == GateCFAR {
+	if state.class != GovernanceClassPrototype || (gate != GateIADA && gate != GateCFADA) {
 		return false
 	}
 	record, ok := state.Gate(gate)

@@ -1,0 +1,85 @@
+{
+  "gate": "IADA",
+  "packet_id": "WORK-PROTOTYPE-GATE-CONTRACT-DESIGN",
+  "packet_path": "docs/designs/work-prototype-gate-contract-v0.2.1.md",
+  "packet_blob_sha": "4db199ec819acc077e285cd1243c88cfeb4a1fc9",
+  "packet_version": "0.2.1",
+  "repo": "transpara-ai/work",
+  "author_family": "codex",
+  "source_records": [
+    "https://github.com/transpara-ai/platform/issues/62",
+    "https://github.com/transpara-ai/platform/issues/63",
+    "https://github.com/transpara-ai/platform/issues/66",
+    "https://github.com/transpara-ai/docs/issues/272",
+    "https://github.com/transpara-ai/work/issues/93"
+  ],
+  "canonical_records": [
+    "pkg/worklifecycle/types.go@759d2ca",
+    "FO-WORK-93-PROTOTYPE-GATE-CONTRACT v0.2.0 at blob 436b20b7bb6f20e00ed7dcf7be936a564d8f091d",
+    "transpara-ai/docs gate standard 4.4.0 at docs PR #274 repaired head cb39f1e6e6066e7f93cde8632bd1caa72c871948 blob c9975c6d5bf703e58dd28ecbe9f7cf91b5ae6b96",
+    "local Hive Postgres read-only authority.skipped inventory: 0 persisted occurrences on 2026-07-12"
+  ],
+  "result": "pass",
+  "blocker_count": 0,
+  "findings": [
+    {
+      "id": "IADA-W93-1",
+      "severity": "major",
+      "finding": "The serialized optional policy label is easy to confuse with a discretionary bypass even though transitions deny ordinary-work skips.",
+      "disposition": "accepted_fixed",
+      "evidence": "The design preserves wire compatibility, documents class-conditional semantics, and adds complete decision-vector tests."
+    },
+    {
+      "id": "IADA-W93-2",
+      "severity": "major",
+      "finding": "The current prototype transition leaves IADA failed rather than explicitly omitted, making projection evidence ambiguous.",
+      "disposition": "accepted_fixed",
+      "evidence": "Design v0.2.1 retains one atomic IADA/CFADA skipped projection and requires golden/replay/Hive compatibility proof."
+    },
+    {
+      "id": "IADA-W93-3",
+      "severity": "major",
+      "finding": "A maturity flag entering skipAllowed would convert birth maturity into a governance bypass.",
+      "disposition": "accepted_fixed",
+      "evidence": "The design keeps maturity out of runtime exemption logic and tests both maturities against each governance class."
+    },
+    {
+      "id": "IADA-W93-4",
+      "severity": "major",
+      "finding": "The legacy prototype authority.skip transition would waive Human Design Review even though the adopted contract makes only IADA and CFADA optional.",
+      "disposition": "accepted_fixed",
+      "evidence": "Design v0.2.1 removes authority.skip from legal transitions, restricts skipped records to IADA/CFADA, and requires fail-closed replay/migration handling."
+    },
+    {
+      "id": "IADA-W93-5",
+      "severity": "major",
+      "finding": "D6 originally exceeded the Factory Order and the FO/design filenames did not match their v0.2.0 identities.",
+      "disposition": "accepted_fixed",
+      "evidence": "FO v0.2.0 now orders HDR/IAR/CFAR non-skippability, fail-closed authority.skipped replay, and Hive verification; both artifacts use v0.2.0 filenames/frontmatter."
+    },
+    {
+      "id": "IADA-W93-6",
+      "severity": "major",
+      "finding": "Historical authority.skipped events could make the transition retirement an unbounded replay regression.",
+      "disposition": "accepted_fixed",
+      "evidence": "The local canonical event store contains zero authority.skipped occurrences; other deployments must inventory before adoption and any occurrence requires an explicit migration decision."
+    },
+    {
+      "id": "IADA-W93-7",
+      "severity": "major",
+      "finding": "Hive consumer validation was conditional despite a changed IADA projection.",
+      "disposition": "accepted_fixed",
+      "evidence": "Design T14 and the acceptance predicate require a separate implementation-stage, non-mutating Hive compile/consumer assertion outside Work CI."
+    }
+  ],
+  "residual_risks": [
+    "Changing IADA projection from failed to skipped may reveal an undocumented external consumer assumption even after the mandatory local Hive check.",
+    "External stores were not inventoried; any deployment with authority.skipped occurrences needs an explicit migration design before adoption.",
+    "The copied contract fixture requires strict version/hash coordination to avoid drift.",
+    "Hive compile/consumer verification may be necessary even though Hive source changes are out of scope."
+  ],
+  "non_authorizations": [
+    "No implementation before HDR.",
+    "No reviewer runtime, Hive mutation, EventGraph write, deploy, merge, or issue closure."
+  ]
+}
