@@ -1,0 +1,66 @@
+{
+  "schema_version": "work-two-axis-prototype-projection/v1",
+  "platform_contract": {
+    "schema_version": "two-axis-prototype-gates/v1",
+    "contract_version": "1.0.0",
+    "repository": "transpara-ai/platform",
+    "pull_request": 68,
+    "source_path": "tools/transpara-governance-gates/contracts/two-axis-prototype-gates.v1.json",
+    "source_sha256": "1724ecaf487c7b6d4ab2437f545168254cd86f53b09fd78a757bd5458f0cf9a6"
+  },
+  "docs_standard": {
+    "artifact_id": "DF-DEV-ARC-CFAR-CFADA-GATE-STANDARD",
+    "version": "4.4.0",
+    "repository": "transpara-ai/docs",
+    "pull_request": 274,
+    "source_commit": "0f043f26d38dcbd450d20001c7d92eac3b306f74",
+    "source_path": "dark-factory/v4.0/07-cfar-cfada-dev-arc-gate-standard-v4.0.md",
+    "source_blob_sha": "419ab7339863923dd1f3bc4e814d9f64f29c08ba"
+  },
+  "decision_vectors": [
+    {
+      "id": "prototype-maturity-protected",
+      "maturity": "prototype",
+      "governance_class": "governed_protected",
+      "prototype_reason": "exploratory",
+      "iada": "required",
+      "cfada": "required",
+      "iar": "required",
+      "cfar": "required",
+      "blocking": false
+    },
+    {
+      "id": "established-non-governed-with-reason",
+      "maturity": "established",
+      "governance_class": "non_governed_prototype",
+      "prototype_reason": "bounded local experiment with no governed trigger",
+      "iada": "optional",
+      "cfada": "optional",
+      "iar": "required",
+      "cfar": "required",
+      "blocking": false
+    },
+    {
+      "id": "prototype-non-governed-without-reason",
+      "maturity": "prototype",
+      "governance_class": "non_governed_prototype",
+      "prototype_reason": "",
+      "iada": "blocked",
+      "cfada": "blocked",
+      "iar": "required",
+      "cfar": "required",
+      "blocking": true
+    },
+    {
+      "id": "prototype-unknown",
+      "maturity": "prototype",
+      "governance_class": "unknown",
+      "prototype_reason": "",
+      "iada": "blocked",
+      "cfada": "blocked",
+      "iar": "required",
+      "cfar": "required",
+      "blocking": true
+    }
+  ]
+}
