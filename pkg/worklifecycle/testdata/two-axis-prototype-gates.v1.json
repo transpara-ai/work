@@ -6,7 +6,7 @@
     "repository": "transpara-ai/platform",
     "pull_request": 68,
     "source_path": "tools/transpara-governance-gates/contracts/two-axis-prototype-gates.v1.json",
-    "source_sha256": "bc021d916c5026305d92f9b19fcff61389215e09d0822ae2fd402ae06f958950"
+    "source_sha256": "e5b838a3c60efc9fdc1c23c8e3a908d58f1774af95b653813f6b031500d6ec28"
   },
   "activation": {
     "required_evidence": "docs_standard_canonical_on_default_branch",
@@ -18,9 +18,9 @@
     "version": "4.4.0",
     "repository": "transpara-ai/docs",
     "pull_request": 274,
-    "source_commit": "0f043f26d38dcbd450d20001c7d92eac3b306f74",
+    "source_commit": "cb39f1e6e6066e7f93cde8632bd1caa72c871948",
     "source_path": "dark-factory/v4.0/07-cfar-cfada-dev-arc-gate-standard-v4.0.md",
-    "source_blob_sha": "419ab7339863923dd1f3bc4e814d9f64f29c08ba"
+    "source_blob_sha": "c9975c6d5bf703e58dd28ecbe9f7cf91b5ae6b96"
   },
   "decision_vectors": [
     {

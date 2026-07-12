@@ -25,10 +25,10 @@ canonical: false
 
 Work vendors Platform contract `two-axis-prototype-gates/v1` version `1.0.0`
 at SHA-256
-`bc021d916c5026305d92f9b19fcff61389215e09d0822ae2fd402ae06f958950`.
+`e5b838a3c60efc9fdc1c23c8e3a908d58f1774af95b653813f6b031500d6ec28`.
 That contract pins Docs standard 4.4.0 at blob
-`419ab7339863923dd1f3bc4e814d9f64f29c08ba`. The Work fixture has SHA-256
-`2fa4f79d5db9359aa962f6a2aaacee856d9c864f4b8d0aa1f7cde2ad086d80a6`.
+`c9975c6d5bf703e58dd28ecbe9f7cf91b5ae6b96`. The Work fixture has SHA-256
+`42801a522730b4578b26e91c4e8fc4c537e8a916b8fcccc5eda131c259409910`.
 
 Implemented behavior:
 

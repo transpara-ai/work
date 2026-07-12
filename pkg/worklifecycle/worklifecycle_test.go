@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-const prototypeContractFixtureSHA256 = "2fa4f79d5db9359aa962f6a2aaacee856d9c864f4b8d0aa1f7cde2ad086d80a6"
+const prototypeContractFixtureSHA256 = "42801a522730b4578b26e91c4e8fc4c537e8a916b8fcccc5eda131c259409910"
 
 var (
 	headA = Head("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -351,12 +351,12 @@ func TestTCTwoAxisPrototypeContractFixture(t *testing.T) {
 	if fixture.SchemaVersion != "work-two-axis-prototype-projection/v1" ||
 		fixture.PlatformContract.SchemaVersion != "two-axis-prototype-gates/v1" ||
 		fixture.PlatformContract.ContractVersion != "1.0.0" ||
-		fixture.PlatformContract.SourceSHA256 != "bc021d916c5026305d92f9b19fcff61389215e09d0822ae2fd402ae06f958950" ||
+		fixture.PlatformContract.SourceSHA256 != "e5b838a3c60efc9fdc1c23c8e3a908d58f1774af95b653813f6b031500d6ec28" ||
 		fixture.Activation.RequiredEvidence != "docs_standard_canonical_on_default_branch" ||
 		fixture.Activation.SourcePullRequest != 274 ||
 		!fixture.Activation.FailClosedBeforeEvidence ||
 		fixture.DocsStandard.Version != "4.4.0" ||
-		fixture.DocsStandard.SourceBlobSHA != "419ab7339863923dd1f3bc4e814d9f64f29c08ba" {
+		fixture.DocsStandard.SourceBlobSHA != "c9975c6d5bf703e58dd28ecbe9f7cf91b5ae6b96" {
 		t.Fatalf("prototype contract source binding drifted: %#v", fixture)
 	}
 	if len(fixture.DecisionVectors) != 4 {
