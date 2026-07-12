@@ -59,6 +59,15 @@ compatibility but has no legal successor under contract 1.0.0. Historical
 streams containing it fail closed and require an explicit migration decision;
 they are not silently upgraded into Human approval.
 
+A read-only query of the local canonical Hive Postgres event store on
+2026-07-12 returned zero rows where `event_type = 'authority.skipped'` or
+`content_json` contained that token (the store contained 45
+`agent.authority.granted` events). Repository/data scans found only source
+and doctrine references, not persisted occurrences. This proves the current
+local store has no migration subjects; it does not authorize deleting the event
+type or infer absence in any external store. Any other deployment must run the
+same inventory before adopting the new projection.
+
 ### D2 - Bind a versioned contract fixture
 
 Vendor a generated/read-only JSON fixture containing the approved docs artifact
@@ -126,8 +135,8 @@ records even for the prototype class.
 - `pkg/worklifecycle/testdata/`: pinned compatibility fixture;
 - package documentation naming the docs/platform source pins.
 
-No Hive, Agent, EventGraph, API, persistence migration, or reviewer runner is in
-scope.
+No Hive, Agent, EventGraph, API, persistence migration, or reviewer runner
+mutation is in scope. A read-only Hive consumer compile/test is mandatory.
 
 ## 4. Test matrix
 
@@ -144,6 +153,9 @@ scope.
 | T9 | accepted prototype skip replayed | any | non-empty | identical explicit projection | required |
 | T10 | contract fixture hash/version mismatch | any | any | test/build failure | unchanged |
 | T11 | prototype `authority.skipped` event or skipped Authorize/IAR record | any | any | denied/fail closed | required |
+| T12 | skipped CFAR construction; Human Review shortcut | any | any | denied/fail closed | required |
+| T13 | missing vs unreadable vs uncertain classification | any | any | each resolves unknown; denied | required |
+| T14 | Hive consumer test against IADA+CFADA skipped projection | any | non-empty | compile and projection assertion pass | required |
 
 Existing transition, invalid-state, canonical-state, and merged-head tests must
 remain green.
@@ -171,8 +183,8 @@ AND full tests, IAR, and exact-head CFAR pass
   prevent silent changes.
 - `optional` remains easy to misread; comments and exported projection semantics
   mitigate this without a wire migration.
-- Hive consumes `CanonicalWorkState`; consumer compatibility must be verified by
-  Work tests and, if necessary, a read-only Hive compile/test check.
+- Hive consumes `CanonicalWorkState`; a read-only Hive compile/consumer check
+  is a mandatory acceptance gate for the projection delta.
 
 ## 7. IADA record
 
@@ -187,7 +199,9 @@ documented consumer contract rejects that delta.
 Version 0.2.0 repairs the contract mismatch discovered during pre-code
 inspection: prototype classification cannot skip Human Design Review or IAR.
 The legacy event remains recognizable but becomes an invalid transition and
-historical occurrences require an explicit migration decision.
+historical occurrences require an explicit migration decision. The local
+canonical store inventory found zero occurrences, and Hive consumer validation
+is mandatory.
 
 ## 8. Authority boundary
 

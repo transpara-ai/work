@@ -1,9 +1,9 @@
 {
   "gate": "IADA",
   "packet_id": "WORK-PROTOTYPE-GATE-CONTRACT-DESIGN",
-  "packet_path": "docs/designs/work-prototype-gate-contract-v0.1.0.md",
-  "packet_blob_sha": "9991d994895ba9f4ec7083b523985eab6dda11be",
-  "packet_version": "0.1.1",
+  "packet_path": "docs/designs/work-prototype-gate-contract-v0.2.0.md",
+  "packet_blob_sha": "d26f8200b3a296ab0620227bd224e74ebc9131fe",
+  "packet_version": "0.2.0",
   "repo": "transpara-ai/work",
   "author_family": "codex",
   "source_records": [
@@ -15,7 +15,9 @@
   ],
   "canonical_records": [
     "pkg/worklifecycle/types.go@759d2ca",
-    "transpara-ai/docs gate standard 4.3.0 pending docs#272 reconciliation"
+    "FO-WORK-93-PROTOTYPE-GATE-CONTRACT v0.2.0 at blob 436b20b7bb6f20e00ed7dcf7be936a564d8f091d",
+    "transpara-ai/docs gate standard 4.4.0 at docs PR #274 blob 419ab7339863923dd1f3bc4e814d9f64f29c08ba",
+    "local Hive Postgres read-only authority.skipped inventory: 0 persisted occurrences on 2026-07-12"
   ],
   "result": "pass",
   "blocker_count": 0,
@@ -36,14 +38,43 @@
     },
     {
       "id": "IADA-W93-3",
-      "severity": "blocker",
+      "severity": "major",
       "finding": "A maturity flag entering skipAllowed would convert birth maturity into a governance bypass.",
       "disposition": "accepted_fixed",
       "evidence": "The design keeps maturity out of runtime exemption logic and tests both maturities against each governance class."
+    },
+    {
+      "id": "IADA-W93-4",
+      "severity": "major",
+      "finding": "The legacy prototype authority.skip transition would waive Human Design Review even though the adopted contract makes only IADA and CFADA optional.",
+      "disposition": "accepted_fixed",
+      "evidence": "Design v0.2.0 removes authority.skip from legal transitions, restricts skipped records to IADA/CFADA, and requires fail-closed replay/migration handling."
+    },
+    {
+      "id": "IADA-W93-5",
+      "severity": "major",
+      "finding": "D6 originally exceeded the Factory Order and the FO/design filenames did not match their v0.2.0 identities.",
+      "disposition": "accepted_fixed",
+      "evidence": "FO v0.2.0 now orders HDR/IAR/CFAR non-skippability, fail-closed authority.skipped replay, and Hive verification; both artifacts use v0.2.0 filenames/frontmatter."
+    },
+    {
+      "id": "IADA-W93-6",
+      "severity": "major",
+      "finding": "Historical authority.skipped events could make the transition retirement an unbounded replay regression.",
+      "disposition": "accepted_fixed",
+      "evidence": "The local canonical event store contains zero authority.skipped occurrences; other deployments must inventory before adoption and any occurrence requires an explicit migration decision."
+    },
+    {
+      "id": "IADA-W93-7",
+      "severity": "major",
+      "finding": "Hive consumer validation was conditional despite a changed IADA projection.",
+      "disposition": "accepted_fixed",
+      "evidence": "Design T14 and the acceptance predicate now require a read-only Hive compile/consumer assertion."
     }
   ],
   "residual_risks": [
-    "Changing IADA projection from failed to skipped may reveal an undocumented consumer assumption and must return to HDR if so.",
+    "Changing IADA projection from failed to skipped may reveal an undocumented external consumer assumption even after the mandatory local Hive check.",
+    "External stores were not inventoried; any deployment with authority.skipped occurrences needs an explicit migration design before adoption.",
     "The copied contract fixture requires strict version/hash coordination to avoid drift.",
     "Hive compile/consumer verification may be necessary even though Hive source changes are out of scope."
   ],

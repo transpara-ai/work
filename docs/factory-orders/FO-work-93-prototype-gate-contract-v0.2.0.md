@@ -3,7 +3,7 @@ doc_id: FO-WORK-93-PROTOTYPE-GATE-CONTRACT
 title: Factory Order - Work Prototype Gate-Contract Enforcement
 doc_type: factory_order
 status: review
-version: 0.1.0
+version: 0.2.0
 created: 2026-07-12
 updated: 2026-07-12
 owner: Michael Saucier
@@ -33,7 +33,8 @@ canonical: false
 The Work baseline is commit
 `759d2ca` (`origin/main` on 2026-07-12). The relevant state machine currently
 serializes IADA/CFADA/IAR as `optional`, CFAR as `required`, permits the CFADA
-skip transition only for class `non_governed_prototype`, and denies CFAR skips.
+skip transition only for class `non_governed_prototype`, permits a legacy
+prototype `authority.skipped` transition, and denies CFAR skips.
 
 ## Order
 
@@ -56,18 +57,32 @@ state compatibility.
    and why; a failed gate must not masquerade as an intentional skip.
 7. Work pins the canonical contract version/hash and executes the shared
    decision vectors in CI without network or cross-checkout dependency.
+8. Only IADA and CFADA may be skipped by the prototype exemption. Human Design
+   Review (`authorize`), IAR, CFAR, Human Review, exact-head binding, and
+   required checks remain non-skippable.
+9. Remove `authority.skipped` from legal transitions while retaining its event
+   identity for fail-closed replay. Historical occurrences require an explicit
+   migration decision and must never be silently converted into Human approval.
+10. Reject skipped Authorize, IAR, or CFAR records at construction and replay,
+    including for `non_governed_prototype`.
+11. Record the read-only historical-event inventory and require a Hive
+    consumer/compile verification for the IADA/CFADA projection delta.
 
 ## Acceptance criteria and verification
 
 Table-driven Go tests cover every class, maturity-only input, blank reason,
-contradiction, prototype success, unknown failure, CFAR invariants, replay, and
-contract version/hash. Full Work tests pass. The exact design and implementation
-complete IADA, CFADA, HDR, IAR, CFAR, and Human Review.
+missing/unreadable/uncertain/contradictory classification, prototype success,
+skipped Authorize/IAR/CFAR construction, historical `authority.skipped`
+replay, Human Review non-skippability, CFAR invariants, replay, and contract
+version/hash. Full Work tests and the read-only Hive consumer check pass. The
+exact design and implementation complete IADA, CFADA, HDR, IAR, CFAR, and
+Human Review.
 
 ## Non-goals
 
 - invoking a reviewer runtime;
-- changing Hive or EventGraph;
+- changing Hive or EventGraph (read-only history/consumer verification remains
+  required);
 - weakening CFAR;
 - dynamically fetching docs/platform during runtime or CI;
 - deployment, autonomy, merge, or issue closure.
