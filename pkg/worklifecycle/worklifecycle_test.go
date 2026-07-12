@@ -362,7 +362,24 @@ func TestTCTwoAxisPrototypeContractFixture(t *testing.T) {
 	if len(fixture.DecisionVectors) != 4 {
 		t.Fatalf("decision vector count=%d, want 4", len(fixture.DecisionVectors))
 	}
+	expected := map[string]struct {
+		iada, cfada string
+		blocking    bool
+	}{
+		"prototype-maturity-protected":          {"required", "required", false},
+		"established-non-governed-with-reason":  {"optional", "optional", false},
+		"prototype-non-governed-without-reason": {"blocked", "blocked", true},
+		"prototype-unknown":                     {"blocked", "blocked", true},
+	}
 	for _, vector := range fixture.DecisionVectors {
+		want, ok := expected[vector.ID]
+		if !ok {
+			t.Fatalf("unexpected decision vector %s", vector.ID)
+		}
+		if vector.IADA != want.iada || vector.CFADA != want.cfada || vector.Blocking != want.blocking {
+			t.Fatalf("%s outcomes=%s/%s blocking=%v, want %s/%s blocking=%v",
+				vector.ID, vector.IADA, vector.CFADA, vector.Blocking, want.iada, want.cfada, want.blocking)
+		}
 		allowed := vector.GovernanceClass == GovernanceClassPrototype && strings.TrimSpace(vector.PrototypeReason) != ""
 		if got := vector.IADA == "optional" && vector.CFADA == "optional"; got != allowed {
 			t.Fatalf("%s design skip=%v, want %v", vector.ID, got, allowed)
@@ -371,6 +388,20 @@ func TestTCTwoAxisPrototypeContractFixture(t *testing.T) {
 			t.Fatalf("%s weakened IAR/CFAR: %s/%s", vector.ID, vector.IAR, vector.CFAR)
 		}
 		_ = vector.Maturity // maturity is evidence output only; it never enters allowed.
+	}
+}
+
+func TestTCRetiredAuthoritySkipFailsClosedAtFoldBoundary(t *testing.T) {
+	events := []Event{
+		DesignOpened(),
+		CFADASkipped("bounded experiment"),
+		AuthoritySkipped("historical omission"),
+	}
+	for i := 0; i < 2; i++ {
+		_, err := Fold(prototypeEvidence(), events)
+		if err == nil || !strings.Contains(err.Error(), "authority.skipped") {
+			t.Fatalf("Fold retired authority.skip attempt %d error=%v", i, err)
+		}
 	}
 }
 

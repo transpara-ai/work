@@ -42,8 +42,11 @@ Implemented behavior:
   transition and fails replay closed;
 - maturity is absent from `skipAllowed` and cannot affect the decision;
 - CFAR remains required and exact-head bound.
-- the prototype exemption remains inert until Docs PR #274 default-branch
-  canonicality is separately proven.
+- the contract declares that the prototype exemption is externally gated on
+  Docs PR #274 default-branch canonicality. Work does not query GitHub at
+  runtime; merge order and the governed controller enforce activation. The
+  existing narrow prototype transition remains locally callable, so this is a
+  process gate rather than a runtime Boolean claim.
 
 Validation on 2026-07-12:
 
