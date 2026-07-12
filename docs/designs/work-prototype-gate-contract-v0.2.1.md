@@ -3,7 +3,7 @@ doc_id: WORK-PROTOTYPE-GATE-CONTRACT-DESIGN
 title: Work Prototype Gate-Contract Enforcement Design
 doc_type: design
 status: review
-version: 0.2.0
+version: 0.2.1
 created: 2026-07-12
 updated: 2026-07-12
 owner: Michael Saucier
@@ -20,7 +20,7 @@ related_docs:
 canonical: false
 ---
 
-<!-- df:artifact id=WORK-PROTOTYPE-GATE-CONTRACT-DESIGN type=design version=0.2.0 status=review -->
+<!-- df:artifact id=WORK-PROTOTYPE-GATE-CONTRACT-DESIGN type=design version=0.2.1 status=review -->
 <!-- df:scope worklifecycle prototype governance-class iada cfada cfar compatibility no-reviewer-runtime no-deploy no-merge -->
 
 # Work Prototype Gate-Contract Enforcement Design
@@ -55,7 +55,8 @@ compatibility documentation stating that policy is conditional on governance
 class and transition validity.
 
 The external `authority.skipped` event kind remains parseable for replay
-compatibility but has no legal successor under contract 1.0.0. Historical
+compatibility but has no legal successor under Platform contract
+`two-axis-prototype-gates/v1`, contract version `1.0.0`. Historical
 streams containing it fail closed and require an explicit migration decision;
 they are not silently upgraded into Human approval.
 
@@ -136,7 +137,12 @@ records even for the prototype class.
 - package documentation naming the docs/platform source pins.
 
 No Hive, Agent, EventGraph, API, persistence migration, or reviewer runner
-mutation is in scope. A read-only Hive consumer compile/test is mandatory.
+mutation is in scope. A read-only Hive consumer compile/test is mandatory as a
+separate implementation-stage local verification gate, not part of Work CI and
+not part of the hermetic decision-vector suite in Requirement 7. It runs from
+the Hive checkout through a temporary Go workspace that binds Hive to this Work
+worktree; it modifies neither repository and proves the current consumer
+compiles and observes the explicit IADA+CFADA skipped projection.
 
 ## 4. Test matrix
 
@@ -172,6 +178,7 @@ AND protected/standard/unknown/contradictory inputs deny skip
 AND IADA+CFADA omission is projected unambiguously
 AND CFAR remains required and exact-head-bound
 AND Work pins and executes the canonical decision vectors
+AND a read-only Hive consumer compile/projection assertion passes
 AND full tests, IAR, and exact-head CFAR pass
 ```
 
@@ -202,6 +209,11 @@ The legacy event remains recognizable but becomes an invalid transition and
 historical occurrences require an explicit migration decision. The local
 canonical store inventory found zero occurrences, and Hive consumer validation
 is mandatory.
+
+Version 0.2.1 resolves final CFADA consistency findings by defining the
+Platform contract identifier/version, specifying Hive verification as a
+separate non-mutating local gate, and naming that gate in the
+satisfied-only-when predicate.
 
 ## 8. Authority boundary
 

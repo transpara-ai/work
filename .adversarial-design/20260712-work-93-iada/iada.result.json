@@ -1,9 +1,9 @@
 {
   "gate": "IADA",
   "packet_id": "WORK-PROTOTYPE-GATE-CONTRACT-DESIGN",
-  "packet_path": "docs/designs/work-prototype-gate-contract-v0.2.0.md",
-  "packet_blob_sha": "d26f8200b3a296ab0620227bd224e74ebc9131fe",
-  "packet_version": "0.2.0",
+  "packet_path": "docs/designs/work-prototype-gate-contract-v0.2.1.md",
+  "packet_blob_sha": "4db199ec819acc077e285cd1243c88cfeb4a1fc9",
+  "packet_version": "0.2.1",
   "repo": "transpara-ai/work",
   "author_family": "codex",
   "source_records": [
@@ -34,7 +34,7 @@
       "severity": "major",
       "finding": "The current prototype transition leaves IADA failed rather than explicitly omitted, making projection evidence ambiguous.",
       "disposition": "accepted_fixed",
-      "evidence": "Design v0.1.1 selects one atomic IADA/CFADA skipped projection and requires golden/replay/Hive compatibility proof."
+      "evidence": "Design v0.2.1 retains one atomic IADA/CFADA skipped projection and requires golden/replay/Hive compatibility proof."
     },
     {
       "id": "IADA-W93-3",
@@ -48,7 +48,7 @@
       "severity": "major",
       "finding": "The legacy prototype authority.skip transition would waive Human Design Review even though the adopted contract makes only IADA and CFADA optional.",
       "disposition": "accepted_fixed",
-      "evidence": "Design v0.2.0 removes authority.skip from legal transitions, restricts skipped records to IADA/CFADA, and requires fail-closed replay/migration handling."
+      "evidence": "Design v0.2.1 removes authority.skip from legal transitions, restricts skipped records to IADA/CFADA, and requires fail-closed replay/migration handling."
     },
     {
       "id": "IADA-W93-5",
@@ -69,7 +69,7 @@
       "severity": "major",
       "finding": "Hive consumer validation was conditional despite a changed IADA projection.",
       "disposition": "accepted_fixed",
-      "evidence": "Design T14 and the acceptance predicate now require a read-only Hive compile/consumer assertion."
+      "evidence": "Design T14 and the acceptance predicate require a separate implementation-stage, non-mutating Hive compile/consumer assertion outside Work CI."
     }
   ],
   "residual_risks": [
