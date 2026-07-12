@@ -366,7 +366,10 @@ var transitionTable = []transitionRow{
 	{
 		name: "Designing/cfada.skipped/AwaitingAuth",
 		apply: func(state UnitState, event Event) (UnitState, bool) {
-			if state.macro != MacroDesigning || state.hasBlocked || event.kind != EventCFADASkipped || !skipAllowed(state, GateCFADA, event.payload) {
+			iada, iadaOK := state.Gate(GateIADA)
+			if state.macro != MacroDesigning || state.hasBlocked || event.kind != EventCFADASkipped ||
+				!skipAllowed(state, GateCFADA, event.payload) || !iadaOK ||
+				iada.Projection() != GateProjectionFailed {
 				return UnitState{}, false
 			}
 			reason, _ := skipReason(event.payload)

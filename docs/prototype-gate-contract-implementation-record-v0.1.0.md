@@ -25,10 +25,10 @@ canonical: false
 
 Work vendors Platform contract `two-axis-prototype-gates/v1` version `1.0.0`
 at SHA-256
-`1724ecaf487c7b6d4ab2437f545168254cd86f53b09fd78a757bd5458f0cf9a6`.
+`bc021d916c5026305d92f9b19fcff61389215e09d0822ae2fd402ae06f958950`.
 That contract pins Docs standard 4.4.0 at blob
 `419ab7339863923dd1f3bc4e814d9f64f29c08ba`. The Work fixture has SHA-256
-`497fcc74c57b17be9c6646cf82ac7b50f495fabf97b41a19f4c459ac004c41b0`.
+`2fa4f79d5db9359aa962f6a2aaacee856d9c864f4b8d0aa1f7cde2ad086d80a6`.
 
 Implemented behavior:
 
@@ -42,6 +42,8 @@ Implemented behavior:
   transition and fails replay closed;
 - maturity is absent from `skipAllowed` and cannot affect the decision;
 - CFAR remains required and exact-head bound.
+- the prototype exemption remains inert until Docs PR #274 default-branch
+  canonicality is separately proven.
 
 Validation on 2026-07-12:
 
@@ -53,6 +55,14 @@ Validation on 2026-07-12:
 - local canonical Hive Postgres inventory — zero persisted
   `authority.skipped` occurrences, with 45 `agent.authority.granted` events
   as a positive-control category.
+
+The local database has no Work lifecycle state/snapshot table, and repository
+search found `UnitState` only inside `pkg/worklifecycle` and its tests. The
+type has unexported fields and no JSON/storage adapter; lifecycle state is
+derived by `Fold` from events. For this implementation, zero
+`authority.skipped` events therefore implies zero persisted skipped-Authorize
+`UnitState` snapshots. External deployments must still inventory any custom
+snapshot store separately.
 
 External event stores were not inventoried. Any deployment with a historical
 `authority.skipped` occurrence requires an explicit migration design before

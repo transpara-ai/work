@@ -6,7 +6,12 @@
     "repository": "transpara-ai/platform",
     "pull_request": 68,
     "source_path": "tools/transpara-governance-gates/contracts/two-axis-prototype-gates.v1.json",
-    "source_sha256": "1724ecaf487c7b6d4ab2437f545168254cd86f53b09fd78a757bd5458f0cf9a6"
+    "source_sha256": "bc021d916c5026305d92f9b19fcff61389215e09d0822ae2fd402ae06f958950"
+  },
+  "activation": {
+    "required_evidence": "docs_standard_canonical_on_default_branch",
+    "source_pull_request": 274,
+    "fail_closed_before_evidence": true
   },
   "docs_standard": {
     "artifact_id": "DF-DEV-ARC-CFAR-CFADA-GATE-STANDARD",

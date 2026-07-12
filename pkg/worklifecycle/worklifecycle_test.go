@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-const prototypeContractFixtureSHA256 = "497fcc74c57b17be9c6646cf82ac7b50f495fabf97b41a19f4c459ac004c41b0"
+const prototypeContractFixtureSHA256 = "2fa4f79d5db9359aa962f6a2aaacee856d9c864f4b8d0aa1f7cde2ad086d80a6"
 
 var (
 	headA = Head("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -267,6 +267,48 @@ func TestTCPrototypeSkipIsDesignGatesOnly(t *testing.T) {
 	}
 }
 
+func TestTCPrototypeSkipCannotErasePassedIADA(t *testing.T) {
+	state, err := Fold(prototypeEvidence(), []Event{
+		DesignOpened(),
+		DesignSubmitted(PassingInternalResult()),
+		CFADABlocked(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	iada, _ := state.Gate(GateIADA)
+	if iada.Projection() != GateProjectionPassed {
+		t.Fatalf("IADA projection=%s, want passed", iada.Projection())
+	}
+	assertApplyDenied(t, state, CFADASkipped("cannot erase passed audit"))
+}
+
+func TestTCPrototypeSkipReplayAndReasonInvariant(t *testing.T) {
+	events := []Event{DesignOpened(), CFADASkipped("bounded experiment")}
+	first, err := Fold(prototypeEvidence(), events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Fold(prototypeEvidence(), events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Equal(second) {
+		t.Fatal("identical prototype skip streams did not replay identically")
+	}
+
+	gates := defaultGateRecords()
+	gates[GateIADA] = gateRecord(GatePolicyOptional, GateStateFailed, true, "reason-a")
+	gates[GateCFADA] = gateRecord(GatePolicyOptional, GateStateFailed, true, "reason-b")
+	if _, err := newUnitState(unitStateFields{
+		Macro: MacroAwaitingAuth,
+		Class: GovernanceClassPrototype,
+		Gates: gates,
+	}); err == nil || !strings.Contains(err.Error(), "reasons must match") {
+		t.Fatalf("mismatched design skip reasons error=%v", err)
+	}
+}
+
 func TestTCTwoAxisPrototypeContractFixture(t *testing.T) {
 	data, err := os.ReadFile("testdata/two-axis-prototype-gates.v1.json")
 	if err != nil {
@@ -282,6 +324,11 @@ func TestTCTwoAxisPrototypeContractFixture(t *testing.T) {
 			ContractVersion string `json:"contract_version"`
 			SourceSHA256    string `json:"source_sha256"`
 		} `json:"platform_contract"`
+		Activation struct {
+			RequiredEvidence         string `json:"required_evidence"`
+			SourcePullRequest        int    `json:"source_pull_request"`
+			FailClosedBeforeEvidence bool   `json:"fail_closed_before_evidence"`
+		} `json:"activation"`
 		DocsStandard struct {
 			Version       string `json:"version"`
 			SourceBlobSHA string `json:"source_blob_sha"`
@@ -304,7 +351,10 @@ func TestTCTwoAxisPrototypeContractFixture(t *testing.T) {
 	if fixture.SchemaVersion != "work-two-axis-prototype-projection/v1" ||
 		fixture.PlatformContract.SchemaVersion != "two-axis-prototype-gates/v1" ||
 		fixture.PlatformContract.ContractVersion != "1.0.0" ||
-		fixture.PlatformContract.SourceSHA256 != "1724ecaf487c7b6d4ab2437f545168254cd86f53b09fd78a757bd5458f0cf9a6" ||
+		fixture.PlatformContract.SourceSHA256 != "bc021d916c5026305d92f9b19fcff61389215e09d0822ae2fd402ae06f958950" ||
+		fixture.Activation.RequiredEvidence != "docs_standard_canonical_on_default_branch" ||
+		fixture.Activation.SourcePullRequest != 274 ||
+		!fixture.Activation.FailClosedBeforeEvidence ||
 		fixture.DocsStandard.Version != "4.4.0" ||
 		fixture.DocsStandard.SourceBlobSHA != "419ab7339863923dd1f3bc4e814d9f64f29c08ba" {
 		t.Fatalf("prototype contract source binding drifted: %#v", fixture)
@@ -798,6 +848,13 @@ func assertApplyAllowedState(t *testing.T, state UnitState, ev Event, allowed bo
 
 func protectedEvidence() GovernanceEvidence {
 	return GovernanceEvidence{Kinds: []GovernanceEvidenceKind{EvidenceProtectedAction}}
+}
+
+func prototypeEvidence() GovernanceEvidence {
+	return GovernanceEvidence{
+		Kinds:           []GovernanceEvidenceKind{EvidenceNonGovernedPrototype},
+		PrototypeReason: "bounded experiment",
+	}
 }
 
 func withGate(in map[Gate]GateRecord, gate Gate, record GateRecord) map[Gate]GateRecord {
