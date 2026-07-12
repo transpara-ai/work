@@ -3,7 +3,7 @@ doc_id: WORK-PROTOTYPE-GATE-CONTRACT-DESIGN
 title: Work Prototype Gate-Contract Enforcement Design
 doc_type: design
 status: review
-version: 0.1.1
+version: 0.2.0
 created: 2026-07-12
 updated: 2026-07-12
 owner: Michael Saucier
@@ -20,7 +20,7 @@ related_docs:
 canonical: false
 ---
 
-<!-- df:artifact id=WORK-PROTOTYPE-GATE-CONTRACT-DESIGN type=design version=0.1.1 status=review -->
+<!-- df:artifact id=WORK-PROTOTYPE-GATE-CONTRACT-DESIGN type=design version=0.2.0 status=review -->
 <!-- df:scope worklifecycle prototype governance-class iada cfada cfar compatibility no-reviewer-runtime no-deploy no-merge -->
 
 # Work Prototype Gate-Contract Enforcement Design
@@ -35,7 +35,8 @@ transition rules:
   design result and reaches `AwaitingAuth` only through passing CFADA;
 - the direct `cfada.skipped` transition is accepted only for
   `non_governed_prototype` with a non-empty reason;
-- validation rejects any skipped non-CFAR gate for other classes;
+- the legacy `authority.skipped` transition also accepts the prototype class,
+  which conflicts with the adopted contract and must be retired;
 - CFAR is always `required`, cannot be skipped, and Ready/Merged require the
   matching reviewed head.
 
@@ -52,6 +53,11 @@ renaming `optional` on the wire could break stored events/projections and is
 unnecessary to enforce the accepted matrix. Add comments and exported
 compatibility documentation stating that policy is conditional on governance
 class and transition validity.
+
+The external `authority.skipped` event kind remains parseable for replay
+compatibility but has no legal successor under contract 1.0.0. Historical
+streams containing it fail closed and require an explicit migration decision;
+they are not silently upgraded into Human approval.
 
 ### D2 - Bind a versioned contract fixture
 
@@ -102,6 +108,15 @@ otherwise                      -> unknown
 
 No maturity flag or permissive supplied class overrides protected evidence.
 
+### D6 - Only IADA and CFADA are prototype-optional
+
+`skipAllowed` accepts only IADA/CFADA for a reason-bearing
+`non_governed_prototype`. Human Design Review (`authorize`), IAR, CFAR,
+Human Review, exact-head binding, and required checks cannot be skipped. The
+existing `authority.skipped` transition is removed from the legal transition
+table. Construction/replay validation rejects skipped Authorize/IAR/CFAR
+records even for the prototype class.
+
 ## 3. Implementation surface after HDR
 
 - `pkg/worklifecycle/types.go`: comments, bounded skip recording/projection,
@@ -128,6 +143,7 @@ scope.
 | T8 | unreadable evidence | any | any | denied | required |
 | T9 | accepted prototype skip replayed | any | non-empty | identical explicit projection | required |
 | T10 | contract fixture hash/version mismatch | any | any | test/build failure | unchanged |
+| T11 | prototype `authority.skipped` event or skipped Authorize/IAR record | any | any | denied/fail closed | required |
 
 Existing transition, invalid-state, canonical-state, and merged-head tests must
 remain green.
@@ -138,6 +154,8 @@ remain green.
 wire compatibility is preserved or explicitly migrated
 AND maturity cannot affect skipAllowed
 AND only reason-bearing non-governed class can skip
+AND only IADA/CFADA may carry a skipped projection
+AND Human Design Review and IAR cannot be skipped
 AND protected/standard/unknown/contradictory inputs deny skip
 AND IADA+CFADA omission is projected unambiguously
 AND CFAR remains required and exact-head-bound
@@ -165,6 +183,11 @@ when that artifact names this packet's exact final blob SHA.
 Version 0.1.1 repairs the assessment ambiguity by choosing one atomic skip
 projection, naming its compatibility delta, and requiring a return to HDR if a
 documented consumer contract rejects that delta.
+
+Version 0.2.0 repairs the contract mismatch discovered during pre-code
+inspection: prototype classification cannot skip Human Design Review or IAR.
+The legacy event remains recognizable but becomes an invalid transition and
+historical occurrences require an explicit migration decision.
 
 ## 8. Authority boundary
 
