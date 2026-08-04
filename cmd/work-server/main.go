@@ -8,6 +8,7 @@
 //	WORK_API_TOKEN            — bearer token for workspace-scoped external API; falls back to WORK_API_KEY if unset
 //	DATABASE_URL              — Postgres DSN (optional; defaults to in-memory)
 //	PORT                      — HTTP port to listen on (optional; defaults to 8080)
+//	WORK_BIND_HOST            — optional listen host; set 127.0.0.1 for loopback-only operation
 //	SITE_UI_BASE_URL          — canonical Site UI base URL for legacy UI notices (optional; derived from request host)
 //	TELEMETRY_DASHBOARD_PATH  — path to dashboard.html on disk (optional; overrides the embedded copy for local dev)
 //
@@ -784,7 +785,7 @@ func run() error {
 	mux.HandleFunc("POST /w/{workspace}/tasks/{id}/waive-artifact", srv.tokenAuth(srv.waiveArtifact))
 	mux.HandleFunc("POST /w/{workspace}/tasks/{id}/fact-requirements", srv.tokenAuth(srv.addFactRequirement))
 
-	addr := ":" + port
+	addr := workServerListenAddress(os.Getenv, port)
 	fmt.Fprintf(os.Stderr, "work-server listening on %s\n", addr)
 	httpSrv := &http.Server{Addr: addr, Handler: corsMiddleware(mux)}
 	go func() {
@@ -795,6 +796,10 @@ func run() error {
 		return fmt.Errorf("listen: %w", err)
 	}
 	return nil
+}
+
+func workServerListenAddress(getenv func(string) string, port string) string {
+	return net.JoinHostPort(strings.TrimSpace(getenv("WORK_BIND_HOST")), port)
 }
 
 // server holds shared dependencies for HTTP handlers.
