@@ -54,6 +54,7 @@ import (
 	"html"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
@@ -785,7 +786,10 @@ func run() error {
 	mux.HandleFunc("POST /w/{workspace}/tasks/{id}/waive-artifact", srv.tokenAuth(srv.waiveArtifact))
 	mux.HandleFunc("POST /w/{workspace}/tasks/{id}/fact-requirements", srv.tokenAuth(srv.addFactRequirement))
 
-	addr := workServerListenAddress(os.Getenv, port)
+	addr, err := workServerListenAddress(os.Getenv, port)
+	if err != nil {
+		return fmt.Errorf("listen address: %w", err)
+	}
 	fmt.Fprintf(os.Stderr, "work-server listening on %s\n", addr)
 	httpSrv := &http.Server{Addr: addr, Handler: corsMiddleware(mux)}
 	go func() {
@@ -798,8 +802,23 @@ func run() error {
 	return nil
 }
 
-func workServerListenAddress(getenv func(string) string, port string) string {
-	return net.JoinHostPort(strings.TrimSpace(getenv("WORK_BIND_HOST")), port)
+func workServerListenAddress(getenv func(string) string, port string) (string, error) {
+	host := strings.TrimSpace(getenv("WORK_BIND_HOST"))
+	if strings.ContainsAny(host, "[]") {
+		if !strings.HasPrefix(host, "[") || !strings.HasSuffix(host, "]") {
+			return "", errors.New("WORK_BIND_HOST has unmatched IPv6 brackets")
+		}
+		inside := strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+		if inside == "" || strings.ContainsAny(inside, "[]") {
+			return "", errors.New("WORK_BIND_HOST has malformed IPv6 brackets")
+		}
+		address, err := netip.ParseAddr(inside)
+		if err != nil || !address.Is6() {
+			return "", errors.New("bracketed WORK_BIND_HOST must contain a valid IPv6 address")
+		}
+		host = inside
+	}
+	return net.JoinHostPort(host, port), nil
 }
 
 // server holds shared dependencies for HTTP handlers.

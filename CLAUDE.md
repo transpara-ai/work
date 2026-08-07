@@ -67,4 +67,5 @@ The dashboard at `cmd/work-server/telemetry_dashboard.go` is an embedded SPA ser
 | `WORK_HUMAN` | Display name of the operator |
 | `WORK_API_KEY` | Bearer token for global endpoints |
 | `WORK_API_TOKEN` | Bearer token for workspace-scoped endpoints (falls back to `WORK_API_KEY`) |
+| `WORK_BIND_HOST` | Optional HTTP bind host; empty listens on all interfaces, while bracketed values must contain valid IPv6 |
 | `PORT` | HTTP listen port (default 8080) |
