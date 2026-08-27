@@ -1,0 +1,48 @@
+{
+  "gate": "IAR",
+  "repo": "transpara-ai/work",
+  "pr_number": 104,
+  "head_sha": "db13ca594d0b59eb2a4a7c1f910319364590cbe4",
+  "author_family": "Codex/OpenAI",
+  "result": "pass",
+  "blocker_count": 0,
+  "validation": [
+    {
+      "command": "make verify",
+      "outcome": "pass",
+      "evidence": "Full repository suite passed."
+    },
+    {
+      "command": "go test -race ./...",
+      "outcome": "pass",
+      "evidence": "TLC 5.1 FactoryOrder/phase-gate linkage passed race validation."
+    }
+  ],
+  "findings": [],
+  "residual_risks": [
+    "TLC51-RR-ORG-CONTROLS",
+    "TLC51-RR-MUTABLE-PROVIDER-RECORDS",
+    "TLC51-RR-APP-ENVIRONMENT-CAPABILITY",
+    "TLC51-RR-DUAL-PROTOCOL-RUNTIME",
+    "TLC51-RR-FACTORY-BINARY-SOURCE",
+    "TLC51-RR-NONATOMIC-MULTIREPO-CUTOVER",
+    "TLC51-RR-NONATOMIC-SETTINGS-API",
+    "TLC51-RR-UNTRUSTED-GITHUB-CONTROLLER",
+    "TLC51-RR-TLC-REPOSITORY-CONTROLS"
+  ],
+  "pr_visible_evidence_url": "https://github.com/transpara-ai/work/pull/104",
+  "non_authorizations": [
+    "PR readiness",
+    "merge",
+    "release or tag",
+    "installation or distribution",
+    "pilot or adoption",
+    "workflow activation or settings enforcement",
+    "runtime or deployment",
+    "canary or rollout",
+    "rollback or retirement",
+    "deletion, archival, or issue closure",
+    "any other protected effect"
+  ]
+}
+
