@@ -1,8 +1,13 @@
 package work
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -51,6 +56,77 @@ type FactoryOrder struct {
 	ExpectedOutputs        []string
 	SourceIssueRecords     []FactoryOrderSourceIssueRecord
 	ModelOverrides         []FactoryOrderModelOverride
+	TLC51EventArtifacts    []FactoryOrderTLC51EventArtifact
+}
+
+const (
+	// FactoryOrderTLC51EventArtifactLabel identifies Work twins of immutable
+	// EventGraph factory-tlc51/v1 history entries. The artifact is linkage and
+	// replay evidence only; it grants no authority and cannot replace its
+	// EventGraph source.
+	FactoryOrderTLC51EventArtifactLabel = "factory_tlc51_event"
+	// FactoryOrderTLC51EventArtifactMediaType is closed so the exact JSON
+	// payload and its digest cannot be confused with markdown intent.
+	FactoryOrderTLC51EventArtifactMediaType = "application/vnd.transpara.factory-tlc51-event+json"
+	// FactoryTLC51ProtocolVersion is the immutable Hive/EventGraph protocol
+	// identity implemented by TLC 5.1.
+	FactoryTLC51ProtocolVersion = "factory-tlc51/v1"
+)
+
+// FactoryOrderTLC51EventArtifact is the Work-side twin of an EventGraph TLC
+// 5.1 history entry. Payload is retained byte-for-byte and PayloadSHA256 is
+// computed over those exact bytes. The common identity inside Payload must
+// match every outer field. EventGraph remains the source of truth.
+type FactoryOrderTLC51EventArtifact struct {
+	FactoryOrderID string          `json:"factory_order_id"`
+	ChangeSeriesID string          `json:"change_series_id"`
+	EventOrdinal   uint64          `json:"event_ordinal"`
+	EventType      string          `json:"event_type"`
+	Payload        json.RawMessage `json:"payload"`
+	PayloadSHA256  string          `json:"payload_sha256"`
+}
+
+// FactoryOrderTLC51LinkProjection is a fail-closed replay of Work's TLC 5.1
+// event artifacts. EventGraphVerified is deliberately always false here:
+// cross-store reconciliation must establish that separately from EventGraph.
+type FactoryOrderTLC51LinkProjection struct {
+	EventArtifacts            []FactoryOrderTLC51EventArtifact `json:"event_artifacts"`
+	Quarantined               bool                             `json:"quarantined"`
+	HumanInterventionRequired bool                             `json:"human_intervention_required"`
+	ConflictKeys              []string                         `json:"conflict_keys,omitempty"`
+	EventGraphVerified        bool                             `json:"eventgraph_verified"`
+	AuthorityGranted          bool                             `json:"authority_granted"`
+}
+
+type factoryOrderTLC51PayloadIdentity struct {
+	ProtocolVersion string `json:"protocol_version"`
+	FactoryOrderID  string `json:"factory_order_id"`
+	ChangeSeriesID  string `json:"change_series_id"`
+	PlanDigest      string `json:"plan_digest"`
+	SubjectDigest   string `json:"subject_digest"`
+	EventOrdinal    uint64 `json:"event_ordinal"`
+	AttemptOrdinal  uint32 `json:"attempt_ordinal"`
+	ObligationID    string `json:"obligation_id,omitempty"`
+	Outcome         string `json:"outcome,omitempty"`
+}
+
+var factoryOrderTLC51EventTypes = map[string]bool{
+	"factory.tlc51.plan.recorded":        false,
+	"factory.tlc51.plan.superseded":      false,
+	"factory.tlc51.obligation.ready":     true,
+	"factory.tlc51.obligation.claimed":   true,
+	"factory.tlc51.obligation.running":   true,
+	"factory.tlc51.obligation.terminal":  true,
+	"factory.tlc51.evidence.linked":      true,
+	"factory.tlc51.decision.recorded":    false,
+	"factory.tlc51.decision.invalidated": false,
+	"factory.tlc51.effect.proposed":      true,
+	"factory.tlc51.effect.observed":      true,
+	"factory.tlc51.effect.reconciled":    true,
+	"factory.tlc51.effect.terminal":      true,
+	"factory.tlc51.human.requested":      false,
+	"factory.tlc51.human.resolved":       false,
+	"factory.tlc51.cutover.recorded":     false,
 }
 
 // FactoryOrderSourceIssueRecord is caller-supplied GitHub issue source
@@ -137,6 +213,10 @@ func SeedFactoryOrder(ts *TaskStore, source types.ActorID, order FactoryOrder, c
 	if err != nil {
 		return Task{}, err
 	}
+	tlc51Bodies, err := normalizeFactoryOrderTLC51EventArtifactBodies(order.ID, order.TLC51EventArtifacts)
+	if err != nil {
+		return Task{}, err
+	}
 
 	task, err := ts.CreateV39(source, TaskCreateOptions{
 		Title:                  order.Title,
@@ -174,6 +254,13 @@ func SeedFactoryOrder(ts *TaskStore, source types.ActorID, order FactoryOrder, c
 			sourceIssuesBody,
 		})
 	}
+	for _, body := range tlc51Bodies {
+		gates = append(gates, struct{ label, mime, body string }{
+			FactoryOrderTLC51EventArtifactLabel,
+			FactoryOrderTLC51EventArtifactMediaType,
+			body,
+		})
+	}
 	for _, g := range gates {
 		// A required gate with no body is left unwritten — the planner attaches it
 		// later, and Readiness keeps the task not-ready until a non-empty body
@@ -186,6 +273,256 @@ func SeedFactoryOrder(ts *TaskStore, source types.ActorID, order FactoryOrder, c
 		}
 	}
 	return task, nil
+}
+
+// ValidateFactoryOrderTLC51EventArtifact validates Work's exact EventGraph
+// twin. It intentionally validates only the cross-store identity contract;
+// the EventGraph registry validates the event-kind-specific payload and remains
+// authoritative for whether the source entry exists.
+func ValidateFactoryOrderTLC51EventArtifact(value FactoryOrderTLC51EventArtifact, expectedFactoryOrderID string) error {
+	_, err := validateFactoryOrderTLC51EventArtifact(value, expectedFactoryOrderID)
+	return err
+}
+
+func validateFactoryOrderTLC51EventArtifact(value FactoryOrderTLC51EventArtifact, expectedFactoryOrderID string) (factoryOrderTLC51PayloadIdentity, error) {
+	attemptRequired, known := factoryOrderTLC51EventTypes[value.EventType]
+	if !known {
+		return factoryOrderTLC51PayloadIdentity{}, fmt.Errorf("event_type %q is not in the closed factory-tlc51/v1 set", value.EventType)
+	}
+	if value.FactoryOrderID == "" || value.ChangeSeriesID == "" || value.EventOrdinal == 0 {
+		return factoryOrderTLC51PayloadIdentity{}, fmt.Errorf("factory_order_id, change_series_id, and event_ordinal are required")
+	}
+	if expectedFactoryOrderID != "" && value.FactoryOrderID != expectedFactoryOrderID {
+		return factoryOrderTLC51PayloadIdentity{}, fmt.Errorf("factory_order_id %q does not match task order %q", value.FactoryOrderID, expectedFactoryOrderID)
+	}
+	if hasControlRune(value.FactoryOrderID) || hasControlRune(value.ChangeSeriesID) || hasControlRune(value.EventType) {
+		return factoryOrderTLC51PayloadIdentity{}, fmt.Errorf("TLC 5.1 event identity contains control characters")
+	}
+	if len(value.Payload) == 0 || !json.Valid(value.Payload) {
+		return factoryOrderTLC51PayloadIdentity{}, fmt.Errorf("payload must be one valid JSON object")
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, value.Payload); err != nil || !bytes.Equal(compact.Bytes(), value.Payload) {
+		return factoryOrderTLC51PayloadIdentity{}, fmt.Errorf("payload must preserve compact EventGraph JSON bytes")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(value.Payload))
+	decoder.UseNumber()
+	var identity factoryOrderTLC51PayloadIdentity
+	if err := decoder.Decode(&identity); err != nil {
+		return factoryOrderTLC51PayloadIdentity{}, fmt.Errorf("decode payload identity: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return factoryOrderTLC51PayloadIdentity{}, fmt.Errorf("payload must contain exactly one JSON value")
+	}
+	if identity.ProtocolVersion != FactoryTLC51ProtocolVersion {
+		return factoryOrderTLC51PayloadIdentity{}, fmt.Errorf("payload protocol_version must be %q", FactoryTLC51ProtocolVersion)
+	}
+	if identity.FactoryOrderID != value.FactoryOrderID || identity.ChangeSeriesID != value.ChangeSeriesID || identity.EventOrdinal != value.EventOrdinal {
+		return factoryOrderTLC51PayloadIdentity{}, fmt.Errorf("payload and artifact event identities do not match")
+	}
+	if !validFactoryOrderTLC51SHA(identity.PlanDigest) || !validFactoryOrderTLC51SHA(identity.SubjectDigest) {
+		return factoryOrderTLC51PayloadIdentity{}, fmt.Errorf("payload plan_digest and subject_digest must be lowercase SHA-256")
+	}
+	if attemptRequired && identity.AttemptOrdinal == 0 {
+		return factoryOrderTLC51PayloadIdentity{}, fmt.Errorf("payload attempt_ordinal must be positive for %s", value.EventType)
+	}
+	if !attemptRequired && identity.AttemptOrdinal != 0 {
+		return factoryOrderTLC51PayloadIdentity{}, fmt.Errorf("payload attempt_ordinal must be zero for %s", value.EventType)
+	}
+	if !validFactoryOrderTLC51SHA(value.PayloadSHA256) {
+		return factoryOrderTLC51PayloadIdentity{}, fmt.Errorf("payload_sha256 must be lowercase SHA-256")
+	}
+	actual := fmt.Sprintf("%x", sha256.Sum256(value.Payload))
+	if actual != value.PayloadSHA256 {
+		return factoryOrderTLC51PayloadIdentity{}, fmt.Errorf("payload_sha256 does not match exact payload bytes")
+	}
+	return identity, nil
+}
+
+func validFactoryOrderTLC51SHA(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	decoded, err := hex.DecodeString(value)
+	return err == nil && hex.EncodeToString(decoded) == value
+}
+
+// FactoryOrderTLC51EventArtifactBody returns the closed, compact JSON body
+// used by Work. Compact encoding preserves the already-compact EventGraph
+// payload bytes whose digest is carried by the artifact.
+func FactoryOrderTLC51EventArtifactBody(value FactoryOrderTLC51EventArtifact) (string, error) {
+	if err := ValidateFactoryOrderTLC51EventArtifact(value, ""); err != nil {
+		return "", err
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("marshal TLC 5.1 event artifact: %w", err)
+	}
+	return string(body), nil
+}
+
+func parseFactoryOrderTLC51EventArtifactBody(body, expectedFactoryOrderID string) (FactoryOrderTLC51EventArtifact, error) {
+	decoder := json.NewDecoder(strings.NewReader(body))
+	decoder.DisallowUnknownFields()
+	var value FactoryOrderTLC51EventArtifact
+	if err := decoder.Decode(&value); err != nil {
+		return FactoryOrderTLC51EventArtifact{}, fmt.Errorf("decode TLC 5.1 event artifact: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return FactoryOrderTLC51EventArtifact{}, fmt.Errorf("TLC 5.1 event artifact must contain exactly one JSON value")
+	}
+	if err := ValidateFactoryOrderTLC51EventArtifact(value, expectedFactoryOrderID); err != nil {
+		return FactoryOrderTLC51EventArtifact{}, err
+	}
+	value.Payload = append(json.RawMessage(nil), value.Payload...)
+	return value, nil
+}
+
+func normalizeFactoryOrderTLC51EventArtifactBodies(expectedFactoryOrderID string, values []FactoryOrderTLC51EventArtifact) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	byKey := make(map[string]FactoryOrderTLC51EventArtifact, len(values))
+	for index, value := range values {
+		if _, err := validateFactoryOrderTLC51EventArtifact(value, expectedFactoryOrderID); err != nil {
+			return nil, fmt.Errorf("tlc51_event_artifacts[%d]: %w", index, err)
+		}
+		key := factoryOrderTLC51ArtifactKey(value)
+		if existing, ok := byKey[key]; ok {
+			if !factoryOrderTLC51ArtifactsEqual(existing, value) {
+				return nil, fmt.Errorf("tlc51_event_artifacts[%d]: conflicting Work twin for %s", index, key)
+			}
+			continue
+		}
+		value.Payload = append(json.RawMessage(nil), value.Payload...)
+		byKey[key] = value
+	}
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	bodies := make([]string, 0, len(keys))
+	for _, key := range keys {
+		body, err := FactoryOrderTLC51EventArtifactBody(byKey[key])
+		if err != nil {
+			return nil, err
+		}
+		bodies = append(bodies, body)
+	}
+	return bodies, nil
+}
+
+func factoryOrderTLC51ArtifactKey(value FactoryOrderTLC51EventArtifact) string {
+	return fmt.Sprintf("%s/%s/%020d", value.FactoryOrderID, value.ChangeSeriesID, value.EventOrdinal)
+}
+
+func factoryOrderTLC51ArtifactsEqual(left, right FactoryOrderTLC51EventArtifact) bool {
+	return left.FactoryOrderID == right.FactoryOrderID &&
+		left.ChangeSeriesID == right.ChangeSeriesID &&
+		left.EventOrdinal == right.EventOrdinal &&
+		left.EventType == right.EventType &&
+		left.PayloadSHA256 == right.PayloadSHA256 &&
+		bytes.Equal(left.Payload, right.Payload)
+}
+
+// AttachFactoryOrderTLC51EventArtifact appends one validated Work twin. Exact
+// repeats are idempotent; a different twin at the same history ordinal is
+// rejected rather than overwriting or inventing EventGraph state.
+func (ts *TaskStore) AttachFactoryOrderTLC51EventArtifact(
+	source types.ActorID,
+	taskID types.EventID,
+	value FactoryOrderTLC51EventArtifact,
+	causes []types.EventID,
+	convID types.ConversationID,
+) error {
+	task, err := ts.ProjectTask(taskID)
+	if err != nil {
+		return fmt.Errorf("project FactoryOrder task: %w", err)
+	}
+	if _, err := validateFactoryOrderTLC51EventArtifact(value, task.FactoryOrderID); err != nil {
+		return err
+	}
+	projection, err := ts.ProjectFactoryOrderTLC51EventArtifacts(taskID)
+	if err != nil {
+		return err
+	}
+	if projection.Quarantined {
+		return fmt.Errorf("TLC 5.1 Work linkage is quarantined; Human intervention required")
+	}
+	key := factoryOrderTLC51ArtifactKey(value)
+	for _, existing := range projection.EventArtifacts {
+		if factoryOrderTLC51ArtifactKey(existing) != key {
+			continue
+		}
+		if factoryOrderTLC51ArtifactsEqual(existing, value) {
+			return nil
+		}
+		return fmt.Errorf("conflicting Work twin for %s", key)
+	}
+	body, err := FactoryOrderTLC51EventArtifactBody(value)
+	if err != nil {
+		return err
+	}
+	return ts.AddArtifact(source, taskID, FactoryOrderTLC51EventArtifactLabel, FactoryOrderTLC51EventArtifactMediaType, body, causes, convID)
+}
+
+// ProjectFactoryOrderTLC51EventArtifacts replays all TLC 5.1 Work twins for a
+// task. Conflicting valid twins are retained as evidence and quarantine the
+// projection; no last-write-wins rule is allowed.
+func (ts *TaskStore) ProjectFactoryOrderTLC51EventArtifacts(taskID types.EventID) (FactoryOrderTLC51LinkProjection, error) {
+	task, err := ts.ProjectTask(taskID)
+	if err != nil {
+		return FactoryOrderTLC51LinkProjection{}, err
+	}
+	artifacts, err := ts.ListArtifacts(taskID)
+	if err != nil {
+		return FactoryOrderTLC51LinkProjection{}, err
+	}
+	projection := FactoryOrderTLC51LinkProjection{}
+	byKey := map[string]FactoryOrderTLC51EventArtifact{}
+	conflicts := map[string]struct{}{}
+	for _, artifact := range artifacts {
+		if artifact.Label != FactoryOrderTLC51EventArtifactLabel {
+			continue
+		}
+		if artifact.MediaType != FactoryOrderTLC51EventArtifactMediaType {
+			return FactoryOrderTLC51LinkProjection{}, fmt.Errorf("%s artifact must use media type %s", FactoryOrderTLC51EventArtifactLabel, FactoryOrderTLC51EventArtifactMediaType)
+		}
+		value, err := parseFactoryOrderTLC51EventArtifactBody(artifact.Body, task.FactoryOrderID)
+		if err != nil {
+			return FactoryOrderTLC51LinkProjection{}, fmt.Errorf("invalid %s artifact %s: %w", FactoryOrderTLC51EventArtifactLabel, artifact.ID.Value(), err)
+		}
+		key := factoryOrderTLC51ArtifactKey(value)
+		if existing, ok := byKey[key]; ok {
+			if !factoryOrderTLC51ArtifactsEqual(existing, value) {
+				conflicts[key] = struct{}{}
+			}
+			continue
+		}
+		byKey[key] = value
+	}
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		projection.EventArtifacts = append(projection.EventArtifacts, byKey[key])
+	}
+	for key := range conflicts {
+		projection.ConflictKeys = append(projection.ConflictKeys, key)
+	}
+	sort.Strings(projection.ConflictKeys)
+	projection.Quarantined = len(projection.ConflictKeys) > 0
+	projection.HumanInterventionRequired = projection.Quarantined
+	// Work artifacts never grant protected-action authority, and only a
+	// cross-store EventGraph reconciliation can set source verification.
+	projection.EventGraphVerified = false
+	projection.AuthorityGranted = false
+	return projection, nil
 }
 
 func factoryOrderSourceIssuesArtifactBody(records []FactoryOrderSourceIssueRecord) (string, error) {

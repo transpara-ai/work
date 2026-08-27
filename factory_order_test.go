@@ -1,12 +1,47 @@
 package work_test
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/transpara-ai/work"
 )
+
+const (
+	tlc51TestPlanDigest    = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	tlc51TestSubjectDigest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
+func makeTLC51TestArtifact(t *testing.T, orderID, seriesID, eventType string, ordinal uint64, attempt uint32, extra map[string]any) work.FactoryOrderTLC51EventArtifact {
+	t.Helper()
+	payload := map[string]any{
+		"protocol_version": work.FactoryTLC51ProtocolVersion,
+		"factory_order_id": orderID,
+		"change_series_id": seriesID,
+		"plan_digest":      tlc51TestPlanDigest,
+		"subject_digest":   tlc51TestSubjectDigest,
+		"event_ordinal":    ordinal,
+		"attempt_ordinal":  attempt,
+	}
+	for key, value := range extra {
+		payload[key] = value
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal TLC 5.1 test payload: %v", err)
+	}
+	return work.FactoryOrderTLC51EventArtifact{
+		FactoryOrderID: orderID,
+		ChangeSeriesID: seriesID,
+		EventOrdinal:   ordinal,
+		EventType:      eventType,
+		Payload:        raw,
+		PayloadSHA256:  fmt.Sprintf("%x", sha256.Sum256(raw)),
+	}
+}
 
 func TestSeedFactoryOrderCreatesReadinessGatedTask(t *testing.T) {
 	s, causes := setupStore(t)
@@ -109,6 +144,95 @@ func TestSeedFactoryOrderAllowsAbsentGates(t *testing.T) {
 	}
 	if len(readiness.MissingGates) != 3 {
 		t.Fatalf("MissingGates = %v, want all 3 readiness gates", readiness.MissingGates)
+	}
+}
+
+func TestFactoryOrderTLC51EventArtifactsReplayExactTwinsWithoutAuthority(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	plan := makeTLC51TestArtifact(t, "fo_tlc51_link", "series-1", "factory.tlc51.plan.recorded", 1, 0, nil)
+	ready := makeTLC51TestArtifact(t, "fo_tlc51_link", "series-1", "factory.tlc51.obligation.ready", 2, 1, map[string]any{
+		"obligation_id": "O001",
+		"ready_at":      "2026-08-27T12:00:00Z",
+	})
+
+	task, err := work.SeedFactoryOrder(ts, testActor, work.FactoryOrder{
+		ID:                  "fo_tlc51_link",
+		Title:               "TLC 5.1 link",
+		DefinitionOfDone:    "d",
+		AcceptanceCriteria:  "a",
+		TestPlan:            "t",
+		TLC51EventArtifacts: []work.FactoryOrderTLC51EventArtifact{plan},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("SeedFactoryOrder: %v", err)
+	}
+	if err := ts.AttachFactoryOrderTLC51EventArtifact(testActor, task.ID, ready, causes, testConv); err != nil {
+		t.Fatalf("AttachFactoryOrderTLC51EventArtifact: %v", err)
+	}
+	// An exact repeat is idempotent rather than another Work event.
+	if err := ts.AttachFactoryOrderTLC51EventArtifact(testActor, task.ID, ready, causes, testConv); err != nil {
+		t.Fatalf("idempotent attach: %v", err)
+	}
+
+	replayed := newTaskStore(t, s)
+	projection, err := replayed.ProjectFactoryOrderTLC51EventArtifacts(task.ID)
+	if err != nil {
+		t.Fatalf("ProjectFactoryOrderTLC51EventArtifacts: %v", err)
+	}
+	if len(projection.EventArtifacts) != 2 {
+		t.Fatalf("event artifacts = %+v, want plan and ready", projection.EventArtifacts)
+	}
+	if projection.Quarantined || projection.HumanInterventionRequired {
+		t.Fatalf("clean exact twins quarantined: %+v", projection)
+	}
+	if projection.EventGraphVerified || projection.AuthorityGranted {
+		t.Fatalf("Work projection claimed EventGraph verification or authority: %+v", projection)
+	}
+	if string(projection.EventArtifacts[1].Payload) != string(ready.Payload) || projection.EventArtifacts[1].PayloadSHA256 != ready.PayloadSHA256 {
+		t.Fatalf("exact payload/digest not preserved: got=%s/%s want=%s/%s", projection.EventArtifacts[1].Payload, projection.EventArtifacts[1].PayloadSHA256, ready.Payload, ready.PayloadSHA256)
+	}
+}
+
+func TestFactoryOrderTLC51EventArtifactRejectsForgeryAndQuarantinesConflict(t *testing.T) {
+	s, causes := setupStore(t)
+	ts := newTaskStore(t, s)
+	plan := makeTLC51TestArtifact(t, "fo_tlc51_conflict", "series-1", "factory.tlc51.plan.recorded", 1, 0, nil)
+	forged := plan
+	forged.PayloadSHA256 = strings.Repeat("c", 64)
+	if _, err := work.SeedFactoryOrder(ts, testActor, work.FactoryOrder{
+		ID: "fo_tlc51_conflict", Title: "forged", TLC51EventArtifacts: []work.FactoryOrderTLC51EventArtifact{forged},
+	}, causes, testConv); err == nil || !strings.Contains(err.Error(), "exact payload bytes") {
+		t.Fatalf("forged payload digest accepted: %v", err)
+	}
+
+	task, err := work.SeedFactoryOrder(ts, testActor, work.FactoryOrder{
+		ID: "fo_tlc51_conflict", Title: "conflict", TLC51EventArtifacts: []work.FactoryOrderTLC51EventArtifact{plan},
+	}, causes, testConv)
+	if err != nil {
+		t.Fatalf("SeedFactoryOrder: %v", err)
+	}
+	conflict := makeTLC51TestArtifact(t, "fo_tlc51_conflict", "series-1", "factory.tlc51.human.requested", 1, 0, map[string]any{
+		"request_id": "H001",
+		"boundary":   "work-link",
+		"reason":     "conflict fixture",
+	})
+	body, err := work.FactoryOrderTLC51EventArtifactBody(conflict)
+	if err != nil {
+		t.Fatalf("FactoryOrderTLC51EventArtifactBody: %v", err)
+	}
+	if err := ts.AddArtifact(testActor, task.ID, work.FactoryOrderTLC51EventArtifactLabel, work.FactoryOrderTLC51EventArtifactMediaType, body, causes, testConv); err != nil {
+		t.Fatalf("AddArtifact conflict fixture: %v", err)
+	}
+	projection, err := ts.ProjectFactoryOrderTLC51EventArtifacts(task.ID)
+	if err != nil {
+		t.Fatalf("ProjectFactoryOrderTLC51EventArtifacts: %v", err)
+	}
+	if !projection.Quarantined || !projection.HumanInterventionRequired || len(projection.ConflictKeys) != 1 {
+		t.Fatalf("conflicting twins did not quarantine: %+v", projection)
+	}
+	if err := ts.AttachFactoryOrderTLC51EventArtifact(testActor, task.ID, makeTLC51TestArtifact(t, "fo_tlc51_conflict", "series-1", "factory.tlc51.plan.recorded", 2, 0, nil), causes, testConv); err == nil || !strings.Contains(err.Error(), "quarantined") {
+		t.Fatalf("attach continued through quarantine: %v", err)
 	}
 }
 
