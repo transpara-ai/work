@@ -7,10 +7,10 @@
 //	WORK_API_KEY              — API key for auth; callers pass Authorization: Bearer <key> (required)
 //	WORK_API_TOKEN            — bearer token for workspace-scoped external API; falls back to WORK_API_KEY if unset
 //	DATABASE_URL              — Postgres DSN (optional; defaults to in-memory)
+//	WORK_SIGNING_KEY_FILE     — owner-only base64 Ed25519 seed/private key (required with Postgres)
 //	PORT                      — HTTP port to listen on (optional; defaults to 8080)
 //	WORK_BIND_HOST            — optional listen host; set 127.0.0.1 for loopback-only operation
 //	SITE_UI_BASE_URL          — canonical Site UI base URL for legacy UI notices (optional; derived from request host)
-//	TELEMETRY_DASHBOARD_PATH  — path to dashboard.html on disk (optional; overrides the embedded copy for local dev)
 //
 // Endpoints:
 //
@@ -48,10 +48,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"net"
 	"net/http"
 	"net/netip"
@@ -73,530 +73,13 @@ import (
 	"github.com/transpara-ai/eventgraph/go/pkg/types"
 
 	"github.com/transpara-ai/work"
-	"github.com/transpara-ai/work/dashboard"
+	"github.com/transpara-ai/work/runtimeidentity"
 )
 
 const (
 	legacyUIStatusHeader      = "X-Transpara-UI-Status"
 	legacyUIReplacementHeader = "X-Transpara-Replacement-UI"
 )
-
-// dashboardHTML is the read-only monitoring dashboard served at GET /.
-// The placeholder {{API_KEY}} is replaced at serve time with the actual key so
-// the browser's fetch() calls can authenticate against GET /tasks.
-const dashboardHTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Work Graph — Live Dashboard</title>
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: system-ui, -apple-system, sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 2rem; }
-h1 { font-size: 1.5rem; font-weight: 600; color: #f8fafc; margin-bottom: 0.25rem; }
-.subtitle { font-size: 0.875rem; color: #64748b; margin-bottom: 1.5rem; }
-.meta { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.25rem; font-size: 0.8125rem; color: #64748b; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; animation: pulse 2s ease-in-out infinite; }
-@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
-.error { background: #3b1010; color: #fca5a5; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.875rem; }
-.empty { color: #475569; font-size: 0.875rem; padding: 2rem 0; text-align: center; }
-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
-th { text-align: left; padding: 0.5rem 0.75rem; color: #64748b; font-weight: 500; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #1e293b; }
-td { padding: 0.625rem 0.75rem; border-bottom: 1px solid #1e293b; vertical-align: middle; }
-tr:hover td { background: #1e293b; }
-.title { font-weight: 500; color: #f1f5f9; max-width: 28rem; }
-.desc { font-size: 0.75rem; color: #64748b; margin-top: 0.125rem; }
-.badge { display: inline-block; padding: 0.2em 0.55em; border-radius: 4px; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
-.s-open       { background: #1e3a5f; color: #60a5fa; }
-.s-in_progress{ background: #3b2400; color: #fb923c; }
-.s-completed  { background: #052e16; color: #4ade80; }
-.s-blocked    { background: #3b0a0a; color: #f87171; }
-.p-high   { background: #3b0a0a; color: #f87171; }
-.p-medium { background: #3b2400; color: #fb923c; }
-.p-low    { background: #1e293b; color: #94a3b8; }
-.blocked-yes { color: #f87171; font-weight: 600; }
-.blocked-no  { color: #334155; }
-.assignee { font-family: monospace; font-size: 0.75rem; color: #7c3aed; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.btn { display: inline-block; padding: 0.25em 0.6em; border-radius: 4px; font-size: 0.72rem; font-weight: 600; cursor: pointer; border: none; letter-spacing: 0.02em; transition: opacity 0.15s; }
-.btn:hover { opacity: 0.8; }
-.btn-assign { background: #1e3a5f; color: #60a5fa; }
-.btn-unblock { background: #3b0a0a; color: #f87171; }
-.btn-loading { opacity: 0.5; cursor: not-allowed; }
-</style>
-</head>
-<body>
-<h1>Work Graph</h1>
-<p class="subtitle">Live pipeline dashboard</p>
-<div class="meta">
-  <span class="dot"></span>
-  <span id="status-line">Connecting...</span>
-  <span id="countdown"></span>
-</div>
-<div id="error-box" class="error" style="display:none"></div>
-<table id="task-table" style="display:none">
-  <thead>
-    <tr>
-      <th>Task</th>
-      <th>Status</th>
-      <th>Priority</th>
-      <th>Assignee</th>
-      <th>Blocked</th>
-      <th>Actions</th>
-    </tr>
-  </thead>
-  <tbody id="task-body"></tbody>
-</table>
-<div id="empty-msg" class="empty" style="display:none">No tasks yet.</div>
-<script>
-const API_KEY = "{{API_KEY}}";
-const REFRESH_MS = 10000;
-let timer, countdown, nextAt;
-
-function esc(s) {
-  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-}
-
-function badge(cls, text) {
-  return '<span class="badge ' + cls + '">' + esc(text) + '</span>';
-}
-
-function statusBadge(s) {
-  const map = { open: "s-open", in_progress: "s-in_progress", completed: "s-completed", blocked: "s-blocked" };
-  return badge(map[s] || "s-open", s || "open");
-}
-
-function priorityBadge(p) {
-  const map = { high: "p-high", medium: "p-medium", low: "p-low" };
-  return badge(map[p] || "p-low", p || "");
-}
-
-function shortID(id) {
-  return id ? id.slice(0, 8) + "\u2026" : "\u2014";
-}
-
-async function apiPost(path) {
-  const res = await fetch(path, {
-    method: "POST",
-    headers: { Authorization: "Bearer " + API_KEY, "Content-Type": "application/json" },
-    body: "{}",
-  });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error((data.error || "HTTP " + res.status));
-  }
-  return res.json();
-}
-
-async function assignSelf(taskId) {
-  try {
-    await apiPost("/tasks/" + taskId + "/assign");
-    refresh();
-  } catch (err) {
-    alert("Assign failed: " + err.message);
-  }
-}
-
-async function unblockTask(taskId) {
-  try {
-    await apiPost("/tasks/" + taskId + "/unblock");
-    refresh();
-  } catch (err) {
-    alert("Unblock failed: " + err.message);
-  }
-}
-
-async function refresh() {
-  try {
-    const res = await fetch("/tasks", { headers: { Authorization: "Bearer " + API_KEY } });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
-    const tasks = data.tasks || [];
-    document.getElementById("error-box").style.display = "none";
-
-    const tbody = document.getElementById("task-body");
-    if (tasks.length === 0) {
-      document.getElementById("task-table").style.display = "none";
-      document.getElementById("empty-msg").style.display = "block";
-    } else {
-      document.getElementById("task-table").style.display = "table";
-      document.getElementById("empty-msg").style.display = "none";
-      tbody.innerHTML = tasks.map(t => {
-        const blockedCell = t.blocked
-          ? '<span class="blocked-yes">\u26a0 blocked</span>'
-          : '<span class="blocked-no">\u2014</span>';
-        const assigneeCell = t.assignee
-          ? '<span class="assignee" title="' + esc(t.assignee) + '">' + esc(shortID(t.assignee)) + '</span>'
-          : '<span class="blocked-no">\u2014</span>';
-        const assignLabel = t.assignee ? 'Reassign' : 'Assign';
-        let actions = '<button class="btn btn-assign" onclick="assignSelf(\'' + esc(t.id) + '\')">' + assignLabel + '</button>';
-        if (t.blocked) {
-          actions += ' <button class="btn btn-unblock" onclick="unblockTask(\'' + esc(t.id) + '\')">Unblock</button>';
-        }
-        return '<tr>'
-          + '<td><div class="title">' + esc(t.title) + '</div>'
-          + (t.description ? '<div class="desc">' + esc(t.description.slice(0, 80)) + (t.description.length > 80 ? "\u2026" : "") + '</div>' : '')
-          + '</td>'
-          + '<td>' + statusBadge(t.status) + '</td>'
-          + '<td>' + priorityBadge(t.priority) + '</td>'
-          + '<td>' + assigneeCell + '</td>'
-          + '<td>' + blockedCell + '</td>'
-          + '<td>' + actions + '</td>'
-          + '</tr>';
-      }).join("");
-    }
-
-    const now = new Date();
-    document.getElementById("status-line").textContent =
-      "Updated " + now.toLocaleTimeString() + " \u2014 " + tasks.length + " task" + (tasks.length === 1 ? "" : "s");
-    nextAt = Date.now() + REFRESH_MS;
-  } catch (err) {
-    const box = document.getElementById("error-box");
-    box.textContent = "Fetch failed: " + err.message;
-    box.style.display = "block";
-    document.getElementById("status-line").textContent = "Error \u2014 retrying in 10s";
-    nextAt = Date.now() + REFRESH_MS;
-  }
-}
-
-function tick() {
-  const secs = Math.max(0, Math.round((nextAt - Date.now()) / 1000));
-  document.getElementById("countdown").textContent = secs > 0 ? "(next refresh in " + secs + "s)" : "";
-}
-
-refresh();
-setInterval(refresh, REFRESH_MS);
-setInterval(tick, 1000);
-</script>
-</body>
-</html>`
-
-// workspaceDashboardHTML is the interactive task dashboard served at GET /w/{workspace}.
-// Placeholders {{WORKSPACE}} and {{API_TOKEN}} are replaced at serve time.
-const workspaceDashboardHTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{{WORKSPACE}} — Work Graph</title>
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: system-ui, -apple-system, sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 2rem; }
-h1 { font-size: 1.5rem; font-weight: 600; color: #f8fafc; margin-bottom: 0.25rem; }
-.subtitle { font-size: 0.875rem; color: #64748b; margin-bottom: 1.5rem; }
-.meta { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.25rem; font-size: 0.8125rem; color: #64748b; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; animation: pulse 2s ease-in-out infinite; }
-@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
-.toolbar { display: flex; align-items: center; justify-content: flex-end; margin-bottom: 1.25rem; }
-.error { background: #3b1010; color: #fca5a5; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.875rem; }
-.empty { color: #475569; font-size: 0.875rem; padding: 2rem 0; text-align: center; }
-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
-th { text-align: left; padding: 0.5rem 0.75rem; color: #64748b; font-weight: 500; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #1e293b; }
-td { padding: 0.625rem 0.75rem; border-bottom: 1px solid #1e293b; vertical-align: middle; }
-tr:hover td { background: #1e293b; }
-.title { font-weight: 500; color: #f1f5f9; max-width: 28rem; }
-.desc { font-size: 0.75rem; color: #64748b; margin-top: 0.125rem; }
-.badge { display: inline-block; padding: 0.2em 0.55em; border-radius: 4px; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
-.s-open       { background: #1e3a5f; color: #60a5fa; }
-.s-in_progress{ background: #3b2400; color: #fb923c; }
-.s-completed  { background: #052e16; color: #4ade80; }
-.s-blocked    { background: #3b0a0a; color: #f87171; }
-.p-high   { background: #3b0a0a; color: #f87171; }
-.p-medium { background: #3b2400; color: #fb923c; }
-.p-low    { background: #1e293b; color: #94a3b8; }
-.blocked-yes { color: #f87171; font-weight: 600; }
-.blocked-no  { color: #334155; }
-.art-badge { display: inline-block; padding: 0.2em 0.55em; border-radius: 4px; font-size: 0.72rem; font-weight: 600; }
-.art-has  { background: #052e16; color: #4ade80; }
-.art-waived { background: #1e293b; color: #94a3b8; font-style: italic; }
-.art-none   { color: #334155; }
-.assignee { font-family: monospace; font-size: 0.75rem; color: #7c3aed; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.btn { display: inline-block; padding: 0.25em 0.6em; border-radius: 4px; font-size: 0.72rem; font-weight: 600; cursor: pointer; border: none; letter-spacing: 0.02em; transition: opacity 0.15s; margin-right: 0.25rem; }
-.btn:hover { opacity: 0.8; }
-.btn-primary  { background: #1d4ed8; color: #fff; padding: 0.5em 1em; font-size: 0.8125rem; }
-.btn-assign   { background: #1e3a5f; color: #60a5fa; }
-.btn-complete { background: #052e16; color: #4ade80; }
-.btn-comment  { background: #1e293b; color: #94a3b8; }
-.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
-.modal-overlay.open { display: flex; }
-.modal { background: #1e293b; border-radius: 8px; padding: 1.5rem; min-width: 22rem; max-width: 32rem; width: 100%; }
-.modal h2 { font-size: 1rem; font-weight: 600; color: #f1f5f9; margin-bottom: 1rem; }
-.form-field { margin-bottom: 0.875rem; }
-.form-field label { display: block; font-size: 0.8125rem; color: #94a3b8; margin-bottom: 0.25rem; }
-.form-field input, .form-field textarea, .form-field select { width: 100%; background: #0f1117; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; padding: 0.5rem 0.625rem; font-size: 0.875rem; font-family: inherit; }
-.form-field textarea { resize: vertical; min-height: 5rem; }
-.form-field input:focus, .form-field textarea:focus, .form-field select:focus { outline: none; border-color: #3b82f6; }
-.modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
-.btn-cancel { background: #0f1117; color: #94a3b8; border: 1px solid #334155; }
-.btn-submit { background: #1d4ed8; color: #fff; }
-</style>
-</head>
-<body>
-<h1>{{WORKSPACE}}</h1>
-<p class="subtitle">Workspace task board</p>
-<div class="meta">
-  <span class="dot"></span>
-  <span id="status-line">Connecting...</span>
-  <span id="countdown"></span>
-</div>
-<div id="error-box" class="error" style="display:none"></div>
-<div class="toolbar">
-  <button class="btn btn-primary" onclick="openCreate()">+ New Task</button>
-</div>
-<table id="task-table" style="display:none">
-  <thead>
-    <tr>
-      <th>Task</th>
-      <th>Status</th>
-      <th>Priority</th>
-      <th>Assignee</th>
-      <th>Blocked</th>
-      <th>Artifacts</th>
-      <th>Actions</th>
-    </tr>
-  </thead>
-  <tbody id="task-body"></tbody>
-</table>
-<div id="empty-msg" class="empty" style="display:none">No tasks yet. Create one above.</div>
-
-<!-- Create Task Modal -->
-<div class="modal-overlay" id="create-modal" onclick="if(event.target===this)closeCreate()">
-  <div class="modal">
-    <h2>New Task</h2>
-    <div class="form-field">
-      <label>Title *</label>
-      <input type="text" id="create-title" placeholder="Task title" />
-    </div>
-    <div class="form-field">
-      <label>Description</label>
-      <textarea id="create-desc" placeholder="Optional description"></textarea>
-    </div>
-    <div class="form-field">
-      <label>Priority</label>
-      <select id="create-priority">
-        <option value="medium">Medium</option>
-        <option value="high">High</option>
-        <option value="low">Low</option>
-      </select>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-cancel" onclick="closeCreate()">Cancel</button>
-      <button class="btn btn-submit" onclick="submitCreate()">Create</button>
-    </div>
-  </div>
-</div>
-
-<!-- Comment Modal -->
-<div class="modal-overlay" id="comment-modal" onclick="if(event.target===this)closeComment()">
-  <div class="modal">
-    <h2>Add Comment</h2>
-    <div class="form-field">
-      <label>Comment *</label>
-      <textarea id="comment-body" placeholder="Enter your comment"></textarea>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-cancel" onclick="closeComment()">Cancel</button>
-      <button class="btn btn-submit" onclick="submitComment()">Post</button>
-    </div>
-  </div>
-</div>
-
-<script>
-const WORKSPACE = "{{WORKSPACE}}";
-const API_TOKEN = "{{API_TOKEN}}";
-const BASE = "/w/" + WORKSPACE;
-const REFRESH_MS = 10000;
-let nextAt;
-let pendingCommentTaskId = null;
-
-function esc(s) {
-  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-}
-
-function badge(cls, text) {
-  return '<span class="badge ' + cls + '">' + esc(text) + '</span>';
-}
-
-function statusBadge(s) {
-  const map = { open: "s-open", in_progress: "s-in_progress", completed: "s-completed", blocked: "s-blocked" };
-  return badge(map[s] || "s-open", s || "open");
-}
-
-function priorityBadge(p) {
-  const map = { high: "p-high", medium: "p-medium", low: "p-low" };
-  return badge(map[p] || "p-low", p || "");
-}
-
-function shortID(id) {
-  return id ? id.slice(0, 8) + "\u2026" : "\u2014";
-}
-
-function authHeaders() {
-  return { Authorization: "Bearer " + API_TOKEN, "Content-Type": "application/json" };
-}
-
-async function apiPost(path, body) {
-  const res = await fetch(path, {
-    method: "POST",
-    headers: authHeaders(),
-    body: JSON.stringify(body || {}),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "HTTP " + res.status);
-  return data;
-}
-
-function openCreate() {
-  document.getElementById("create-title").value = "";
-  document.getElementById("create-desc").value = "";
-  document.getElementById("create-priority").value = "medium";
-  document.getElementById("create-modal").classList.add("open");
-  document.getElementById("create-title").focus();
-}
-
-function closeCreate() {
-  document.getElementById("create-modal").classList.remove("open");
-}
-
-async function submitCreate() {
-  const title = document.getElementById("create-title").value.trim();
-  if (!title) { alert("Title is required"); return; }
-  try {
-    await apiPost(BASE + "/tasks", {
-      title,
-      description: document.getElementById("create-desc").value.trim(),
-      priority: document.getElementById("create-priority").value,
-    });
-    closeCreate();
-    refresh();
-  } catch (err) {
-    alert("Create failed: " + err.message);
-  }
-}
-
-async function assignTask(taskId) {
-  try {
-    await apiPost(BASE + "/tasks/" + taskId + "/assign", {});
-    refresh();
-  } catch (err) {
-    alert("Assign failed: " + err.message);
-  }
-}
-
-async function completeTask(taskId) {
-  if (!confirm("Mark task as complete?")) return;
-  try {
-    await apiPost(BASE + "/tasks/" + taskId + "/complete", { summary: "Completed via dashboard" });
-    refresh();
-  } catch (err) {
-    alert("Complete failed: " + err.message);
-  }
-}
-
-function openComment(taskId) {
-  pendingCommentTaskId = taskId;
-  document.getElementById("comment-body").value = "";
-  document.getElementById("comment-modal").classList.add("open");
-  document.getElementById("comment-body").focus();
-}
-
-function closeComment() {
-  document.getElementById("comment-modal").classList.remove("open");
-  pendingCommentTaskId = null;
-}
-
-async function submitComment() {
-  const body = document.getElementById("comment-body").value.trim();
-  if (!body) { alert("Comment is required"); return; }
-  try {
-    await apiPost(BASE + "/tasks/" + pendingCommentTaskId + "/comment", { body });
-    closeComment();
-    refresh();
-  } catch (err) {
-    alert("Comment failed: " + err.message);
-  }
-}
-
-async function refresh() {
-  try {
-    const res = await fetch(BASE + "/tasks", { headers: { Authorization: "Bearer " + API_TOKEN } });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
-    const tasks = data.tasks || [];
-    document.getElementById("error-box").style.display = "none";
-
-    const tbody = document.getElementById("task-body");
-    if (tasks.length === 0) {
-      document.getElementById("task-table").style.display = "none";
-      document.getElementById("empty-msg").style.display = "block";
-    } else {
-      document.getElementById("task-table").style.display = "table";
-      document.getElementById("empty-msg").style.display = "none";
-      tbody.innerHTML = tasks.map(t => {
-        const blockedCell = t.blocked
-          ? '<span class="blocked-yes">\u26a0 blocked</span>'
-          : '<span class="blocked-no">\u2014</span>';
-        const assigneeCell = t.assignee
-          ? '<span class="assignee" title="' + esc(t.assignee) + '">' + esc(shortID(t.assignee)) + '</span>'
-          : '<span class="blocked-no">\u2014</span>';
-        var artifactCell;
-        if (t.artifact_count > 0) {
-          artifactCell = '<span class="art-badge art-has">' + t.artifact_count + ' artifact' + (t.artifact_count === 1 ? '' : 's') + '</span>';
-        } else if (t.waived) {
-          artifactCell = '<span class="art-badge art-waived">waived</span>';
-        } else if (t.legacy_status === "completed") {
-          artifactCell = '<span class="art-none">\u2014</span>';
-        } else {
-          artifactCell = '<span class="art-none">\u2014</span>';
-        }
-        const isCompleted = t.legacy_status === "completed";
-        let actions = "";
-        if (!isCompleted) {
-          actions += '<button class="btn btn-assign" onclick="assignTask(\'' + esc(t.id) + '\')">' + (t.assignee ? 'Reassign' : 'Assign') + '</button>';
-          actions += '<button class="btn btn-complete" onclick="completeTask(\'' + esc(t.id) + '\')">Complete</button>';
-        }
-        actions += '<button class="btn btn-comment" onclick="openComment(\'' + esc(t.id) + '\')">Comment</button>';
-        return '<tr>'
-          + '<td><div class="title">' + esc(t.title) + '</div>'
-          + (t.description ? '<div class="desc">' + esc(t.description.slice(0, 80)) + (t.description.length > 80 ? "\u2026" : "") + '</div>' : '')
-          + '</td>'
-          + '<td>' + statusBadge(t.status) + '</td>'
-          + '<td>' + priorityBadge(t.priority) + '</td>'
-          + '<td>' + assigneeCell + '</td>'
-          + '<td>' + blockedCell + '</td>'
-          + '<td>' + artifactCell + '</td>'
-          + '<td>' + actions + '</td>'
-          + '</tr>';
-      }).join("");
-    }
-
-    const now = new Date();
-    document.getElementById("status-line").textContent =
-      "Updated " + now.toLocaleTimeString() + " \u2014 " + tasks.length + " task" + (tasks.length === 1 ? "" : "s");
-    nextAt = Date.now() + REFRESH_MS;
-  } catch (err) {
-    const box = document.getElementById("error-box");
-    box.textContent = "Fetch failed: " + err.message;
-    box.style.display = "block";
-    document.getElementById("status-line").textContent = "Error \u2014 retrying in 10s";
-    nextAt = Date.now() + REFRESH_MS;
-  }
-}
-
-function tick() {
-  const secs = Math.max(0, Math.round((nextAt - Date.now()) / 1000));
-  document.getElementById("countdown").textContent = secs > 0 ? "(next refresh in " + secs + "s)" : "";
-}
-
-document.addEventListener("keydown", e => {
-  if (e.key === "Escape") { closeCreate(); closeComment(); }
-});
-
-refresh();
-setInterval(refresh, REFRESH_MS);
-setInterval(tick, 1000);
-</script>
-</body>
-</html>`
 
 func main() {
 	if err := run(); err != nil {
@@ -629,7 +112,7 @@ func run() error {
 	// Open shared pool for Postgres, or nil for in-memory.
 	var pool *pgxpool.Pool
 	if dsn != "" {
-		fmt.Fprintf(os.Stderr, "Postgres: %s\n", dsn)
+		fmt.Fprintln(os.Stderr, "Postgres: configured")
 		poolCfg, err := pgxpool.ParseConfig(dsn)
 		if err != nil {
 			return fmt.Errorf("postgres config: %w", err)
@@ -683,15 +166,11 @@ func run() error {
 		return fmt.Errorf("actor store: %w", err)
 	}
 
-	// Bootstrap human actor — same key-derivation pattern as cmd/hive.
-	if pool != nil {
-		fmt.Fprintln(os.Stderr, "WARNING: CLI key derivation is insecure for persistent Postgres stores.")
-		fmt.Fprintln(os.Stderr, "         Production should use Google auth. Proceeding for development.")
-	}
-	humanID, err := registerHuman(actors, humanName)
+	identity, err := runtimeidentity.Resolve(actors, humanName, os.Getenv("WORK_SIGNING_KEY_FILE"), pool != nil)
 	if err != nil {
-		return fmt.Errorf("register human: %w", err)
+		return fmt.Errorf("load runtime identity: %w", err)
 	}
+	humanID := identity.ActorID
 
 	// Register work event type unmarshalers before any store reads —
 	// Head() deserializes the latest event which may be a work type.
@@ -701,7 +180,7 @@ func run() error {
 	work.RegisterEventTypes()
 
 	// Bootstrap the event graph if it has no genesis event.
-	if err := bootstrapGraph(s, humanID); err != nil {
+	if err := bootstrapGraphWithSigner(s, humanID, identity.Signer); err != nil {
 		return fmt.Errorf("bootstrap graph: %w", err)
 	}
 
@@ -709,7 +188,7 @@ func run() error {
 	registry := event.DefaultRegistry()
 	work.RegisterWithRegistry(registry)
 	factory := event.NewEventFactory(registry)
-	signer := deriveSignerFromID(humanID)
+	signer := identity.Signer
 
 	ts := work.NewTaskStore(s, factory, signer)
 	phaseGates := work.NewPhaseGateStore(s, factory, signer)
@@ -762,9 +241,9 @@ func run() error {
 	mux.HandleFunc("GET /telemetry/pipeline/report", srv.auth(srv.telemetryPipelineReport))
 	mux.HandleFunc("POST /telemetry/phases/{phase}", srv.auth(srv.updatePhase))
 	mux.HandleFunc("GET /telemetry/health", srv.auth(srv.telemetryHealth))
-	// SSE endpoints accept Authorization header, ws_key cookie, OR ?key= query
-	// param — the last is an EventSource fallback for browsers that cannot set
-	// custom headers. See authSSE in events.go.
+	// SSE endpoints are consumed through Site's server-side proxy. Keeping
+	// authentication header-only prevents credentials from entering URLs,
+	// browser cookies, access logs, and referrer metadata.
 	mux.HandleFunc("GET /telemetry/sse", srv.authSSE(srv.telemetrySSE))
 	mux.HandleFunc("GET /events/subscribe", srv.authSSE(srv.eventsSubscribe))
 	mux.HandleFunc("GET /telemetry/roles", srv.auth(srv.telemetryRoles))
@@ -791,7 +270,7 @@ func run() error {
 		return fmt.Errorf("listen address: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "work-server listening on %s\n", addr)
-	httpSrv := &http.Server{Addr: addr, Handler: corsMiddleware(mux)}
+	httpSrv := &http.Server{Addr: addr, Handler: mux}
 	go func() {
 		<-ctx.Done()
 		httpSrv.Shutdown(context.Background()) //nolint:errcheck
@@ -837,57 +316,20 @@ type server struct {
 	fanout *eventFanout
 }
 
-// telemetryDashboard handles GET /telemetry/ — serves the embedded dashboard HTML.
-// TELEMETRY_DASHBOARD_PATH overrides the embedded copy for local dev (read per request).
+// telemetryDashboard permanently redirects the retired browser surface to Site.
 func (sv *server) telemetryDashboard(w http.ResponseWriter, r *http.Request) {
 	replacement := siteUIURL(r, "/ops/telemetry")
-	if !legacyBrowserUIEnabled() {
-		redirectLegacyBrowserUI(w, r, replacement)
-		return
-	}
-	markLegacyBrowserUI(w, replacement)
-	// Set a session cookie so the dashboard can poll without an Authorization
-	// header, avoiding Chrome Private-Network-Access preflight blocks.
-	http.SetCookie(w, &http.Cookie{
-		Name:     "ws_key",
-		Value:    sv.apiKey,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-	})
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-
-	if path := os.Getenv("TELEMETRY_DASHBOARD_PATH"); path != "" {
-		html, err := os.ReadFile(path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: TELEMETRY_DASHBOARD_PATH=%s: %v\n", path, err)
-		} else {
-			w.Write([]byte(injectLegacyUINotice(string(html), replacement)))
-			return
-		}
-	}
-	w.Write([]byte(injectLegacyUINotice(string(dashboard.HTML), replacement)))
+	redirectLegacyBrowserUI(w, r, replacement)
 }
 
-// dashboard handles GET / — serves the legacy read-only HTML monitoring dashboard.
-// No auth required; the API key is injected into the page so the browser's
-// fetch() calls can authenticate against GET /tasks.
+// dashboard permanently redirects the retired browser surface to Site. Work
+// credentials are never placed in HTML or cookies.
 func (sv *server) dashboard(w http.ResponseWriter, r *http.Request) {
 	replacement := siteUIURL(r, "/ops/work")
-	if !legacyBrowserUIEnabled() {
-		redirectLegacyBrowserUI(w, r, replacement)
-		return
-	}
-	markLegacyBrowserUI(w, replacement)
-	html := strings.ReplaceAll(dashboardHTML, "{{API_KEY}}", jsEscapeKey(sv.apiKey))
-	html = injectLegacyUINotice(html, replacement)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, html)
+	redirectLegacyBrowserUI(w, r, replacement)
 }
 
-// workspaceDashboard handles GET /w/{workspace} — serves the legacy interactive workspace task dashboard.
-// No auth required on the GET; the API token is injected into the page for browser fetch() calls.
+// workspaceDashboard permanently redirects the retired workspace UI to Site.
 func (sv *server) workspaceDashboard(w http.ResponseWriter, r *http.Request) {
 	workspace := r.PathValue("workspace")
 	if workspace == "" {
@@ -895,49 +337,13 @@ func (sv *server) workspaceDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	replacement := siteUIURL(r, "/ops/work?workspace="+url.QueryEscape(workspace))
-	if !legacyBrowserUIEnabled() {
-		redirectLegacyBrowserUI(w, r, replacement)
-		return
-	}
-	markLegacyBrowserUI(w, replacement)
-	html := strings.ReplaceAll(workspaceDashboardHTML, "{{WORKSPACE}}", jsEscapeKey(workspace))
-	html = strings.ReplaceAll(html, "{{API_TOKEN}}", jsEscapeKey(sv.apiToken))
-	html = injectLegacyUINotice(html, replacement)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, html)
-}
-
-func markLegacyBrowserUI(w http.ResponseWriter, replacement string) {
-	w.Header().Set(legacyUIStatusHeader, "legacy")
-	w.Header().Set(legacyUIReplacementHeader, replacement)
+	redirectLegacyBrowserUI(w, r, replacement)
 }
 
 func redirectLegacyBrowserUI(w http.ResponseWriter, r *http.Request, replacement string) {
 	w.Header().Set(legacyUIStatusHeader, "disabled")
 	w.Header().Set(legacyUIReplacementHeader, replacement)
 	http.Redirect(w, r, replacement, http.StatusFound)
-}
-
-func legacyBrowserUIEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("WORK_LEGACY_BROWSER_UI"))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
-
-func injectLegacyUINotice(page, replacement string) string {
-	notice := legacyUINotice(replacement)
-	if strings.Contains(page, "<body>") {
-		return strings.Replace(page, "<body>", "<body>"+notice, 1)
-	}
-	return notice + page
-}
-
-func legacyUINotice(replacement string) string {
-	escaped := html.EscapeString(replacement)
-	return `<div role="status" style="border:1px solid #f59e0b;background:#451a03;color:#fed7aa;padding:10px 14px;margin:0 0 16px 0;border-radius:6px;font:14px system-ui,-apple-system,sans-serif">Legacy Work browser UI. Canonical operator UI lives in Site: <a style="color:#fde68a;text-decoration:underline" href="` + escaped + `">` + escaped + `</a>.</div>`
 }
 
 func siteUIURL(r *http.Request, path string) string {
@@ -976,47 +382,11 @@ func (sv *server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// jsEscapeKey returns s with characters that are dangerous inside a <script>
-// JSON string literal escaped as Unicode escapes. This prevents the HTML parser
-// from interpreting characters like < as tag openers before the JS engine runs.
-func jsEscapeKey(s string) string {
-	b, _ := json.Marshal(s) // produces "\"…\"" with \u003c etc.
-	// Strip surrounding quotes — callers already embed in "{{API_KEY}}".
-	return string(b[1 : len(b)-1])
-}
-
-// corsMiddleware adds CORS and Private Network Access headers for browsers.
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		if origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-		} else {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-		w.Header().Set("Access-Control-Allow-Private-Network", "true")
-		w.Header().Set("Vary", "Origin")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// auth is middleware that validates the API key via Bearer header or session cookie.
+// auth validates the API key exclusively through a Bearer header. Browser UI
+// lives in Site, whose server-side proxy owns the credential.
 func (sv *server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Try Authorization header first (external API callers).
-		if token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); found && token == sv.apiKey {
-			next(w, r)
-			return
-		}
-		// Fall back to session cookie (inline dashboard avoids custom headers
-		// that trigger Chrome Private-Network-Access preflight blocks).
-		if c, err := r.Cookie("ws_key"); err == nil && c.Value == sv.apiKey {
+		if token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); found && secureTokenEqual(token, sv.apiKey) {
 			next(w, r)
 			return
 		}
@@ -1028,12 +398,16 @@ func (sv *server) auth(next http.HandlerFunc) http.HandlerFunc {
 func (sv *server) tokenAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !found || token != sv.apiToken {
+		if !found || !secureTokenEqual(token, sv.apiToken) {
 			writeErr(w, http.StatusUnauthorized, "invalid or missing API token")
 			return
 		}
 		next(w, r)
 	}
+}
+
+func secureTokenEqual(candidate, expected string) bool {
+	return len(candidate) == len(expected) && subtle.ConstantTimeCompare([]byte(candidate), []byte(expected)) == 1
 }
 
 // createTask handles POST /tasks
@@ -1975,6 +1349,10 @@ func openActorStore(ctx context.Context, pool *pgxpool.Pool) (actor.IActorStore,
 
 // bootstrapGraph emits the genesis event if the store is empty. Idempotent.
 func bootstrapGraph(s store.Store, humanID types.ActorID) error {
+	return bootstrapGraphWithSigner(s, humanID, deriveSignerFromID(humanID))
+}
+
+func bootstrapGraphWithSigner(s store.Store, humanID types.ActorID, signer event.Signer) error {
 	head, err := s.Head()
 	if err != nil {
 		return fmt.Errorf("check head: %w", err)
@@ -1985,8 +1363,7 @@ func bootstrapGraph(s store.Store, humanID types.ActorID) error {
 	fmt.Fprintln(os.Stderr, "Bootstrapping event graph...")
 	registry := event.DefaultRegistry()
 	bsFactory := event.NewBootstrapFactory(registry)
-	bsSigner := &bootstrapSigner{humanID: humanID}
-	bootstrap, err := bsFactory.Init(humanID, bsSigner)
+	bootstrap, err := bsFactory.Init(humanID, signer)
 	if err != nil {
 		return fmt.Errorf("create genesis event: %w", err)
 	}

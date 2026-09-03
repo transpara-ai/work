@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestLegacyBrowserUIHeadersAndNotice(t *testing.T) {
+func TestLegacyBrowserUICannotBeReenabledOrExposeCredentials(t *testing.T) {
 	t.Setenv("WORK_LEGACY_BROWSER_UI", "1")
 	sv := &server{apiKey: "test-key", apiToken: "test-token"}
 	cases := []struct {
@@ -40,18 +40,17 @@ func TestLegacyBrowserUIHeadersAndNotice(t *testing.T) {
 			rec := httptest.NewRecorder()
 			tc.handler(rec, tc.req)
 			resp := rec.Result()
-			if got := resp.Header.Get(legacyUIStatusHeader); got != "legacy" {
-				t.Fatalf("%s = %q, want legacy", legacyUIStatusHeader, got)
+			if resp.StatusCode != http.StatusFound {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusFound)
+			}
+			if got := resp.Header.Get(legacyUIStatusHeader); got != "disabled" {
+				t.Fatalf("%s = %q, want disabled", legacyUIStatusHeader, got)
 			}
 			if got := resp.Header.Get(legacyUIReplacementHeader); got != tc.wantReplacement {
 				t.Fatalf("%s = %q, want %q", legacyUIReplacementHeader, got, tc.wantReplacement)
 			}
-			body := rec.Body.String()
-			if !strings.Contains(body, "Legacy Work browser UI") {
-				t.Fatalf("body missing legacy notice")
-			}
-			if !strings.Contains(body, tc.wantReplacement) {
-				t.Fatalf("body missing replacement URL %q", tc.wantReplacement)
+			if strings.Contains(rec.Body.String(), "test-key") || strings.Contains(rec.Body.String(), "test-token") || len(resp.Cookies()) != 0 {
+				t.Fatal("retired UI exposed a credential")
 			}
 		})
 	}
@@ -119,19 +118,17 @@ func TestAPIRoutesDoNotCarryLegacyUIHeaders(t *testing.T) {
 	}
 }
 
-func TestLegacyBrowserUIEnabled(t *testing.T) {
-	for _, value := range []string{"1", "true", "TRUE", "yes", "on"} {
-		t.Run(value, func(t *testing.T) {
-			t.Setenv("WORK_LEGACY_BROWSER_UI", value)
-			if !legacyBrowserUIEnabled() {
-				t.Fatal("legacyBrowserUIEnabled() = false, want true")
-			}
-		})
-	}
-
-	t.Setenv("WORK_LEGACY_BROWSER_UI", "")
-	if legacyBrowserUIEnabled() {
-		t.Fatal("legacyBrowserUIEnabled() = true, want false")
+func TestAPIRejectsRetiredCookieCredential(t *testing.T) {
+	sv := &server{apiKey: "test-key"}
+	handler := sv.auth(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	req := httptest.NewRequest(http.MethodGet, "http://nucbuntu:8080/tasks", nil)
+	req.AddCookie(&http.Cookie{Name: "ws_key", Value: "test-key"})
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("cookie credential status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 
