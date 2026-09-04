@@ -11,6 +11,7 @@ Layer 1 Work Graph: event-sourced task management for humans and agents on the s
 - Verify: `make verify`
 
 ## Rules
+- Use the installed canonical `transpara-tlc` skill for software changes; do not copy its policy or implementation into this repository.
 - State is derived from events; do not introduce hidden mutable state.
 - Preserve task dependency, blocked, unblocked, assignment, comment, and completion semantics.
 - Keep workspace-scoped behavior and authorization paths explicit.
