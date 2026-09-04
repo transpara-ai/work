@@ -41,6 +41,7 @@ func sseClient(t *testing.T, ts *httptest.Server, path string) (<-chan string, c
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
+	req.Header.Set("Authorization", "Bearer test-key")
 	resp, err := ts.Client().Do(req)
 	if err != nil {
 		cancel()
@@ -136,7 +137,7 @@ func TestSSEKeepaliveComment(t *testing.T) {
 	// Verifying we get a 200 + correct Content-Type is enough: the keepalive
 	// ticker fires at 30s, longer than any reasonable unit-test budget.
 	ts, sv := newTestServer(t)
-	frames, cancel, resp := sseClient(t, ts, "/telemetry/sse?key=test-key")
+	frames, cancel, resp := sseClient(t, ts, "/telemetry/sse")
 	defer cancel()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status: want 200, got %d", resp.StatusCode)
@@ -150,7 +151,7 @@ func TestSSEKeepaliveComment(t *testing.T) {
 
 func TestSSEEventDelivery(t *testing.T) {
 	ts, sv := newTestServer(t)
-	frames, cancel, _ := sseClient(t, ts, "/telemetry/sse?key=test-key")
+	frames, cancel, _ := sseClient(t, ts, "/telemetry/sse")
 	defer cancel()
 	withSubscribers(t, sv, 1)
 
@@ -169,7 +170,7 @@ func TestSSEEventDelivery(t *testing.T) {
 
 func TestSSEDebounce(t *testing.T) {
 	ts, sv := newTestServer(t)
-	frames, cancel, _ := sseClient(t, ts, "/telemetry/sse?key=test-key")
+	frames, cancel, _ := sseClient(t, ts, "/telemetry/sse")
 	defer cancel()
 	withSubscribers(t, sv, 1)
 
@@ -190,7 +191,7 @@ func TestSSEDebounce(t *testing.T) {
 
 func TestSSEDisconnectCleanup(t *testing.T) {
 	ts, sv := newTestServer(t)
-	frames, cancel, _ := sseClient(t, ts, "/telemetry/sse?key=test-key")
+	frames, cancel, _ := sseClient(t, ts, "/telemetry/sse")
 	withSubscribers(t, sv, 1)
 
 	sv.fanout.Publish(mkEvent("hive.gap.detected", "cto", "hello"))
@@ -210,38 +211,17 @@ func TestSSEDisconnectCleanup(t *testing.T) {
 	t.Fatalf("fanout still has %d subscribers after disconnect", sv.fanout.NumSubscribers())
 }
 
-func TestSSEAuthQueryString(t *testing.T) {
+func TestSSERejectsURLCredentials(t *testing.T) {
 	ts, _ := newTestServer(t)
 
-	// Valid key via ?key= — expect 200.
-	ok, err := ts.Client().Get(ts.URL + "/telemetry/sse?key=test-key")
+	resp, err := ts.Client().Get(ts.URL + "/telemetry/sse?key=test-key")
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
-	if ok.StatusCode != 200 {
-		t.Fatalf("valid key: want 200, got %d", ok.StatusCode)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("query credential: want %d, got %d", http.StatusUnauthorized, resp.StatusCode)
 	}
-	ok.Body.Close()
-
-	// Invalid key — expect 401.
-	bad, err := ts.Client().Get(ts.URL + "/telemetry/sse?key=wrong")
-	if err != nil {
-		t.Fatalf("request: %v", err)
-	}
-	if bad.StatusCode != 401 {
-		t.Fatalf("invalid key: want 401, got %d", bad.StatusCode)
-	}
-	bad.Body.Close()
-
-	// No auth at all — expect 401.
-	none, err := ts.Client().Get(ts.URL + "/telemetry/sse")
-	if err != nil {
-		t.Fatalf("request: %v", err)
-	}
-	if none.StatusCode != 401 {
-		t.Fatalf("no auth: want 401, got %d", none.StatusCode)
-	}
-	none.Body.Close()
 }
 
 func TestSSEAuthBearer(t *testing.T) {
@@ -262,7 +242,7 @@ func TestSSEAuthBearer(t *testing.T) {
 
 func TestEventsSubscribeNoFilter(t *testing.T) {
 	ts, sv := newTestServer(t)
-	frames, cancel, _ := sseClient(t, ts, "/events/subscribe?key=test-key")
+	frames, cancel, _ := sseClient(t, ts, "/events/subscribe")
 	defer cancel()
 	withSubscribers(t, sv, 1)
 
@@ -284,7 +264,7 @@ func TestEventsSubscribeNoFilter(t *testing.T) {
 
 func TestEventsSubscribeMultiPrefix(t *testing.T) {
 	ts, sv := newTestServer(t)
-	frames, cancel, _ := sseClient(t, ts, "/events/subscribe?key=test-key&types=hive.*,site.op.*")
+	frames, cancel, _ := sseClient(t, ts, "/events/subscribe?types=hive.*,site.op.*")
 	defer cancel()
 	withSubscribers(t, sv, 1)
 
@@ -308,7 +288,7 @@ func TestEventsSubscribeMultiPrefix(t *testing.T) {
 func TestEventsSubscribeEmptyTypes(t *testing.T) {
 	ts, sv := newTestServer(t)
 	// Empty ?types= value should behave exactly like no filter.
-	frames, cancel, _ := sseClient(t, ts, "/events/subscribe?key=test-key&types=")
+	frames, cancel, _ := sseClient(t, ts, "/events/subscribe?types=")
 	defer cancel()
 	withSubscribers(t, sv, 1)
 

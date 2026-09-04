@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -123,25 +122,14 @@ func eventMatchesFilters(evType string, filters []string) bool {
 	return false
 }
 
-// --- SSE auth with query-string fallback ---
+// --- SSE auth ---
 
-// authSSE is the auth middleware for SSE endpoints. It accepts three sources,
-// in order: Authorization: Bearer header, ws_key cookie, and `?key=` query
-// parameter. The query-string arm exists because browser `EventSource` cannot
-// set custom headers; callers that use it get a warning log (once per
-// connection) recommending cookie auth.
+// authSSE keeps credentials server-side by accepting only Authorization:
+// Bearer. Browser EventSource clients connect to Site, whose proxy attaches the
+// Work credential to its upstream request.
 func (sv *server) authSSE(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); found && token == sv.apiKey {
-			next(w, r)
-			return
-		}
-		if c, err := r.Cookie("ws_key"); err == nil && c.Value == sv.apiKey {
-			next(w, r)
-			return
-		}
-		if k := r.URL.Query().Get("key"); k != "" && k == sv.apiKey {
-			log.Printf("sse auth via query string from %s — key will appear in access logs, prefer cookie auth", r.RemoteAddr)
+		if token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); found && secureTokenEqual(token, sv.apiKey) {
 			next(w, r)
 			return
 		}
@@ -152,8 +140,7 @@ func (sv *server) authSSE(next http.HandlerFunc) http.HandlerFunc {
 // --- /events/subscribe handler ---
 
 // eventsSubscribe handles GET /events/subscribe[?types=<prefix1>,<prefix2>] —
-// a raw, filtered SSE feed with no debounce. Accepts the same auth sources as
-// /telemetry/sse.
+// a raw, filtered SSE feed with no debounce.
 func (sv *server) eventsSubscribe(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {

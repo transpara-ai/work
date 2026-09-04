@@ -22,6 +22,7 @@ import (
 	"github.com/transpara-ai/eventgraph/go/pkg/types"
 
 	"github.com/transpara-ai/work"
+	"github.com/transpara-ai/work/runtimeidentity"
 )
 
 func main() {
@@ -68,7 +69,7 @@ func run() error {
 	// Open shared pool for Postgres, or nil for in-memory.
 	var pool *pgxpool.Pool
 	if dsn != "" {
-		fmt.Fprintf(os.Stderr, "Postgres: %s\n", dsn)
+		fmt.Fprintln(os.Stderr, "Postgres: configured")
 		var err error
 		pool, err = pgxpool.New(ctx, dsn)
 		if err != nil {
@@ -92,22 +93,18 @@ func run() error {
 		return fmt.Errorf("actor store: %w", err)
 	}
 
-	// Bootstrap human actor — same key-derivation pattern as cmd/hive.
-	if pool != nil {
-		fmt.Fprintln(os.Stderr, "WARNING: CLI key derivation is insecure for persistent Postgres stores.")
-		fmt.Fprintln(os.Stderr, "         Production should use Google auth. Proceeding for development.")
-	}
-	humanID, err := registerHuman(actors, *human)
+	identity, err := runtimeidentity.Resolve(actors, *human, os.Getenv("WORK_SIGNING_KEY_FILE"), pool != nil)
 	if err != nil {
-		return fmt.Errorf("register human: %w", err)
+		return fmt.Errorf("load runtime identity: %w", err)
 	}
+	humanID := identity.ActorID
 
 	// Register work event type unmarshalers before any store reads —
 	// Head() deserializes the latest event which may be a work type.
 	work.RegisterEventTypes()
 
 	// Bootstrap the event graph if it has no genesis event.
-	if err := bootstrapGraph(s, humanID); err != nil {
+	if err := bootstrapGraphWithSigner(s, humanID, identity.Signer); err != nil {
 		return fmt.Errorf("bootstrap graph: %w", err)
 	}
 
@@ -115,7 +112,7 @@ func run() error {
 	registry := event.DefaultRegistry()
 	work.RegisterWithRegistry(registry)
 	factory := event.NewEventFactory(registry)
-	signer := deriveSignerFromID(humanID)
+	signer := identity.Signer
 
 	// Create the task store.
 	ts := work.NewTaskStore(s, factory, signer)
@@ -349,6 +346,10 @@ func openActorStore(ctx context.Context, pool *pgxpool.Pool) (actor.IActorStore,
 // bootstrapGraph emits the genesis event if the store is empty.
 // Idempotent — does nothing if the graph already has events.
 func bootstrapGraph(s store.Store, humanID types.ActorID) error {
+	return bootstrapGraphWithSigner(s, humanID, deriveSignerFromID(humanID))
+}
+
+func bootstrapGraphWithSigner(s store.Store, humanID types.ActorID, signer event.Signer) error {
 	head, err := s.Head()
 	if err != nil {
 		return fmt.Errorf("check head: %w", err)
@@ -359,7 +360,6 @@ func bootstrapGraph(s store.Store, humanID types.ActorID) error {
 	fmt.Fprintln(os.Stderr, "Bootstrapping event graph...")
 	registry := event.DefaultRegistry()
 	bsFactory := event.NewBootstrapFactory(registry)
-	signer := &bootstrapSigner{humanID: humanID}
 	bootstrap, err := bsFactory.Init(humanID, signer)
 	if err != nil {
 		return fmt.Errorf("create genesis event: %w", err)
